@@ -594,6 +594,27 @@ class ObjectLifecycleTest {
     }
 
     @Test
+    void engineValidityProbeDeliversInvalidationOnceWithoutReleasingBorrowedOwnership() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+        TestObject object =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+        AtomicInteger notifications = new AtomicInteger();
+        FoundryInvalidationSubscription subscription =
+                object.onInvalidated(notifications::incrementAndGet);
+        engine.valid.put(7L, false);
+
+        assertFalse(object.isAlive());
+        assertThrows(FoundryObjectDisposedException.class, object::objectHandle);
+        assertFalse(object.isAlive());
+
+        assertEquals(1, notifications.get());
+        assertFalse(subscription.isActive());
+        assertEquals(0, engine.releases.get());
+    }
+
+    @Test
     void referenceCountedObjectsRetainAndReleaseExactlyOnce() {
         CountingEngine engine = new CountingEngine();
         engine.valid(7);
