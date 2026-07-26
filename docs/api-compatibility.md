@@ -21,11 +21,14 @@ accepted SHA-256:
 `ApiInputs.load` checks all required identities and hashes before returning input text. The API
 parser then rejects duplicate JSON keys, unknown top-level or nested constructs, unknown schema
 enumerations, missing or malformed stable identities, and duplicate source identities. A schema
-error includes both the JSON path and the nearest stable entity identity. Models and their
+error includes both the JSON path and the nearest validated stable entity identity; diagnostic
+values escape controls and backslashes so failures remain single-line. Models and their
 collections are immutable, object keys are canonicalized, named entity collections are ordered by
 source identity, and argument order remains semantic. Every entity records its parent edge and
 normalized ordinal so semantic order is explicit and reconstructable. Integer-valued schema fields
-use field-specific ranges, including the full unsigned 64-bit hash range, without narrowing.
+use field-specific ranges. Unsigned hashes, indexes, sizes, and offsets require canonical unsigned
+integer lexemes (so `-0` is rejected), while hashes retain the full unsigned 64-bit range without
+narrowing.
 
 ## Exhaustive classification
 
@@ -61,9 +64,11 @@ runtime-callable wrappers or JNI bridge scheduled for later workstreams are alre
 Generation groups every parsed identity under exactly one per-root Java descriptor and emits
 1,298 descriptors plus provenance and registration catalogs. Coverage is accepted only when the
 parsed identity set, generated identity set, and manifest identity set are exactly equal. Generated
-files include the same standard producer commit/version and input/manifest hash header; they
-contain no timestamp or absolute path. The public registration catalog maps each root identity to
-its generated descriptor class in deterministic root order.
+files include the same standard producer commit/version and input/manifest hash header; dynamic
+comment values, including entity identities and provenance, use RFC 4648 base64 so Java Unicode
+preprocessing cannot turn input text into declarations. They contain no timestamp or absolute path.
+The public registration catalog maps each root identity to its generated descriptor class in
+deterministic root order.
 
 Tests generate into two independent clean directories and byte-compare every relative path and
 file hash. They repeat from canonical reordered input, regenerate the complete accepted API, verify

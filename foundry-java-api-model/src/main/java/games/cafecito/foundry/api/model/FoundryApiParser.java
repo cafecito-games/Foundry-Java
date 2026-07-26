@@ -54,7 +54,8 @@ public final class FoundryApiParser {
                     "uint16",
                     "uint32",
                     "uint64");
-    private static final Pattern INTEGER = Pattern.compile("-?(?:0|[1-9][0-9]*)");
+    private static final Pattern SIGNED_INTEGER = Pattern.compile("-?(?:0|[1-9][0-9]*)");
+    private static final Pattern UNSIGNED_INTEGER = Pattern.compile("(?:0|[1-9][0-9]*)");
     private static final BigInteger MAX_UNSIGNED_64 = new BigInteger("18446744073709551615");
     private static final BigInteger MAX_SIGNED_64 = BigInteger.valueOf(Long.MAX_VALUE);
     private static final BigInteger MAX_SIGNED_32 = BigInteger.valueOf(Integer.MAX_VALUE);
@@ -76,9 +77,10 @@ public final class FoundryApiParser {
     }
 
     public static FoundryApi parse(String json) {
-        JsonValue.JsonObject root = JsonParser.parse(json).requireObject("$");
+        JsonValue.JsonObject root = requireObject(JsonParser.parse(json), "$", "<api>");
         requireExactKeys(root, ROOT_KEYS, ROOT_KEYS, "$", "<api>");
-        JsonValue.JsonObject headerObject = root.require("header", "$").requireObject("$.header");
+        JsonValue.JsonObject headerObject =
+                requireObject(require(root, "header", "$", "<api>"), "$.header", "<api>");
         validateHeader(headerObject);
         FoundryApi.Header header =
                 new FoundryApi.Header(
@@ -94,7 +96,8 @@ public final class FoundryApiParser {
         Map<String, JsonValue> normalizedRoot = new LinkedHashMap<>();
         normalizedRoot.put("header", headerObject);
         for (String category : CATEGORY_ORDER) {
-            JsonValue.JsonArray array = root.require(category, "$").requireArray("$." + category);
+            JsonValue.JsonArray array =
+                    requireArray(require(root, category, "$", "<api>"), "$." + category, "<api>");
             Kind kind = topLevelKind(category);
             ParsedCollection parsed =
                     parseCollection(
@@ -117,11 +120,14 @@ public final class FoundryApiParser {
         Set<String> identities = new HashSet<>();
         for (int index = 0; index < array.values().size(); index++) {
             String entityPath = path + "[" + index + "]";
-            JsonValue.JsonObject object = array.values().get(index).requireObject(entityPath);
+            JsonValue.JsonObject object =
+                    requireObject(array.values().get(index), entityPath, parentIdentity);
             ParsedEntity entity = parseEntity(category, entityPath, parentIdentity, kind, object);
             if (!identities.add(entity.entity().identity())) {
-                throw new ApiInputException(
-                        "Duplicate source identity " + entity.entity().identity() + ".");
+                throw schemaError(
+                        entityPath,
+                        entity.entity().identity(),
+                        "Duplicate source identity " + entity.entity().identity());
             }
             parsed.add(entity);
         }
@@ -161,7 +167,7 @@ public final class FoundryApiParser {
             }
             if (child.kind() == Kind.RETURN_VALUE) {
                 JsonValue.JsonObject returnObject =
-                        field.getValue().requireObject(path + "." + field.getKey());
+                        requireObject(field.getValue(), path + "." + field.getKey(), identity);
                 ParsedEntity parsedReturn =
                         parseEntity(
                                 category,
@@ -173,7 +179,7 @@ public final class FoundryApiParser {
                 normalized.put(field.getKey(), parsedReturn.normalized());
             } else {
                 JsonValue.JsonArray childArray =
-                        field.getValue().requireArray(path + "." + field.getKey());
+                        requireArray(field.getValue(), path + "." + field.getKey(), identity);
                 ParsedCollection parsed =
                         parseCollection(
                                 category,
@@ -228,7 +234,7 @@ public final class FoundryApiParser {
             String fieldPath = path + "." + key;
             switch (fieldType(kind, key)) {
                 case STRING -> {
-                    String value = field.getValue().requireString(fieldPath);
+                    String value = requireString(field.getValue(), fieldPath, identity);
                     if ((key.equals("name")
                                     || key.equals("member")
                                     || key.equals("type")
@@ -236,12 +242,10 @@ public final class FoundryApiParser {
                                     || key.equals("build_configuration")
                                     || key.equals("right_type"))
                             && (value.isBlank() || containsControl(value))) {
-                        throw new ApiInputException(
-                                fieldPath
-                                        + " must not be blank or contain control characters"
-                                        + " (entity "
-                                        + identity
-                                        + ").");
+                        throw schemaError(
+                                fieldPath,
+                                identity,
+                                "must not be blank or contain control characters");
                     }
                     if (key.equals("api_type")) {
                         requireOneOf(value, Set.of("core", "editor"), fieldPath, identity);
@@ -259,7 +263,7 @@ public final class FoundryApiParser {
                     }
                 }
                 case NUMBER -> requireInteger(field.getValue(), key, fieldPath, identity);
-                case BOOLEAN -> field.getValue().requireBoolean(fieldPath);
+                case BOOLEAN -> requireBoolean(field.getValue(), fieldPath, identity);
                 case ARRAY, OBJECT -> throw new AssertionError("Child fields are handled first.");
             }
         }
@@ -272,21 +276,21 @@ public final class FoundryApiParser {
         }
         String base =
                 switch (kind) {
-                    case SIZE_BLOCK, OFFSET_BLOCK -> string(object, "build_configuration", path);
-                    case OFFSET_MEMBER -> string(object, "member", path);
-                    case CONSTRUCTOR -> "#" + number(object, "index", path);
-                    default -> string(object, "name", path);
+                    case SIZE_BLOCK, OFFSET_BLOCK ->
+                            identityString(object, "build_configuration", path, parentIdentity);
+                    case OFFSET_MEMBER -> identityString(object, "member", path, parentIdentity);
+                    case CONSTRUCTOR ->
+                            "#"
+                                    + integerLexeme(
+                                            object,
+                                            "index",
+                                            path,
+                                            parentIdentity,
+                                            BigInteger.ZERO,
+                                            MAX_SIGNED_32,
+                                            true);
+                    default -> identityString(object, "name", path, parentIdentity);
                 };
-        if (base.isBlank()) {
-            String identityKey =
-                    switch (kind) {
-                        case SIZE_BLOCK, OFFSET_BLOCK -> "build_configuration";
-                        case OFFSET_MEMBER -> "member";
-                        case CONSTRUCTOR -> "index";
-                        default -> "name";
-                    };
-            throw new ApiInputException(path + "." + identityKey + " must not be blank.");
-        }
         return switch (kind) {
             case BUILTIN_METHOD, CLASS_METHOD, UTILITY ->
                     base
@@ -297,15 +301,18 @@ public final class FoundryApiParser {
                                     path,
                                     parentIdentity + "/" + base,
                                     BigInteger.ZERO,
-                                    MAX_UNSIGNED_64);
+                                    MAX_UNSIGNED_64,
+                                    true);
             case OPERATOR ->
                     base
                             + "#"
                             + (object.optional("right_type") == null
                                     ? "unary"
                                     : nonblankIdentityString(
-                                            object.optional("right_type")
-                                                    .requireString(path + ".right_type"),
+                                            requireString(
+                                                    object.optional("right_type"),
+                                                    path + ".right_type",
+                                                    parentIdentity + "/" + base),
                                             path + ".right_type",
                                             parentIdentity + "/" + base));
             default -> base;
@@ -520,55 +527,50 @@ public final class FoundryApiParser {
             String identity) {
         for (String key : object.values().keySet()) {
             if (!accepted.contains(key)) {
-                throw new ApiInputException(
-                        "Unknown construct at " + path + "." + key + " (entity " + identity + ").");
+                throw schemaError(
+                        path + "." + key, identity, "contains an unknown schema construct");
             }
         }
         for (String key : required) {
             if (!object.values().containsKey(key)) {
-                throw new ApiInputException(
-                        path + "." + key + " is required (entity " + identity + ").");
+                throw schemaError(path + "." + key, identity, "is required");
             }
         }
     }
 
     private static String string(JsonValue.JsonObject object, String key, String path) {
-        return object.require(key, path).requireString(path + "." + key);
+        return requireString(require(object, key, path, "header"), path + "." + key, "header");
     }
 
     private static int integer(JsonValue.JsonObject object, String key, String path) {
-        return object.require(key, path).requireInt(path + "." + key);
+        return Integer.parseInt(
+                integerLexeme(object, key, path, "header", BigInteger.ZERO, MAX_SIGNED_32, true));
     }
 
     private static int nonnegativeInt(JsonValue.JsonObject object, String key, String path) {
-        String lexeme = integerLexeme(object, key, path, "header", BigInteger.ZERO, MAX_SIGNED_32);
+        String lexeme =
+                integerLexeme(object, key, path, "header", BigInteger.ZERO, MAX_SIGNED_32, true);
         return Integer.parseInt(lexeme);
-    }
-
-    private static String number(JsonValue.JsonObject object, String key, String path) {
-        return integerLexeme(
-                object,
-                key,
-                path,
-                path,
-                BigInteger.ZERO,
-                key.equals("index") ? MAX_SIGNED_32 : MAX_SIGNED_64);
     }
 
     private static void requireInteger(JsonValue value, String key, String path, String identity) {
         BigInteger minimum = null;
         BigInteger maximum = null;
+        boolean canonicalUnsigned = false;
         if (key.equals("hash")) {
             minimum = BigInteger.ZERO;
             maximum = MAX_UNSIGNED_64;
+            canonicalUnsigned = true;
         } else if (key.equals("index")) {
             minimum = BigInteger.ZERO;
             maximum = MAX_SIGNED_32;
+            canonicalUnsigned = true;
         } else if (key.equals("size") || key.equals("offset")) {
             minimum = BigInteger.ZERO;
             maximum = MAX_SIGNED_64;
+            canonicalUnsigned = true;
         }
-        requireIntegerLexeme(value, path, identity, minimum, maximum);
+        requireIntegerLexeme(value, path, identity, minimum, maximum, canonicalUnsigned);
     }
 
     private static String integerLexeme(
@@ -577,42 +579,58 @@ public final class FoundryApiParser {
             String parentPath,
             String identity,
             BigInteger minimum,
-            BigInteger maximum) {
+            BigInteger maximum,
+            boolean canonicalUnsigned) {
         String path = parentPath + "." + key;
         return requireIntegerLexeme(
-                object.require(key, parentPath), path, identity, minimum, maximum);
+                require(object, key, parentPath, identity),
+                path,
+                identity,
+                minimum,
+                maximum,
+                canonicalUnsigned);
     }
 
     private static String requireIntegerLexeme(
-            JsonValue value, String path, String identity, BigInteger minimum, BigInteger maximum) {
+            JsonValue value,
+            String path,
+            String identity,
+            BigInteger minimum,
+            BigInteger maximum,
+            boolean canonicalUnsigned) {
+        Pattern integerPattern = canonicalUnsigned ? UNSIGNED_INTEGER : SIGNED_INTEGER;
         if (!(value instanceof JsonValue.JsonNumber number)
-                || !INTEGER.matcher(number.lexeme()).matches()) {
-            throw new ApiInputException(
-                    path + " must be a JSON integer (entity " + identity + ").");
+                || !integerPattern.matcher(number.lexeme()).matches()) {
+            throw schemaError(
+                    path,
+                    identity,
+                    canonicalUnsigned
+                            ? "must be a canonical unsigned integer"
+                            : "must be a JSON integer");
         }
         BigInteger parsed = new BigInteger(number.lexeme());
         if ((minimum != null && parsed.compareTo(minimum) < 0)
                 || (maximum != null && parsed.compareTo(maximum) > 0)) {
-            throw new ApiInputException(
-                    path
-                            + " is outside the supported integer range"
-                            + " (entity "
-                            + identity
-                            + ").");
+            throw schemaError(path, identity, "is outside the supported integer range");
         }
-        return number.lexeme();
+        return canonicalUnsigned ? parsed.toString() : number.lexeme();
     }
 
     private static String nonblankIdentityString(String value, String path, String identity) {
         if (value.isBlank() || containsControl(value)) {
-            throw new ApiInputException(
-                    path
-                            + " must not be blank or contain control characters"
-                            + " (entity "
-                            + identity
-                            + ").");
+            throw schemaError(path, identity, "must not be blank or contain control characters");
         }
         return value;
+    }
+
+    private static String identityString(
+            JsonValue.JsonObject object, String key, String path, String parentIdentity) {
+        String fieldPath = path + "." + key;
+        return nonblankIdentityString(
+                requireString(
+                        require(object, key, path, parentIdentity), fieldPath, parentIdentity),
+                fieldPath,
+                parentIdentity);
     }
 
     private static boolean containsControl(String value) {
@@ -622,16 +640,84 @@ public final class FoundryApiParser {
     private static void requireOneOf(
             String value, Set<String> accepted, String path, String identity) {
         if (!accepted.contains(value)) {
-            throw new ApiInputException(
-                    path
-                            + " contains unknown construct '"
-                            + value
-                            + "'; expected "
-                            + accepted
-                            + " (entity "
-                            + identity
-                            + ").");
+            throw schemaError(
+                    path,
+                    identity,
+                    "contains unknown construct '" + value + "'; expected " + accepted);
         }
+    }
+
+    private static JsonValue require(
+            JsonValue.JsonObject object, String key, String parentPath, String identity) {
+        JsonValue value = object.optional(key);
+        if (value == null) {
+            throw schemaError(parentPath + "." + key, identity, "is required");
+        }
+        return value;
+    }
+
+    private static JsonValue.JsonObject requireObject(
+            JsonValue value, String path, String identity) {
+        if (value instanceof JsonValue.JsonObject object) {
+            return object;
+        }
+        throw schemaError(path, identity, "must be a JSON object");
+    }
+
+    private static JsonValue.JsonArray requireArray(JsonValue value, String path, String identity) {
+        if (value instanceof JsonValue.JsonArray array) {
+            return array;
+        }
+        throw schemaError(path, identity, "must be a JSON array");
+    }
+
+    private static String requireString(JsonValue value, String path, String identity) {
+        if (value instanceof JsonValue.JsonString string) {
+            return string.value();
+        }
+        throw schemaError(path, identity, "must be a JSON string");
+    }
+
+    private static boolean requireBoolean(JsonValue value, String path, String identity) {
+        if (value instanceof JsonValue.JsonBoolean bool) {
+            return bool.value();
+        }
+        throw schemaError(path, identity, "must be a JSON boolean");
+    }
+
+    private static ApiInputException schemaError(String path, String identity, String detail) {
+        return new ApiInputException(
+                diagnostic(path)
+                        + " "
+                        + diagnostic(detail)
+                        + " (entity "
+                        + diagnostic(identity)
+                        + ").");
+    }
+
+    private static String diagnostic(String value) {
+        StringBuilder escaped = new StringBuilder();
+        value.codePoints()
+                .forEach(
+                        codePoint -> {
+                            if (codePoint == '\\') {
+                                escaped.append("\\\\");
+                            } else if (codePoint == '\n') {
+                                escaped.append("\\n");
+                            } else if (codePoint == '\r') {
+                                escaped.append("\\r");
+                            } else if (codePoint == '\t') {
+                                escaped.append("\\t");
+                            } else if (Character.isISOControl(codePoint)
+                                    || Character.getType(codePoint) == Character.LINE_SEPARATOR
+                                    || Character.getType(codePoint)
+                                            == Character.PARAGRAPH_SEPARATOR) {
+                                escaped.append(String.format("\\u%04x", codePoint));
+                            } else {
+                                escaped.appendCodePoint(codePoint);
+                            }
+                        });
+        return escaped.toString();
     }
 
     private enum Kind {

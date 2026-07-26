@@ -202,7 +202,7 @@ class FoundryApiParserTest {
 
     @Test
     void validatesIntegerFieldsWithoutNarrowingUnsignedHashes() throws IOException {
-        for (String invalidHash : List.of("42.5", "4e2", "-1", "18446744073709551616")) {
+        for (String invalidHash : List.of("42.5", "4e2", "-0", "-1", "18446744073709551616")) {
             String invalid = fixture().replace("\"hash\": 42", "\"hash\": " + invalidHash);
             ApiInputException failure =
                     assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(invalid));
@@ -218,12 +218,45 @@ class FoundryApiParserTest {
                         .isPresent());
 
         for (String mutation : List.of("\"index\": 0", "\"size\": 8", "\"offset\": 0")) {
-            String invalid =
-                    fixture().replace(mutation, mutation.replace("0", "-1").replace("8", "-8"));
-            assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(invalid));
+            for (String invalidValue : List.of("-0", "-1")) {
+                String invalid =
+                        fixture()
+                                .replace(
+                                        mutation,
+                                        mutation.substring(0, mutation.indexOf(':') + 1)
+                                                + " "
+                                                + invalidValue);
+                assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(invalid));
+            }
         }
         String fractionalEnum = fixture().replace("\"value\": 13", "\"value\": 1.3");
         assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(fractionalEnum));
+    }
+
+    @Test
+    void zeroAndNegativeZeroCannotCreateDistinctUnsignedSourceIdentities() {
+        String first =
+                """
+                {
+                  "name": "alias",
+                  "category": "general",
+                  "is_vararg": false,
+                  "hash": 0
+                }
+                """;
+        String second = first.replace("\"hash\": 0", "\"hash\": -0");
+        String aliases =
+                minimalApi()
+                        .replace(
+                                "\"utility_functions\": []",
+                                "\"utility_functions\": [" + first + "," + second + "]");
+
+        ApiInputException failure =
+                assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(aliases));
+
+        assertTrue(failure.getMessage().contains("$.utility_functions[1].hash"));
+        assertTrue(failure.getMessage().contains("canonical unsigned integer"));
+        assertTrue(failure.getMessage().contains("utility_functions/alias"));
     }
 
     @Test
@@ -243,6 +276,42 @@ class FoundryApiParserTest {
         assertTrue(injectionFailure.getMessage().contains("control"));
     }
 
+    @Test
+    void everyNestedSchemaDiagnosticIsSingleLineAndNamesTheNearestValidatedEntity()
+            throws IOException {
+        String source = fixture();
+        assertDiagnostic(
+                replaceFirstArrayValue(source, "\"arguments\"", "{}"),
+                "$.utility_functions[0].arguments",
+                "utility_functions/type_convert#128");
+        assertDiagnostic(
+                replaceFirstArrayElement(source, "\"arguments\"", "\"not-an-object\""),
+                "$.utility_functions[0].arguments[0]",
+                "utility_functions/type_convert#128/arguments");
+        assertDiagnostic(
+                source.replace(
+                        "\"type\": \"Variant\",\n          \"default_value\"",
+                        "\"type\": 7,\n          \"default_value\""),
+                "$.utility_functions[0].arguments[0].type",
+                "utility_functions/type_convert#128/arguments/value");
+        assertDiagnostic(
+                source.replace("          \"name\": \"value\",\n", ""),
+                "$.utility_functions[0].arguments[0].name",
+                "utility_functions/type_convert#128/arguments");
+        assertDiagnostic(
+                source.replace("\"name\": \"value\"", "\"name\": \"bad\\nname\""),
+                "$.utility_functions[0].arguments[0].name",
+                "utility_functions/type_convert#128/arguments");
+        String invalidEnum =
+                source.replace(
+                        "\"api_type\": \"core\"", "\"api_type\": \"mobile\\\\branch\\nInjected\"");
+        ApiInputException enumFailure =
+                assertDiagnostic(invalidEnum, "$.classes[0].api_type", "classes/Object");
+        assertTrue(
+                enumFailure.getMessage().contains("mobile\\\\branch\\nInjected"),
+                enumFailure.getMessage());
+    }
+
     private static String fixture() throws IOException {
         try (var stream =
                 FoundryApiParserTest.class.getResourceAsStream("/fixtures/complete-api.json")) {
@@ -251,6 +320,64 @@ class FoundryApiParserTest {
             }
             return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    private static ApiInputException assertDiagnostic(String json, String path, String identity) {
+        ApiInputException failure =
+                assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(json));
+        assertTrue(failure.getMessage().contains(path), failure.getMessage());
+        assertTrue(
+                failure.getMessage().contains("(entity " + identity + ")"), failure.getMessage());
+        assertTrue(!failure.getMessage().contains("\n"), failure.getMessage());
+        assertTrue(!failure.getMessage().contains("\r"), failure.getMessage());
+        assertTrue(
+                failure.getMessage().codePoints().noneMatch(Character::isISOControl),
+                failure.getMessage());
+        return failure;
+    }
+
+    private static String replaceFirstArrayValue(
+            String json, String fieldName, String replacement) {
+        int field = json.indexOf(fieldName);
+        int start = json.indexOf('[', field + fieldName.length());
+        int end = matchingDelimiter(json, start, '[', ']');
+        return json.substring(0, start) + replacement + json.substring(end + 1);
+    }
+
+    private static String replaceFirstArrayElement(
+            String json, String fieldName, String replacement) {
+        int field = json.indexOf(fieldName);
+        int arrayStart = json.indexOf('[', field + fieldName.length());
+        int elementStart = json.indexOf('{', arrayStart + 1);
+        int elementEnd = matchingDelimiter(json, elementStart, '{', '}');
+        return json.substring(0, elementStart) + replacement + json.substring(elementEnd + 1);
+    }
+
+    private static int matchingDelimiter(String source, int start, char open, char close) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int index = start; index < source.length(); index++) {
+            char value = source.charAt(index);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (value == '\\') {
+                    escaped = true;
+                } else if (value == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (value == '"') {
+                inString = true;
+            } else if (value == open) {
+                depth++;
+            } else if (value == close && --depth == 0) {
+                return index;
+            }
+        }
+        throw new AssertionError("Unbalanced JSON delimiter at " + start + ".");
     }
 
     private static String classesBlock() throws IOException {
@@ -274,5 +401,30 @@ class FoundryApiParserTest {
         String block = classesBlock();
         int start = block.indexOf("    {\n      \"name\": \"Node\"");
         return block.substring(start + 4, block.length() - "\n  ]".length());
+    }
+
+    private static String minimalApi() {
+        return """
+                {
+                  "header": {
+                    "version_major": 0,
+                    "version_minor": 1,
+                    "version_patch": 0,
+                    "version_status": "alpha8",
+                    "version_build": "custom",
+                    "version_full_name": "Foundry",
+                    "precision": "single"
+                  },
+                  "builtin_class_sizes": [],
+                  "builtin_class_member_offsets": [],
+                  "global_constants": [],
+                  "global_enums": [],
+                  "utility_functions": [],
+                  "builtin_classes": [],
+                  "classes": [],
+                  "singletons": [],
+                  "native_structures": []
+                }
+                """;
     }
 }
