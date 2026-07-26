@@ -42,7 +42,9 @@ class FoundryJavaPluginTest {
 
     @Test
     void oneModuleProducesOneIndexAndDirectProviderBootstrap() throws IOException {
-        Path alpha = moduleJar(temporaryDirectory.resolve("alpha.jar"), "alpha", "example.AlphaRegistry");
+        Path alpha =
+                moduleJar(
+                        temporaryDirectory.resolve("alpha.jar"), "alpha", "example.AlphaRegistry");
         Path project = project("one", List.of(alpha));
 
         run(project, "generateFoundryJavaRegistry");
@@ -60,15 +62,19 @@ class FoundryJavaPluginTest {
                 Files.readString(project.resolve(INDEX)));
         String bootstrap = Files.readString(project.resolve(BOOTSTRAP));
         assertTrue(bootstrap.contains("example.AlphaRegistry.PROVIDER"));
-        assertTrue(bootstrap.contains("new games.cafecito.foundry.runtime.FoundryRegistryBootstrap"));
+        assertTrue(
+                bootstrap.contains("new games.cafecito.foundry.runtime.FoundryRegistryBootstrap"));
         assertFalse(bootstrap.contains("Class.forName"));
         assertFalse(bootstrap.contains("java.lang.reflect"));
     }
 
     @Test
     void dependencyOrderCannotChangeIndexOrBootstrapBytes() throws IOException {
-        Path alpha = moduleJar(temporaryDirectory.resolve("alpha.jar"), "alpha", "example.AlphaRegistry");
-        Path zeta = moduleJar(temporaryDirectory.resolve("zeta.jar"), "zeta", "example.ZetaRegistry");
+        Path alpha =
+                moduleJar(
+                        temporaryDirectory.resolve("alpha.jar"), "alpha", "example.AlphaRegistry");
+        Path zeta =
+                moduleJar(temporaryDirectory.resolve("zeta.jar"), "zeta", "example.ZetaRegistry");
         Path project = project("reordered", List.of(zeta, alpha));
 
         run(project, "generateFoundryJavaRegistry");
@@ -92,10 +98,7 @@ class FoundryJavaPluginTest {
         Path repository = temporaryDirectory.resolve("repository");
         publishModule(repository, "leaf", "example.LeafRegistry", List.of());
         publishModule(
-                repository,
-                "root",
-                "example.RootRegistry",
-                List.of("games.cafecito.test:leaf:1"));
+                repository, "root", "example.RootRegistry", List.of("games.cafecito.test:leaf:1"));
         Path project = temporaryDirectory.resolve("transitive");
         Files.createDirectories(project);
         Files.writeString(
@@ -127,23 +130,24 @@ class FoundryJavaPluginTest {
 
     @Test
     void registryGenerationReusesTheConfigurationCache() throws IOException {
-        Path alpha = moduleJar(temporaryDirectory.resolve("alpha.jar"), "alpha", "example.AlphaRegistry");
+        Path alpha =
+                moduleJar(
+                        temporaryDirectory.resolve("alpha.jar"), "alpha", "example.AlphaRegistry");
         Path project = project("configuration-cache", List.of(alpha));
 
         run(project, "generateFoundryJavaRegistry", "--configuration-cache");
-        BuildResult second =
-                run(project, "generateFoundryJavaRegistry", "--configuration-cache");
+        BuildResult second = run(project, "generateFoundryJavaRegistry", "--configuration-cache");
 
         assertTrue(second.getOutput().contains("Reusing configuration cache."));
         assertEquals(
-                TaskOutcome.UP_TO_DATE,
-                second.task(":generateFoundryJavaRegistry").getOutcome());
+                TaskOutcome.UP_TO_DATE, second.task(":generateFoundryJavaRegistry").getOutcome());
     }
 
     private Path project(String name, List<Path> modules) throws IOException {
         Path project = temporaryDirectory.resolve(name);
         Files.createDirectories(project);
-        Files.writeString(project.resolve("settings.gradle"), "rootProject.name = '" + name + "'\n");
+        Files.writeString(
+                project.resolve("settings.gradle"), "rootProject.name = '" + name + "'\n");
         writeBuild(project, modules);
         return project;
     }
@@ -196,9 +200,7 @@ class FoundryJavaPluginTest {
     private void publishModule(
             Path repository, String module, String registry, List<String> dependencies)
             throws IOException {
-        Path version =
-                repository.resolve(
-                        "games/cafecito/test/" + module + "/1");
+        Path version = repository.resolve("games/cafecito/test/" + module + "/1");
         Files.createDirectories(version);
         moduleJar(version.resolve(module + "-1.jar"), module, registry);
         String dependencyXml =

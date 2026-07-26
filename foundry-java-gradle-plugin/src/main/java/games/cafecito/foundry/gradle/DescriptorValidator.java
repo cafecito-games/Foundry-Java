@@ -23,8 +23,7 @@ final class DescriptorValidator {
                     "bridge_contract_version");
     private static final Set<String> ENTRY_KINDS =
             Set.of("class", "method", "override", "property", "signal");
-    private static final Pattern MODULE =
-            Pattern.compile("[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*");
+    private static final Pattern MODULE = Pattern.compile("[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*");
     private static final Pattern QUALIFIED_JAVA_NAME =
             Pattern.compile(
                     "[\\p{javaJavaIdentifierStart}][\\p{javaJavaIdentifierPart}]*"
@@ -78,15 +77,11 @@ final class DescriptorValidator {
             entries.add(new FoundryDescriptor.Entry(key, value));
         }
         if (expectedHeader < HEADERS.size()) {
-            throw invalid(
-                    artifact,
-                    descriptorPath,
-                    "missing field " + HEADERS.get(expectedHeader));
+            throw invalid(artifact, descriptorPath, "missing field " + HEADERS.get(expectedHeader));
         }
         validateHeader(artifact, descriptorPath, HEADERS.get(0), values.get(0), "2");
         validatePattern(artifact, descriptorPath, "module", values.get(1), MODULE);
-        validatePattern(
-                artifact, descriptorPath, "registry", values.get(2), QUALIFIED_JAVA_NAME);
+        validatePattern(artifact, descriptorPath, "registry", values.get(2), QUALIFIED_JAVA_NAME);
         validatePattern(artifact, descriptorPath, "api_sha256", values.get(3), SHA256);
         validatePattern(artifact, descriptorPath, "generator_version", values.get(4), VERSION);
         validatePattern(
@@ -189,9 +184,7 @@ final class DescriptorValidator {
     }
 
     private static void validatePayloads(
-            List<AndroidPayload> payloads,
-            Set<String> requestedAbis,
-            Set<String> diagnostics) {
+            List<AndroidPayload> payloads, Set<String> requestedAbis, Set<String> diagnostics) {
         List<AndroidPayload> bridges =
                 payloads.stream().filter(AndroidPayload::bridgePayload).toList();
         List<AndroidPayload> configurations =
@@ -278,8 +271,7 @@ final class DescriptorValidator {
         }
     }
 
-    private static void validateEntry(
-            String artifact, String path, String kind, String value) {
+    private static void validateEntry(String artifact, String path, String kind, String value) {
         String[] parts = value.split("\\|", -1);
         int requiredParts = kind.equals("class") ? 5 : 4;
         if (parts.length != requiredParts) {
@@ -293,8 +285,7 @@ final class DescriptorValidator {
         }
     }
 
-    private static IllegalArgumentException invalid(
-            String artifact, String path, String detail) {
+    private static IllegalArgumentException invalid(String artifact, String path, String detail) {
         String identity = path.isBlank() ? artifact : artifact + "!" + path;
         return new IllegalArgumentException(
                 "Invalid Foundry descriptor " + identity + ": " + detail + ".");

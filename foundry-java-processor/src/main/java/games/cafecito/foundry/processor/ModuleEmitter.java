@@ -70,8 +70,7 @@ final class ModuleEmitter {
         }
         writeResource(
                 descriptor,
-                descriptor(
-                        reserved.moduleName(), reserved.qualifiedName(), provenance, models));
+                descriptor(reserved.moduleName(), reserved.qualifiedName(), provenance, models));
         writeResource(
                 keepRules, keepRules(reserved.moduleName(), reserved.qualifiedName(), models));
     }
@@ -275,8 +274,10 @@ final class ModuleEmitter {
                         .append("-keep class ")
                         .append(registryName)
                         .append(" {\n")
-                        .append("    public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER;\n")
-                        .append("    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor();\n")
+                        .append(
+                                "    public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER;\n")
+                        .append(
+                                "    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor();\n")
                         .append("}\n");
         for (ExtensionModel model : models) {
             rules.append("-keep class ")

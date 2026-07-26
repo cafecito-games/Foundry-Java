@@ -14,8 +14,7 @@ class DescriptorValidatorTest {
             "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
     private static final String OTHER_API_SHA =
             "15e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
-    private static final Set<String> ALL_ABIS =
-            Set.of("armeabi-v7a", "arm64-v8a", "x86", "x86_64");
+    private static final Set<String> ALL_ABIS = Set.of("armeabi-v7a", "arm64-v8a", "x86", "x86_64");
 
     @Test
     void parsesStrictFormatTwoAndPreservesRepeatableEntries() {
@@ -61,7 +60,9 @@ class DescriptorValidatorTest {
         List<InvalidDescriptor> cases =
                 List.of(
                         new InvalidDescriptor(
-                                "format one", valid.replaceFirst("format=2", "format=1"), "format=1"),
+                                "format one",
+                                valid.replaceFirst("format=2", "format=1"),
+                                "format=1"),
                         new InvalidDescriptor(
                                 "unknown header",
                                 valid.replaceFirst(
@@ -115,7 +116,9 @@ class DescriptorValidatorTest {
                                 "registry=not a java name"),
                         new InvalidDescriptor(
                                 "hash",
-                                valid.replace("api_sha256=" + API_SHA, "api_sha256=" + API_SHA.toUpperCase()),
+                                valid.replace(
+                                        "api_sha256=" + API_SHA,
+                                        "api_sha256=" + API_SHA.toUpperCase()),
                                 "api_sha256="),
                         new InvalidDescriptor(
                                 "generator",
@@ -130,12 +133,12 @@ class DescriptorValidatorTest {
                         new InvalidDescriptor(
                                 "bridge",
                                 valid.replace(
-                                        "bridge_contract_version=1",
-                                        "bridge_contract_version=1.0"),
+                                        "bridge_contract_version=1", "bridge_contract_version=1.0"),
                                 "bridge_contract_version=1.0"),
                         new InvalidDescriptor(
                                 "malformed line",
-                                valid.replace("method=demo.SpinningCube|reset|reset|void()",
+                                valid.replace(
+                                        "method=demo.SpinningCube|reset|reset|void()",
                                         "method-without-equals"),
                                 "method-without-equals"),
                         new InvalidDescriptor(
@@ -166,7 +169,14 @@ class DescriptorValidatorTest {
                 new ArrayList<>(
                         List.of(
                                 parse("zeta.jar", "zeta", "example.Zeta", API_SHA, "1", "1", "1"),
-                                parse("alpha.jar", "alpha", "example.Alpha", API_SHA, "1", "1", "1")));
+                                parse(
+                                        "alpha.jar",
+                                        "alpha",
+                                        "example.Alpha",
+                                        API_SHA,
+                                        "1",
+                                        "1",
+                                        "1")));
         DescriptorValidator.AndroidPayload payload =
                 new DescriptorValidator.AndroidPayload(
                         "foundry-java-android.aar", true, true, ALL_ABIS);
@@ -176,7 +186,9 @@ class DescriptorValidatorTest {
                         descriptors, List.of(payload), Set.of("x86_64", "arm64-v8a"));
         descriptors.clear();
 
-        assertEquals(List.of("alpha", "zeta"), validated.stream().map(FoundryDescriptor::module).toList());
+        assertEquals(
+                List.of("alpha", "zeta"),
+                validated.stream().map(FoundryDescriptor::module).toList());
         assertThrows(UnsupportedOperationException.class, validated::clear);
     }
 
@@ -186,27 +198,34 @@ class DescriptorValidatorTest {
                 assertGraphInvalid(
                         List.of(
                                 parse("zeta.jar", "shared", "example.Zeta", API_SHA, "1", "1", "1"),
-                                parse("alpha.jar", "shared", "example.Alpha", API_SHA, "1", "1", "1")),
+                                parse(
+                                        "alpha.jar",
+                                        "shared",
+                                        "example.Alpha",
+                                        API_SHA,
+                                        "1",
+                                        "1",
+                                        "1")),
                         payloads(),
                         Set.of("arm64-v8a"));
-        assertContainsAll(
-                duplicateModule.getMessage(),
-                "alpha.jar",
-                "zeta.jar",
-                "module=shared");
+        assertContainsAll(duplicateModule.getMessage(), "alpha.jar", "zeta.jar", "module=shared");
 
         IllegalArgumentException duplicateRegistry =
                 assertGraphInvalid(
                         List.of(
                                 parse("zeta.jar", "zeta", "example.Shared", API_SHA, "1", "1", "1"),
-                                parse("alpha.jar", "alpha", "example.Shared", API_SHA, "1", "1", "1")),
+                                parse(
+                                        "alpha.jar",
+                                        "alpha",
+                                        "example.Shared",
+                                        API_SHA,
+                                        "1",
+                                        "1",
+                                        "1")),
                         payloads(),
                         Set.of("arm64-v8a"));
         assertContainsAll(
-                duplicateRegistry.getMessage(),
-                "alpha.jar",
-                "zeta.jar",
-                "registry=example.Shared");
+                duplicateRegistry.getMessage(), "alpha.jar", "zeta.jar", "registry=example.Shared");
     }
 
     @Test
@@ -222,7 +241,14 @@ class DescriptorValidatorTest {
             IllegalArgumentException failure =
                     assertGraphInvalid(
                             List.of(
-                                    parse("alpha.jar", "alpha", "example.Alpha", API_SHA, "1", "1", "1"),
+                                    parse(
+                                            "alpha.jar",
+                                            "alpha",
+                                            "example.Alpha",
+                                            API_SHA,
+                                            "1",
+                                            "1",
+                                            "1"),
                                     parse(
                                             "zeta.jar",
                                             "zeta",
@@ -277,10 +303,7 @@ class DescriptorValidatorTest {
                         List.of(parse("demo.jar", "demo", "example.Demo", API_SHA, "1", "1", "1")),
                         List.of(
                                 new DescriptorValidator.AndroidPayload(
-                                        "bridge-arm64.aar",
-                                        true,
-                                        true,
-                                        Set.of("arm64-v8a"))),
+                                        "bridge-arm64.aar", true, true, Set.of("arm64-v8a"))),
                         Set.of("x86_64", "arm64-v8a"));
 
         assertContainsAll(failure.getMessage(), "bridge-arm64.aar", "abi=x86_64");
@@ -291,8 +314,22 @@ class DescriptorValidatorTest {
         IllegalArgumentException failure =
                 assertGraphInvalid(
                         List.of(
-                                parse("zeta.jar", "shared", "example.Shared", OTHER_API_SHA, "2", "2", "2"),
-                                parse("alpha.jar", "shared", "example.Shared", API_SHA, "1", "1", "1")),
+                                parse(
+                                        "zeta.jar",
+                                        "shared",
+                                        "example.Shared",
+                                        OTHER_API_SHA,
+                                        "2",
+                                        "2",
+                                        "2"),
+                                parse(
+                                        "alpha.jar",
+                                        "shared",
+                                        "example.Shared",
+                                        API_SHA,
+                                        "1",
+                                        "1",
+                                        "1")),
                         List.of(
                                 new DescriptorValidator.AndroidPayload(
                                         "zeta.aar", true, true, Set.of("arm64-v8a")),
@@ -324,8 +361,7 @@ class DescriptorValidatorTest {
             String runtime,
             String bridge) {
         return DescriptorValidator.parse(
-                artifact,
-                descriptorText(module, registry, apiSha, generator, runtime, bridge));
+                artifact, descriptorText(module, registry, apiSha, generator, runtime, bridge));
     }
 
     private static String descriptorText(

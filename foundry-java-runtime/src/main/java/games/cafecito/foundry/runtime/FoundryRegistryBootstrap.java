@@ -61,10 +61,7 @@ public final class FoundryRegistryBootstrap {
                             + ".");
         }
         requireContract(
-                descriptor,
-                "API SHA-256",
-                descriptor.apiSha256(),
-                FoundryRuntime.API_SHA256);
+                descriptor, "API SHA-256", descriptor.apiSha256(), FoundryRuntime.API_SHA256);
         requireContract(
                 descriptor,
                 "generator",

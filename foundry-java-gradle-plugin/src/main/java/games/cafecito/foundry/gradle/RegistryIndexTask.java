@@ -108,8 +108,7 @@ public abstract class RegistryIndexTask extends DefaultTask {
                             .filter(
                                     entry ->
                                             entry.getName().startsWith(DESCRIPTOR_PREFIX)
-                                                    && entry.getName()
-                                                            .endsWith(DESCRIPTOR_SUFFIX))
+                                                    && entry.getName().endsWith(DESCRIPTOR_SUFFIX))
                             .sorted(Comparator.comparing(ZipEntry::getName))
                             .toList();
             for (ZipEntry descriptor : descriptors) {

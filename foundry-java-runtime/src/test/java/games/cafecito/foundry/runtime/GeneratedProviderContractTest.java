@@ -12,7 +12,10 @@ class GeneratedProviderContractTest {
     @Test
     void bootstrapSortsProvidersAndExposesImmutableDescriptors() {
         ArrayList<FoundryModuleProvider> input =
-                new ArrayList<>(List.of(provider("zeta", "example.Zeta"), provider("alpha", "example.Alpha")));
+                new ArrayList<>(
+                        List.of(
+                                provider("zeta", "example.Zeta"),
+                                provider("alpha", "example.Alpha")));
 
         FoundryRegistryBootstrap bootstrap = new FoundryRegistryBootstrap(input);
         input.clear();
