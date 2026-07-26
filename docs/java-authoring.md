@@ -134,7 +134,7 @@ override, and accessor calls. The registry passes the binding context and object
 generated access contract, and normal `FoundryBindingContext.bind` lifecycle checks reject stale
 contexts before an extension factory is invoked.
 
-There is no format-1 compatibility reader, runtime reflection, classpath scanning, Android manifest
+There is no runtime reflection, format-1 compatibility reader, classpath scanning, Android manifest
 discovery, `FoundryPlugin` lookup, `Class.forName`, or reflective member enumeration. Generated
 entry points are the only dynamically retained classes. Processor keep rules name only the module
 registry and its generated trampolines; do not replace them with package-wide rules.
