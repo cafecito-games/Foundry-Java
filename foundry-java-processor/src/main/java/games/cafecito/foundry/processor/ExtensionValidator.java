@@ -35,6 +35,7 @@ final class ExtensionValidator {
     static final String SIGNAL = "games.cafecito.foundry.annotations.FoundrySignal";
     static final String OVERRIDE = "games.cafecito.foundry.annotations.FoundryOverride";
     static final String INITIALIZATION = "games.cafecito.foundry.annotations.FoundryInitialization";
+    static final String GENERATED = "games.cafecito.foundry.annotations.GeneratedByFoundry";
 
     private final Types types;
     private final Elements elements;
@@ -75,6 +76,15 @@ final class ExtensionValidator {
 
         AnnotationValue baseValue = value(classAnnotation, "base");
         TypeMirror base = (TypeMirror) baseValue.getValue();
+        Element baseElement = types.asElement(base);
+        if (!(baseElement instanceof TypeElement baseType)
+                || annotation(baseType, GENERATED).isEmpty()) {
+            error(
+                    extension,
+                    classAnnotation,
+                    baseValue,
+                    "extension base must be a generated Foundry engine class");
+        }
         if (!types.isSameType(types.erasure(extension.getSuperclass()), types.erasure(base))) {
             error(
                     extension,
@@ -118,7 +128,7 @@ final class ExtensionValidator {
                                             method,
                                             "Foundry override "
                                                     + exported
-                                                    + " does not match a virtual method on "
+                                                    + " does not match a generated Foundry virtual method on "
                                                     + base);
                                 }
                                 checkDuplicate(exportedNames, exported, method);
@@ -148,9 +158,13 @@ final class ExtensionValidator {
                                 String exported =
                                         exportedName(
                                                 member, mirror, member.getSimpleName().toString());
-                                validateSignal(member);
+                                Optional<ExecutableElement> signalMethod = validateSignal(member);
                                 checkDuplicate(exportedNames, exported, member);
-                                signals.add(signalModel((TypeElement) member, exported));
+                                signals.add(
+                                        signalModel(
+                                                (TypeElement) member,
+                                                exported,
+                                                signalMethod.orElse(null)));
                             });
         }
 
@@ -270,16 +284,21 @@ final class ExtensionValidator {
     private void validateConstructor(TypeElement extension) {
         List<ExecutableElement> constructors =
                 ElementFilter.constructorsIn(extension.getEnclosedElements());
-        if (!constructors.isEmpty()
-                && constructors.stream()
-                        .noneMatch(
-                                constructor ->
-                                        constructor.getParameters().isEmpty()
-                                                && constructor
-                                                        .getModifiers()
-                                                        .contains(Modifier.PUBLIC))) {
+        Optional<ExecutableElement> publicZeroArgument =
+                constructors.stream()
+                        .filter(constructor -> constructor.getParameters().isEmpty())
+                        .filter(constructor -> constructor.getModifiers().contains(Modifier.PUBLIC))
+                        .findFirst();
+        if (!constructors.isEmpty() && publicZeroArgument.isEmpty()) {
             error(extension, "extension class must provide a public zero-argument constructor");
         }
+        publicZeroArgument
+                .filter(this::declaresCheckedException)
+                .ifPresent(
+                        constructor ->
+                                error(
+                                        constructor,
+                                        "extension constructor cannot declare checked exceptions"));
     }
 
     private void validateCallable(ExecutableElement method, String label) {
@@ -290,9 +309,22 @@ final class ExtensionValidator {
         if (!method.getTypeParameters().isEmpty()) {
             error(method, label + " cannot declare type parameters");
         }
-        if (!method.getThrownTypes().isEmpty()) {
+        if (declaresCheckedException(method)) {
             error(method, label + " cannot declare checked exceptions");
         }
+    }
+
+    private boolean declaresCheckedException(ExecutableElement executable) {
+        TypeElement runtimeException = elements.getTypeElement("java.lang.RuntimeException");
+        TypeElement error = elements.getTypeElement("java.lang.Error");
+        return executable.getThrownTypes().stream()
+                .anyMatch(
+                        thrown ->
+                                (runtimeException == null
+                                                || !types.isSubtype(
+                                                        thrown, runtimeException.asType()))
+                                        && (error == null
+                                                || !types.isSubtype(thrown, error.asType())));
     }
 
     private void validateMethodTypes(ExecutableElement method) {
@@ -401,16 +433,16 @@ final class ExtensionValidator {
                 && !method.getModifiers().contains(Modifier.STATIC);
     }
 
-    private void validateSignal(Element element) {
+    private Optional<ExecutableElement> validateSignal(Element element) {
         if (element.getKind() != ElementKind.INTERFACE) {
             error(element, "@FoundrySignal must annotate an interface");
-            return;
+            return Optional.empty();
         }
         TypeElement signal = (TypeElement) element;
-        List<ExecutableElement> methods = ElementFilter.methodsIn(signal.getEnclosedElements());
-        if (methods.size() != 1 || !methods.get(0).getModifiers().contains(Modifier.ABSTRACT)) {
+        List<ExecutableElement> methods = effectiveAbstractMethods(signal);
+        if (!elements.isFunctionalInterface(signal) || methods.size() != 1) {
             error(signal, "signal must declare exactly one abstract method");
-            return;
+            return Optional.empty();
         }
         ExecutableElement method = methods.get(0);
         if (method.getReturnType().getKind() != TypeKind.VOID) {
@@ -418,14 +450,46 @@ final class ExtensionValidator {
         }
         method.getParameters()
                 .forEach(parameter -> validateSupported(parameter.asType(), parameter));
+        return Optional.of(method);
     }
 
-    private ExtensionModel.SignalModel signalModel(TypeElement signal, String exported) {
-        List<ExecutableElement> methods = ElementFilter.methodsIn(signal.getEnclosedElements());
-        List<ExtensionModel.ParameterModel> parameters =
-                methods.size() == 1 ? parameters(methods.get(0)) : List.of();
+    private List<ExecutableElement> effectiveAbstractMethods(TypeElement signal) {
+        TypeElement objectType = elements.getTypeElement("java.lang.Object");
+        List<ExecutableElement> objectMethods =
+                objectType == null
+                        ? List.of()
+                        : ElementFilter.methodsIn(elements.getAllMembers(objectType));
+        Map<String, ExecutableElement> methods = new LinkedHashMap<>();
+        ElementFilter.methodsIn(elements.getAllMembers(signal)).stream()
+                .filter(method -> method.getModifiers().contains(Modifier.ABSTRACT))
+                .filter(
+                        method ->
+                                objectMethods.stream()
+                                        .filter(
+                                                objectMethod ->
+                                                        objectMethod
+                                                                .getModifiers()
+                                                                .contains(Modifier.PUBLIC))
+                                        .noneMatch(
+                                                objectMethod ->
+                                                        sameSignature(objectMethod, method)))
+                .forEach(method -> methods.putIfAbsent(methodSignatureKey(method), method));
+        return List.copyOf(methods.values());
+    }
+
+    private String methodSignatureKey(ExecutableElement method) {
+        return method.getSimpleName()
+                + method.getParameters().stream()
+                        .map(parameter -> types.erasure(parameter.asType()).toString())
+                        .collect(java.util.stream.Collectors.joining(",", "(", ")"));
+    }
+
+    private ExtensionModel.SignalModel signalModel(
+            TypeElement signal, String exported, ExecutableElement method) {
         return new ExtensionModel.SignalModel(
-                signal.getSimpleName().toString(), exported, parameters);
+                signal.getSimpleName().toString(),
+                exported,
+                method == null ? List.of() : parameters(method));
     }
 
     private boolean matchesBaseVirtual(
@@ -436,6 +500,7 @@ final class ExtensionValidator {
         }
         return ElementFilter.methodsIn(elements.getAllMembers(baseType)).stream()
                 .filter(method -> method.getSimpleName().contentEquals(exportedName))
+                .filter(method -> annotation(method, GENERATED).isPresent())
                 .anyMatch(method -> sameSignature(method, override));
     }
 

@@ -3,6 +3,7 @@ package games.cafecito.foundry.processor;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -59,6 +60,7 @@ class FoundryModuleGenerationTest {
 
         assertTrue(first.successful(), () -> first.errorMessages().toString());
         assertTrue(second.successful(), () -> second.errorMessages().toString());
+        assertNotEquals(first.inputOrder(), second.inputOrder());
         assertEquals(first.generatedSources(), second.generatedSources());
         assertEquals(first.classOutput().keySet(), second.classOutput().keySet());
         first.classOutput()

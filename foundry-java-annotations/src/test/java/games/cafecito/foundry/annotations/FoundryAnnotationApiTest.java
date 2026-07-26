@@ -70,6 +70,16 @@ class FoundryAnnotationApiTest {
                 InitializationLevel.values());
     }
 
+    @Test
+    void keepsGeneratedProvenanceOnTypesAndMethodsInClassFiles() {
+        assertAnnotation(
+                GeneratedByFoundry.class,
+                RetentionPolicy.CLASS,
+                new java.lang.annotation.ElementType[] {
+                    java.lang.annotation.ElementType.TYPE, java.lang.annotation.ElementType.METHOD
+                });
+    }
+
     private static void assertAnnotation(
             Class<?> type, RetentionPolicy retention, java.lang.annotation.ElementType[] targets) {
         assertEquals(retention, type.getAnnotation(Retention.class).value());

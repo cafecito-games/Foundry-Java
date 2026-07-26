@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.tools.Diagnostic;
@@ -14,7 +15,10 @@ class FoundryExtensionProcessorValidationTest {
     private static final String BASE =
             """
             package demo;
+            import games.cafecito.foundry.annotations.GeneratedByFoundry;
+            @GeneratedByFoundry
             public class EngineNode {
+                @GeneratedByFoundry
                 public void _process(double delta) {}
             }
             """;
@@ -62,6 +66,59 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
+    void rejectsABaseWithoutGeneratorProvenance() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        Map.of(
+                                "demo.OrdinaryBase",
+                                """
+                                package demo;
+                                public class OrdinaryBase {}
+                                """,
+                                "demo.OrdinaryExtension",
+                                """
+                                package demo;
+                                import games.cafecito.foundry.annotations.FoundryClass;
+                                @FoundryClass(base = OrdinaryBase.class)
+                                public final class OrdinaryExtension extends OrdinaryBase {}
+                                """));
+
+        assertDiagnostic(
+                result,
+                "extension base must be a generated Foundry engine class",
+                "OrdinaryExtension",
+                3);
+    }
+
+    @Test
+    void rejectsAnOverrideWithoutGeneratedVirtualProvenance() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        Map.of(
+                                "demo.GeneratedBase",
+                                """
+                                package demo;
+                                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                                @GeneratedByFoundry
+                                public class GeneratedBase {
+                                    public void ordinary() {}
+                                }
+                                """,
+                                "demo.BadOverride",
+                                """
+                                package demo;
+                                import games.cafecito.foundry.annotations.*;
+                                @FoundryClass(base = GeneratedBase.class)
+                                public final class BadOverride extends GeneratedBase {
+                                    @FoundryOverride public void ordinary() {}
+                                }
+                                """));
+
+        assertDiagnostic(
+                result, "does not match a generated Foundry virtual method", "BadOverride", 5);
+    }
+
+    @Test
     void rejectsInvalidExtensionAndMemberShapes() throws IOException {
         ProcessorCompilation.Result result =
                 compile(
@@ -83,7 +140,8 @@ class FoundryExtensionProcessorValidationTest {
         assertDiagnostic(result, "unsupported Foundry return type java.lang.Thread", "BadShape", 6);
         assertDiagnostic(
                 result, "unsupported Foundry parameter type java.lang.Thread", "BadShape", 6);
-        assertDiagnostic(result, "does not match a virtual method", "BadShape", 7);
+        assertDiagnostic(
+                result, "does not match a generated Foundry virtual method", "BadShape", 7);
     }
 
     @Test
@@ -137,6 +195,55 @@ class FoundryExtensionProcessorValidationTest {
         assertDiagnostic(result, "@FoundrySignal must annotate an interface", "BadSignals", 6);
         assertDiagnostic(
                 result, "signal must declare exactly one abstract method", "BadSignals", 7);
+    }
+
+    @Test
+    void acceptsAnInheritedSignalMethodAndCapturesItsSignature() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "InheritedSignal",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class InheritedSignal extends EngineNode {
+                            public interface SignalParent {
+                                void emitted(int value);
+                            }
+                            @FoundrySignal public interface Changed extends SignalParent {}
+                        }
+                        """);
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+        String descriptor =
+                new String(
+                        result.classOutput()
+                                .get("META-INF/foundry-java/modules/demo-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(
+                descriptor.contains("signal=demo.InheritedSignal|Changed|Changed|void(int)"),
+                descriptor);
+    }
+
+    @Test
+    void rejectsMultipleInheritedAbstractSignalMethods() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "InheritedNonSam",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class InheritedNonSam extends EngineNode {
+                            public interface FirstParent { void first(); }
+                            public interface SecondParent { void second(); }
+                            @FoundrySignal
+                            public interface InvalidSignal extends FirstParent, SecondParent {}
+                        }
+                        """);
+
+        assertDiagnostic(
+                result, "signal must declare exactly one abstract method", "InheritedNonSam", 8);
     }
 
     @Test
@@ -204,6 +311,46 @@ class FoundryExtensionProcessorValidationTest {
         assertDiagnostic(result, "extension class must be top-level", "Outer", 5);
         assertDiagnostic(
                 result, "exported method cannot declare checked exceptions", "ThrowsChecked", 5);
+    }
+
+    @Test
+    void rejectsACheckedExceptionOnTheExtensionConstructor() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "ThrowingConstructor",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.FoundryClass;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class ThrowingConstructor extends EngineNode {
+                            public ThrowingConstructor() throws java.io.IOException {}
+                        }
+                        """);
+
+        assertDiagnostic(
+                result,
+                "extension constructor cannot declare checked exceptions",
+                "ThrowingConstructor",
+                5);
+    }
+
+    @Test
+    void allowsUncheckedExceptionsOnConstructorsAndExportedMethods() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "UncheckedExceptions",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class UncheckedExceptions extends EngineNode {
+                            public UncheckedExceptions() throws IllegalStateException {}
+                            @FoundryMethod
+                            public void invoke() throws IllegalArgumentException, AssertionError {}
+                        }
+                        """);
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
     }
 
     @Test

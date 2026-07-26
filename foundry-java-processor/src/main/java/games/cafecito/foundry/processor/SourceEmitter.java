@@ -27,23 +27,6 @@ final class SourceEmitter {
         return qualifiedName;
     }
 
-    String emitRoundBarrier(int sequence) throws IOException {
-        String className = "FoundryProcessorRoundBarrier" + sequence;
-        String packageName = "games.cafecito.foundry.generated";
-        String qualifiedName = packageName + "." + className;
-        try (Writer writer = filer.createSourceFile(qualifiedName).openWriter()) {
-            writer.write(
-                    """
-                    package %s;
-
-                    @javax.annotation.processing.Generated("%s")
-                    final class %s {}
-                    """
-                            .formatted(packageName, PROCESSOR, className));
-        }
-        return qualifiedName;
-    }
-
     private String trampolineSource(ExtensionModel model) {
         StringBuilder source = new StringBuilder();
         if (!model.packageName().isEmpty()) {

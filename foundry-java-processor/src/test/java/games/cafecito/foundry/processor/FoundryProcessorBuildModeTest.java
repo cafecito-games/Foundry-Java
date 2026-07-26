@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +42,9 @@ class FoundryProcessorBuildModeTest {
         ProcessorCompilation.Result invalid =
                 ProcessorCompilation.compile(
                         FoundryTrampolineGenerationTest.extensionSources(), "Demo Module");
+        ProcessorCompilation.Result keyword =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(), "class");
 
         assertFalse(missing.successful());
         assertTrue(
@@ -49,20 +54,30 @@ class FoundryProcessorBuildModeTest {
         assertTrue(
                 invalid.errorMessages().stream()
                         .anyMatch(message -> message.contains("-Afoundry.module")));
+        assertFalse(keyword.successful());
+        assertTrue(
+                keyword.errorMessages().stream()
+                        .anyMatch(
+                                message ->
+                                        message.contains("-Afoundry.module")
+                                                && message.contains("Java keyword")));
     }
 
     @Test
     void incrementalRegenerationChangesOnlyAffectedArtifacts() throws IOException {
         Map<String, String> firstSources = twoExtensions(true);
         Map<String, String> secondSources = twoExtensions(false);
+        Path sharedOutput = Files.createTempDirectory("foundry-incremental-processor-test-");
 
         ProcessorCompilation.Result first =
-                ProcessorCompilation.compile(firstSources, "incremental-module");
+                ProcessorCompilation.compile(firstSources, "incremental-module", sharedOutput);
+        ProcessorCompilation.resetProcessorOutputs(sharedOutput);
         ProcessorCompilation.Result second =
-                ProcessorCompilation.compile(secondSources, "incremental-module");
+                ProcessorCompilation.compile(secondSources, "incremental-module", sharedOutput);
 
         assertTrue(first.successful(), () -> first.errorMessages().toString());
         assertTrue(second.successful(), () -> second.errorMessages().toString());
+        assertEquals(first.outputDirectory(), second.outputDirectory());
         assertEquals(
                 first.generatedSources().get("demo/Stable_FoundryTrampoline.java"),
                 second.generatedSources().get("demo/Stable_FoundryTrampoline.java"));
@@ -85,6 +100,14 @@ class FoundryProcessorBuildModeTest {
                                         "META-INF/foundry-java/modules/"
                                                 + "incremental-module.descriptor"),
                         StandardCharsets.UTF_8);
+        String firstDescriptor =
+                new String(
+                        first.classOutput()
+                                .get(
+                                        "META-INF/foundry-java/modules/"
+                                                + "incremental-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(firstDescriptor.contains("|temporary|"));
         assertFalse(secondDescriptor.contains("|temporary|"));
     }
 
@@ -128,6 +151,8 @@ class FoundryProcessorBuildModeTest {
                 "demo.EngineNode",
                 """
                 package demo;
+                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                @GeneratedByFoundry
                 public class EngineNode {}
                 """);
         sources.put(
@@ -167,12 +192,93 @@ class FoundryProcessorBuildModeTest {
         assertTrue(descriptor.contains("class=demo.GeneratedExtension|"));
     }
 
+    @Test
+    void emitsTheModuleAfterExternalRootsContinueUntilTheLastActiveRound() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(),
+                        "continuous-module",
+                        List.of(new FoundryExtensionProcessor(), new ContinuousRootProcessor()));
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+        assertTrue(
+                result.generatedSources()
+                        .containsKey(
+                                "games/cafecito/foundry/generated/continuousmodule/"
+                                        + "ContinuousModuleRegistry.java"),
+                result.generatedSources().keySet().toString());
+        assertTrue(
+                result.classOutput()
+                        .containsKey("META-INF/foundry-java/modules/continuous-module.descriptor"),
+                result.classOutput().keySet().toString());
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.contains("FoundryProcessorRoundBarrier")),
+                result.generatedSources().keySet().toString());
+    }
+
+    @Test
+    void includesAnExtensionGeneratedAfterAnEarlierRegistryRound() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(),
+                        "post-emission-module",
+                        List.of(
+                                new FoundryExtensionProcessor(),
+                                new PostEmissionExtensionProcessor()));
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+        String registry =
+                result.generatedSources()
+                        .get(
+                                "games/cafecito/foundry/generated/postemissionmodule/"
+                                        + "PostEmissionModuleRegistry.java");
+        assertTrue(registry.contains("\"demo.LateExtension\""), registry);
+        String descriptor =
+                new String(
+                        result.classOutput()
+                                .get(
+                                        "META-INF/foundry-java/modules/"
+                                                + "post-emission-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(descriptor.contains("class=demo.LateExtension|"), descriptor);
+    }
+
+    @Test
+    void generationFailurePreventsAllModuleArtifacts() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(),
+                        "failing-module",
+                        List.of(new FoundryExtensionProcessor()),
+                        Files.createTempDirectory("foundry-failing-filer-test-"),
+                        name -> name.equals("demo.SpinningCube_FoundryTrampoline"));
+
+        assertFalse(result.successful());
+        assertTrue(
+                result.errorMessages().stream()
+                        .anyMatch(
+                                message ->
+                                        message.contains("cannot generate trampoline")
+                                                && message.contains("injected output failure")),
+                result.errorMessages().toString());
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.endsWith("FailingModuleRegistry.java")),
+                result.generatedSources().keySet().toString());
+        assertFalse(
+                result.classOutput()
+                        .containsKey("META-INF/foundry-java/modules/failing-module.descriptor"));
+    }
+
     private static Map<String, String> twoExtensions(boolean includeTemporaryMethod) {
         Map<String, String> sources = new LinkedHashMap<>();
         sources.put(
                 "demo.EngineNode",
                 """
                 package demo;
+                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                @GeneratedByFoundry
                 public class EngineNode {}
                 """);
         sources.put(
@@ -242,6 +348,103 @@ class FoundryProcessorBuildModeTest {
             } catch (IOException exception) {
                 throw new java.io.UncheckedIOException(exception);
             }
+            return false;
+        }
+
+        private void writeSource(String name, String source) throws IOException {
+            try (Writer writer = processingEnv.getFiler().createSourceFile(name).openWriter()) {
+                writer.write(source);
+            }
+        }
+    }
+
+    private static final class ContinuousRootProcessor extends AbstractProcessor {
+        private int stage;
+
+        @Override
+        public Set<String> getSupportedAnnotationTypes() {
+            return Set.of("*");
+        }
+
+        @Override
+        public SourceVersion getSupportedSourceVersion() {
+            return SourceVersion.RELEASE_17;
+        }
+
+        @Override
+        public boolean process(
+                Set<? extends TypeElement> annotations, RoundEnvironment roundEnvironment) {
+            if (roundEnvironment.processingOver() || stage >= 2) {
+                return false;
+            }
+            try (Writer writer =
+                    processingEnv
+                            .getFiler()
+                            .createSourceFile("demo.ExternalActivity" + stage)
+                            .openWriter()) {
+                writer.write("package demo; public final class ExternalActivity" + stage + " {}");
+                stage++;
+            } catch (IOException exception) {
+                throw new java.io.UncheckedIOException(exception);
+            }
+            return false;
+        }
+    }
+
+    private static final class PostEmissionExtensionProcessor extends AbstractProcessor {
+        private int round;
+        private boolean triggerWritten;
+        private boolean extensionWritten;
+
+        @Override
+        public Set<String> getSupportedAnnotationTypes() {
+            return Set.of("*");
+        }
+
+        @Override
+        public SourceVersion getSupportedSourceVersion() {
+            return SourceVersion.RELEASE_17;
+        }
+
+        @Override
+        public boolean process(
+                Set<? extends TypeElement> annotations, RoundEnvironment roundEnvironment) {
+            if (roundEnvironment.processingOver() || extensionWritten) {
+                return false;
+            }
+            boolean barrierPresent =
+                    roundEnvironment.getRootElements().stream()
+                            .filter(TypeElement.class::isInstance)
+                            .map(TypeElement.class::cast)
+                            .map(type -> type.getSimpleName().toString())
+                            .anyMatch(name -> name.startsWith("FoundryProcessorRoundBarrier"));
+            boolean registryPresent =
+                    roundEnvironment.getRootElements().stream()
+                            .filter(TypeElement.class::isInstance)
+                            .map(TypeElement.class::cast)
+                            .map(type -> type.getSimpleName().toString())
+                            .anyMatch(name -> name.endsWith("ModuleRegistry"));
+            try {
+                if (registryPresent || (round >= 2 && triggerWritten && !barrierPresent)) {
+                    writeSource(
+                            "demo.LateExtension",
+                            """
+                            package demo;
+                            import games.cafecito.foundry.annotations.FoundryClass;
+                            @FoundryClass(base = EngineNode.class)
+                            public final class LateExtension extends EngineNode {}
+                            """);
+                    extensionWritten = true;
+                } else if (round >= 1 && !triggerWritten && !barrierPresent) {
+                    writeSource(
+                            "demo.PostEmissionTrigger",
+                            "package demo; public final class PostEmissionTrigger {}");
+                    triggerWritten = true;
+                }
+            } catch (IOException exception) {
+                throw new java.io.UncheckedIOException(exception);
+            }
+            round++;
             return false;
         }
 

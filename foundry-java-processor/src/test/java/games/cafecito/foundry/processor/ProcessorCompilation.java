@@ -12,11 +12,15 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
+import javax.tools.FileObject;
+import javax.tools.ForwardingJavaFileManager;
 import javax.tools.JavaCompiler;
+import javax.tools.JavaFileManager;
 import javax.tools.JavaFileObject;
 import javax.tools.SimpleJavaFileObject;
 import javax.tools.StandardJavaFileManager;
@@ -37,16 +41,43 @@ final class ProcessorCompilation {
     static Result compile(
             Map<String, String> sources, String moduleName, List<? extends Processor> processors)
             throws IOException {
+        return compile(
+                sources,
+                moduleName,
+                processors,
+                Files.createTempDirectory("foundry-processor-test-"),
+                name -> false);
+    }
+
+    static Result compile(Map<String, String> sources, String moduleName, Path output)
+            throws IOException {
+        return compile(
+                sources,
+                moduleName,
+                List.of(new FoundryExtensionProcessor()),
+                output,
+                name -> false);
+    }
+
+    static Result compile(
+            Map<String, String> sources,
+            String moduleName,
+            List<? extends Processor> processors,
+            Path output,
+            Predicate<String> failOutput)
+            throws IOException {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         assertNotNull(compiler, "processor tests require a JDK");
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
-        Path output = Files.createTempDirectory("foundry-processor-test-");
         Path classes = Files.createDirectories(output.resolve("classes"));
         Path generated = Files.createDirectories(output.resolve("generated"));
-        try (StandardJavaFileManager fileManager =
+        try (StandardJavaFileManager standardFileManager =
                 compiler.getStandardFileManager(diagnostics, null, StandardCharsets.UTF_8)) {
-            fileManager.setLocationFromPaths(StandardLocation.CLASS_OUTPUT, List.of(classes));
-            fileManager.setLocationFromPaths(StandardLocation.SOURCE_OUTPUT, List.of(generated));
+            standardFileManager.setLocationFromPaths(
+                    StandardLocation.CLASS_OUTPUT, List.of(classes));
+            standardFileManager.setLocationFromPaths(
+                    StandardLocation.SOURCE_OUTPUT, List.of(generated));
+            JavaFileManager fileManager = failingFileManager(standardFileManager, failOutput);
             List<String> options = new ArrayList<>();
             options.addAll(
                     List.of(
@@ -59,7 +90,6 @@ final class ProcessorCompilation {
             }
             List<JavaFileObject> units =
                     sources.entrySet().stream()
-                            .sorted(Map.Entry.comparingByKey())
                             .map(entry -> new Source(entry.getKey(), entry.getValue()))
                             .map(JavaFileObject.class::cast)
                             .toList();
@@ -72,8 +102,67 @@ final class ProcessorCompilation {
                     List.copyOf(diagnostics.getDiagnostics()),
                     readTree(generated),
                     readBytes(classes),
-                    output);
+                    output,
+                    List.copyOf(sources.keySet()));
         }
+    }
+
+    static void resetProcessorOutputs(Path output) throws IOException {
+        Path generated = output.resolve("generated");
+        if (Files.exists(generated)) {
+            try (Stream<Path> paths = Files.walk(generated)) {
+                for (Path path :
+                        paths.sorted(Comparator.reverseOrder())
+                                .filter(path -> !path.equals(generated))
+                                .toList()) {
+                    Files.delete(path);
+                }
+            }
+        }
+        Files.createDirectories(generated);
+        Path classes = output.resolve("classes");
+        if (!Files.exists(classes)) {
+            return;
+        }
+        try (Stream<Path> paths = Files.walk(classes)) {
+            for (Path path : paths.filter(Files::isRegularFile).toList()) {
+                String relative = classes.relativize(path).toString().replace('\\', '/');
+                if (relative.contains("_FoundryTrampoline")
+                        || relative.startsWith("games/cafecito/foundry/generated/")
+                        || relative.startsWith("META-INF/foundry-java/modules/")
+                        || relative.startsWith("META-INF/proguard/foundry-java-")) {
+                    Files.delete(path);
+                }
+            }
+        }
+    }
+
+    private static JavaFileManager failingFileManager(
+            StandardJavaFileManager delegate, Predicate<String> failOutput) {
+        return new ForwardingJavaFileManager<>(delegate) {
+            @Override
+            public JavaFileObject getJavaFileForOutput(
+                    Location location,
+                    String className,
+                    JavaFileObject.Kind kind,
+                    FileObject sibling)
+                    throws IOException {
+                if (failOutput.test(className)) {
+                    throw new IOException("injected output failure for " + className);
+                }
+                return super.getJavaFileForOutput(location, className, kind, sibling);
+            }
+
+            @Override
+            public FileObject getFileForOutput(
+                    Location location, String packageName, String relativeName, FileObject sibling)
+                    throws IOException {
+                if (failOutput.test(relativeName)) {
+                    throw new IOException("injected output failure for " + relativeName);
+                }
+                return super.getFileForOutput(location, packageName, relativeName, sibling);
+            }
+        };
     }
 
     private static Map<String, String> readTree(Path root) throws IOException {
@@ -111,7 +200,8 @@ final class ProcessorCompilation {
             List<Diagnostic<? extends JavaFileObject>> diagnostics,
             Map<String, String> generatedSources,
             Map<String, byte[]> classOutput,
-            Path outputDirectory) {
+            Path outputDirectory,
+            List<String> inputOrder) {
         List<String> errorMessages() {
             List<String> messages = new ArrayList<>();
             diagnostics.stream()

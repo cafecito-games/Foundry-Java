@@ -42,7 +42,10 @@ class FoundryTrampolineGenerationTest {
                 "demo.EngineNode",
                 """
                 package demo;
+                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                @GeneratedByFoundry
                 public class EngineNode {
+                    @GeneratedByFoundry
                     public void _process(double delta) {}
                 }
                 """);

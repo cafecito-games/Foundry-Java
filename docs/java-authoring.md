@@ -8,12 +8,15 @@ consumer module and give that module a stable lowercase identity:
 ```
 
 The identity becomes part of the generated registry class and descriptor path. Changing it is an
-artifact compatibility change.
+artifact compatibility change. It must be a stable lowercase hyphen-separated name whose generated
+Java package segment is not a Java 17 keyword.
 
 ## Extension declarations
 
-An extension is a public, final, top-level class with a public zero-argument constructor. Its direct
-Java superclass must match the `base` named by `@FoundryClass`:
+An extension is a public, final, top-level class with a public zero-argument constructor. The
+constructor may declare unchecked exceptions, but not checked exceptions because generated
+construction cannot propagate them. Its direct Java superclass must match the generated engine
+class named by `@FoundryClass`; ordinary application classes are not valid extension bases:
 
 ```java
 @FoundryClass(base = Node3D.class)
@@ -52,10 +55,13 @@ public final class SpinningCube extends Node3D {
 All exported names in one class share a namespace and must be unique.
 
 An exported method or virtual override must be a public instance method without Java type
-parameters or checked exceptions. `@FoundryOverride` must exactly match a method on the declared
-engine base, including its return and parameter types. A property annotation belongs on a field;
-its public getter returns exactly the field type and its optional public setter accepts exactly that
-type. A signal annotation belongs on a nested interface with exactly one abstract, `void` method.
+parameters or checked exceptions. Unchecked `RuntimeException` and `Error` declarations are
+allowed. `@FoundryOverride` must exactly match a generator-owned virtual method on the declared
+engine base, including its return and parameter types; an ordinary same-named Java method is not a
+virtual callback. A property annotation belongs on a field; its public getter returns exactly the
+field type and its optional public setter accepts exactly that type. A signal annotation belongs on
+a nested interface whose effective inherited method set contains exactly one abstract, `void`
+method.
 
 Supported callback types are Java primitives, `void` returns, `String`, enums, generated types below
 `games.cafecito.foundry.api` or `games.cafecito.foundry.types`, and other annotated extension
