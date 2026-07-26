@@ -133,11 +133,13 @@ struct BridgeRuntime::Impl {
 	}
 
 	std::mutex mutex;
+	std::condition_variable shutdowns_drained;
 	std::unordered_map<ContextHandle, std::shared_ptr<Context>> contexts;
 	std::shared_ptr<CallbackTarget> callbacks;
 	std::shared_ptr<ErrorSink> errors;
 	ContextHandle next_handle = 1;
 	std::uint64_t generation = 1;
+	std::size_t active_shutdowns = 0;
 	bool accepting_contexts = true;
 };
 
@@ -238,6 +240,7 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 			std::lock_guard context_lock(context->mutex);
 			context->accepting_callbacks = false;
 		}
+		impl->active_shutdowns++;
 		impl->contexts.erase(found);
 	}
 	{
@@ -254,6 +257,13 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 		impl->callbacks->invalidate(handle);
 	} catch (...) {
 		impl->report("Java context invalidation failed.");
+	}
+	{
+		std::lock_guard lock(impl->mutex);
+		impl->active_shutdowns--;
+		if (impl->active_shutdowns == 0) {
+			impl->shutdowns_drained.notify_all();
+		}
 	}
 	return true;
 }
@@ -279,8 +289,9 @@ bool BridgeRuntime::shutdown_all(std::int32_t level) noexcept {
 	while (true) {
 		ContextHandle handle = 0;
 		{
-			std::lock_guard lock(impl->mutex);
+			std::unique_lock lock(impl->mutex);
 			if (impl->contexts.empty()) {
+				impl->shutdowns_drained.wait(lock, [this] { return impl->active_shutdowns == 0; });
 				return true;
 			}
 			handle = impl->contexts.begin()->first;

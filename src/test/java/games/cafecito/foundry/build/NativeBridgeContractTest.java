@@ -79,6 +79,7 @@ class NativeBridgeContractTest {
         }
         assertTrue(androidBuild.contains("externalNativeBuild"));
         assertTrue(androidBuild.contains("29.0.14206865"));
+        assertTrue(androidBuild.contains("targetSdk = 36"));
         assertTrue(androidBuild.contains("inputs.file(nativeTestScript)"));
         assertTrue(verifier.contains("llvm-readelf"));
         assertTrue(verifier.contains("libfoundry_java.so"));

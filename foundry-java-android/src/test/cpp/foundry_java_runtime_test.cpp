@@ -21,6 +21,7 @@ int jni_deinitialize_count = 0;
 int jni_shutdown_context_count = 0;
 int jni_shutdown_count = 0;
 bool jni_shutdown_context_result = true;
+bool jni_shutdown_result = true;
 FoundryExtensionInterfacePrintError installed_print_error = nullptr;
 
 void fake_print_error(const char *, const char *, const char *, std::int32_t, FoundryExtensionBool) {
@@ -110,9 +111,19 @@ public:
 		last_context = context;
 		last_level = level;
 		deinitialize_count++;
+		{
+			std::lock_guard lock(deinitialize_mutex);
+			deinitialize_condition.notify_all();
+		}
 		if (shutdown_during_deinitialize) {
 			shutdown_during_deinitialize_result =
 					runtime->shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+		}
+		if (context == blocked_deinitialize_context) {
+			std::unique_lock lock(deinitialize_mutex);
+			deinitialize_started = true;
+			deinitialize_condition.notify_all();
+			deinitialize_condition.wait(lock, [this] { return release_deinitialize; });
 		}
 	}
 
@@ -166,6 +177,22 @@ public:
 		block_condition.notify_all();
 	}
 
+	void wait_until_deinitialize_blocked() {
+		std::unique_lock lock(deinitialize_mutex);
+		deinitialize_condition.wait(lock, [this] { return deinitialize_started; });
+	}
+
+	void wait_until_deinitialize_count(int count) {
+		std::unique_lock lock(deinitialize_mutex);
+		deinitialize_condition.wait(lock, [this, count] { return deinitialize_count >= count; });
+	}
+
+	void release_blocked_deinitialize() {
+		std::lock_guard lock(deinitialize_mutex);
+		release_deinitialize = true;
+		deinitialize_condition.notify_all();
+	}
+
 	foundry_java::BridgeRuntime *runtime = nullptr;
 	foundry_java::ContextHandle last_context = 0;
 	std::int32_t last_level = -1;
@@ -181,6 +208,11 @@ public:
 	bool shutdown_from_callback_result = true;
 	bool shutdown_during_deinitialize = false;
 	bool shutdown_during_deinitialize_result = true;
+	foundry_java::ContextHandle blocked_deinitialize_context = 0;
+	std::mutex deinitialize_mutex;
+	std::condition_variable deinitialize_condition;
+	bool deinitialize_started = false;
+	bool release_deinitialize = false;
 };
 
 void test_context_identity_reentrancy_and_exception_containment() {
@@ -256,6 +288,40 @@ void test_shutdown_waits_for_active_callback_lease() {
 	expect(callbacks->invalidate_count == 1, "racing shutdown must invalidate exactly once");
 }
 
+void test_shutdown_all_waits_for_concurrent_context_teardown() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto logger = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, logger);
+	callbacks->runtime = &runtime;
+	const auto first_context = runtime.create_context();
+	const auto second_context = runtime.create_context();
+	expect(second_context != 0, "bridge shutdown test requires a second context");
+	callbacks->blocked_deinitialize_context = first_context;
+
+	std::atomic<bool> context_shutdown_result = false;
+	std::atomic<bool> bridge_shutdown_result = false;
+	std::atomic<bool> bridge_shutdown_finished = false;
+	std::thread context_shutdown_thread(
+			[&] { context_shutdown_result = runtime.shutdown_context(first_context, 0); });
+	callbacks->wait_until_deinitialize_blocked();
+	std::thread bridge_shutdown_thread([&] {
+		bridge_shutdown_result = runtime.shutdown_all(0);
+		bridge_shutdown_finished = true;
+	});
+	callbacks->wait_until_deinitialize_count(2);
+	expect(callbacks->deinitialize_count == 2, "bridge shutdown must drain the remaining context");
+	expect(
+			!bridge_shutdown_finished,
+			"bridge shutdown must wait for a concurrently removed context to finish teardown");
+
+	callbacks->release_blocked_deinitialize();
+	context_shutdown_thread.join();
+	bridge_shutdown_thread.join();
+	expect(context_shutdown_result, "concurrent context shutdown must succeed");
+	expect(bridge_shutdown_result, "bridge shutdown must succeed after every teardown completes");
+	expect(callbacks->invalidate_count == 2, "bridge shutdown must invalidate both contexts");
+}
+
 void test_extension_entry_validates_and_orders_lifecycle() {
 	FoundryExtensionInitialization unchanged{};
 	unchanged.userdata = reinterpret_cast<void *>(0x1234);
@@ -322,9 +388,17 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 					&rejected_after_failed_shutdown) == 0,
 			"failed core shutdown must keep the active entry from being replaced");
 	jni_shutdown_context_result = true;
+	jni_shutdown_result = false;
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
 	expect(jni_shutdown_context_count == 1, "core deinit must drain its context once");
-	expect(jni_shutdown_count == 1, "core deinit must release JNI state once");
+	expect(jni_shutdown_count == 1, "core deinit must attempt JNI state release once");
+	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_context_count == 1, "bridge-shutdown retry must not drain a closed context again");
+	expect(jni_shutdown_count == 2, "bridge-shutdown retry must reach JNI state release");
+	jni_shutdown_result = true;
+	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_context_count == 1, "successful retry must still preserve one context drain");
+	expect(jni_shutdown_count == 3, "successful retry must release JNI state");
 }
 
 } // namespace
@@ -366,7 +440,7 @@ void jni_bridge_install_foundry_error_interface(FoundryExtensionInterfacePrintEr
 
 bool jni_bridge_shutdown() noexcept {
 	jni_shutdown_count++;
-	return true;
+	return jni_shutdown_result;
 }
 
 } // namespace foundry_java
@@ -374,6 +448,7 @@ bool jni_bridge_shutdown() noexcept {
 int main() {
 	test_context_identity_reentrancy_and_exception_containment();
 	test_shutdown_waits_for_active_callback_lease();
+	test_shutdown_all_waits_for_concurrent_context_teardown();
 	test_extension_entry_validates_and_orders_lifecycle();
 	std::cout << "Foundry Java native runtime tests passed\n";
 	return 0;
