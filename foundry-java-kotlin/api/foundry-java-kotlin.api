@@ -1,0 +1,288 @@
+## games.cafecito.foundry.kotlin.FoundryBindings
+Compiled from "Binding.kt"
+public final class games.cafecito.foundry.kotlin.FoundryBindings {
+  public static final <T extends games.cafecito.foundry.runtime.FoundryObject> T bind(games.cafecito.foundry.runtime.FoundryBindingContext, long, games.cafecito.foundry.runtime.ObjectOwnership, kotlin.jvm.functions.Function2<? super games.cafecito.foundry.runtime.FoundryBindingContext, ? super games.cafecito.foundry.runtime.ObjectLease, ? extends T>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryBindingContext;JLgames/cafecito/foundry/runtime/ObjectOwnership;Lkotlin/jvm/functions/Function2;)Lgames/cafecito/foundry/runtime/FoundryObject;
+  public static final <T extends games.cafecito.foundry.runtime.FoundryObject> void registerObjectType(games.cafecito.foundry.runtime.FoundryBindingContext, java.lang.String, kotlin.jvm.functions.Function2<? super games.cafecito.foundry.runtime.FoundryBindingContext, ? super games.cafecito.foundry.runtime.ObjectLease, ? extends T>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryBindingContext;Ljava/lang/String;Lkotlin/jvm/functions/Function2;)V
+}
+
+## games.cafecito.foundry.kotlin.FoundryCallArguments
+Compiled from "Calls.kt"
+public final class games.cafecito.foundry.kotlin.FoundryCallArguments {
+  public games.cafecito.foundry.kotlin.FoundryCallArguments();
+    descriptor: ()V
+  public final void variant(games.cafecito.foundry.types.Variant);
+    descriptor: (Lgames/cafecito/foundry/types/Variant;)V
+  public final <T> void value(T, games.cafecito.foundry.types.VariantCodec<T>);
+    descriptor: (Ljava/lang/Object;Lgames/cafecito/foundry/types/VariantCodec;)V
+}
+
+## games.cafecito.foundry.kotlin.FoundryCalls
+Compiled from "Calls.kt"
+public final class games.cafecito.foundry.kotlin.FoundryCalls {
+  public static final games.cafecito.foundry.types.Variant call(games.cafecito.foundry.runtime.FoundryBindingContext, long, java.lang.String, kotlin.jvm.functions.Function1<? super games.cafecito.foundry.kotlin.FoundryCallArguments, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryBindingContext;JLjava/lang/String;Lkotlin/jvm/functions/Function1;)Lgames/cafecito/foundry/types/Variant;
+  public static final <T> T call(games.cafecito.foundry.runtime.FoundryBindingContext, long, java.lang.String, games.cafecito.foundry.types.VariantCodec<T>, kotlin.jvm.functions.Function1<? super games.cafecito.foundry.kotlin.FoundryCallArguments, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryBindingContext;JLjava/lang/String;Lgames/cafecito/foundry/types/VariantCodec;Lkotlin/jvm/functions/Function1;)Ljava/lang/Object;
+}
+
+## games.cafecito.foundry.kotlin.FoundryCollections
+Compiled from "Collections.kt"
+public final class games.cafecito.foundry.kotlin.FoundryCollections {
+  public static final <T> games.cafecito.foundry.types.FoundryArray<T> toFoundryArray(java.lang.Iterable<? extends T>, games.cafecito.foundry.types.VariantCodec<T>);
+    descriptor: (Ljava/lang/Iterable;Lgames/cafecito/foundry/types/VariantCodec;)Lgames/cafecito/foundry/types/FoundryArray;
+  public static final <T> java.util.List<T> toKotlinList(games.cafecito.foundry.types.FoundryArray<T>);
+    descriptor: (Lgames/cafecito/foundry/types/FoundryArray;)Ljava/util/List;
+  public static final <K, V> games.cafecito.foundry.types.FoundryDictionary<K, V> toFoundryDictionary(java.util.Map<K, ? extends V>, games.cafecito.foundry.types.VariantCodec<K>, games.cafecito.foundry.types.VariantCodec<V>);
+    descriptor: (Ljava/util/Map;Lgames/cafecito/foundry/types/VariantCodec;Lgames/cafecito/foundry/types/VariantCodec;)Lgames/cafecito/foundry/types/FoundryDictionary;
+  public static final <K, V> java.util.Map<K, V> toKotlinMap(games.cafecito.foundry.types.FoundryDictionary<K, V>);
+    descriptor: (Lgames/cafecito/foundry/types/FoundryDictionary;)Ljava/util/Map;
+  public static final games.cafecito.foundry.types.PackedByteArray toPackedByteArray(byte[]);
+    descriptor: ([B)Lgames/cafecito/foundry/types/PackedByteArray;
+  public static final byte[] toByteArray(games.cafecito.foundry.types.PackedByteArray);
+    descriptor: (Lgames/cafecito/foundry/types/PackedByteArray;)[B
+  public static final games.cafecito.foundry.types.PackedInt32Array toPackedInt32Array(int[]);
+    descriptor: ([I)Lgames/cafecito/foundry/types/PackedInt32Array;
+  public static final int[] toIntArray(games.cafecito.foundry.types.PackedInt32Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedInt32Array;)[I
+  public static final games.cafecito.foundry.types.PackedInt64Array toPackedInt64Array(long[]);
+    descriptor: ([J)Lgames/cafecito/foundry/types/PackedInt64Array;
+  public static final long[] toLongArray(games.cafecito.foundry.types.PackedInt64Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedInt64Array;)[J
+  public static final games.cafecito.foundry.types.PackedFloat32Array toPackedFloat32Array(float[]);
+    descriptor: ([F)Lgames/cafecito/foundry/types/PackedFloat32Array;
+  public static final float[] toFloatArray(games.cafecito.foundry.types.PackedFloat32Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedFloat32Array;)[F
+  public static final games.cafecito.foundry.types.PackedFloat64Array toPackedFloat64Array(double[]);
+    descriptor: ([D)Lgames/cafecito/foundry/types/PackedFloat64Array;
+  public static final double[] toDoubleArray(games.cafecito.foundry.types.PackedFloat64Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedFloat64Array;)[D
+  public static final games.cafecito.foundry.types.PackedStringArray stringIterableToPackedStringArray(java.lang.Iterable<java.lang.String>);
+    descriptor: (Ljava/lang/Iterable;)Lgames/cafecito/foundry/types/PackedStringArray;
+  public static final games.cafecito.foundry.types.PackedStringArray stringArrayToPackedStringArray(java.lang.String[]);
+    descriptor: ([Ljava/lang/String;)Lgames/cafecito/foundry/types/PackedStringArray;
+  public static final java.util.List<java.lang.String> toKotlinList(games.cafecito.foundry.types.PackedStringArray);
+    descriptor: (Lgames/cafecito/foundry/types/PackedStringArray;)Ljava/util/List;
+  public static final java.lang.String[] toKotlinArray(games.cafecito.foundry.types.PackedStringArray);
+    descriptor: (Lgames/cafecito/foundry/types/PackedStringArray;)[Ljava/lang/String;
+  public static final games.cafecito.foundry.types.PackedVector2Array vector2IterableToPackedVector2Array(java.lang.Iterable<games.cafecito.foundry.types.Vector2>);
+    descriptor: (Ljava/lang/Iterable;)Lgames/cafecito/foundry/types/PackedVector2Array;
+  public static final games.cafecito.foundry.types.PackedVector2Array vector2ArrayToPackedVector2Array(games.cafecito.foundry.types.Vector2[]);
+    descriptor: ([Lgames/cafecito/foundry/types/Vector2;)Lgames/cafecito/foundry/types/PackedVector2Array;
+  public static final java.util.List<games.cafecito.foundry.types.Vector2> toKotlinList(games.cafecito.foundry.types.PackedVector2Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedVector2Array;)Ljava/util/List;
+  public static final games.cafecito.foundry.types.Vector2[] toKotlinArray(games.cafecito.foundry.types.PackedVector2Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedVector2Array;)[Lgames/cafecito/foundry/types/Vector2;
+  public static final games.cafecito.foundry.types.PackedVector3Array vector3IterableToPackedVector3Array(java.lang.Iterable<games.cafecito.foundry.types.Vector3>);
+    descriptor: (Ljava/lang/Iterable;)Lgames/cafecito/foundry/types/PackedVector3Array;
+  public static final games.cafecito.foundry.types.PackedVector3Array vector3ArrayToPackedVector3Array(games.cafecito.foundry.types.Vector3[]);
+    descriptor: ([Lgames/cafecito/foundry/types/Vector3;)Lgames/cafecito/foundry/types/PackedVector3Array;
+  public static final java.util.List<games.cafecito.foundry.types.Vector3> toKotlinList(games.cafecito.foundry.types.PackedVector3Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedVector3Array;)Ljava/util/List;
+  public static final games.cafecito.foundry.types.Vector3[] toKotlinArray(games.cafecito.foundry.types.PackedVector3Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedVector3Array;)[Lgames/cafecito/foundry/types/Vector3;
+  public static final games.cafecito.foundry.types.PackedVector4Array vector4IterableToPackedVector4Array(java.lang.Iterable<games.cafecito.foundry.types.Vector4>);
+    descriptor: (Ljava/lang/Iterable;)Lgames/cafecito/foundry/types/PackedVector4Array;
+  public static final games.cafecito.foundry.types.PackedVector4Array vector4ArrayToPackedVector4Array(games.cafecito.foundry.types.Vector4[]);
+    descriptor: ([Lgames/cafecito/foundry/types/Vector4;)Lgames/cafecito/foundry/types/PackedVector4Array;
+  public static final java.util.List<games.cafecito.foundry.types.Vector4> toKotlinList(games.cafecito.foundry.types.PackedVector4Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedVector4Array;)Ljava/util/List;
+  public static final games.cafecito.foundry.types.Vector4[] toKotlinArray(games.cafecito.foundry.types.PackedVector4Array);
+    descriptor: (Lgames/cafecito/foundry/types/PackedVector4Array;)[Lgames/cafecito/foundry/types/Vector4;
+  public static final games.cafecito.foundry.types.PackedColorArray colorIterableToPackedColorArray(java.lang.Iterable<games.cafecito.foundry.types.Color>);
+    descriptor: (Ljava/lang/Iterable;)Lgames/cafecito/foundry/types/PackedColorArray;
+  public static final games.cafecito.foundry.types.PackedColorArray colorArrayToPackedColorArray(games.cafecito.foundry.types.Color[]);
+    descriptor: ([Lgames/cafecito/foundry/types/Color;)Lgames/cafecito/foundry/types/PackedColorArray;
+  public static final java.util.List<games.cafecito.foundry.types.Color> toKotlinList(games.cafecito.foundry.types.PackedColorArray);
+    descriptor: (Lgames/cafecito/foundry/types/PackedColorArray;)Ljava/util/List;
+  public static final games.cafecito.foundry.types.Color[] toKotlinArray(games.cafecito.foundry.types.PackedColorArray);
+    descriptor: (Lgames/cafecito/foundry/types/PackedColorArray;)[Lgames/cafecito/foundry/types/Color;
+}
+
+## games.cafecito.foundry.kotlin.FoundryDelegates
+Compiled from "Delegates.kt"
+public final class games.cafecito.foundry.kotlin.FoundryDelegates {
+  public static final <T> kotlin.properties.ReadWriteProperty<java.lang.Object, T> foundryProperty(kotlin.jvm.functions.Function0<? extends T>, kotlin.jvm.functions.Function1<? super T, kotlin.Unit>);
+    descriptor: (Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;)Lkotlin/properties/ReadWriteProperty;
+  public static final <T> kotlin.properties.ReadOnlyProperty<java.lang.Object, T> foundryReadOnlyProperty(kotlin.jvm.functions.Function0<? extends T>);
+    descriptor: (Lkotlin/jvm/functions/Function0;)Lkotlin/properties/ReadOnlyProperty;
+}
+
+## games.cafecito.foundry.kotlin.FoundrySignalAwait
+Compiled from "SignalAwait.kt"
+public final class games.cafecito.foundry.kotlin.FoundrySignalAwait {
+  public static final java.lang.Object await(games.cafecito.foundry.runtime.FoundrySignal, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super java.util.List<games.cafecito.foundry.types.Variant>>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundrySignal;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+  public static final java.lang.Object await(games.cafecito.foundry.runtime.FoundryTypedSignal$Of0, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of0;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+  public static final <A> java.lang.Object await(games.cafecito.foundry.runtime.FoundryTypedSignal$Of1<A>, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super A>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of1;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+  public static final <A, B> java.lang.Object await(games.cafecito.foundry.runtime.FoundryTypedSignal$Of2<A, B>, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super games.cafecito.foundry.kotlin.SignalArgs2<A, B>>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of2;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+  public static final <A, B, C> java.lang.Object await(games.cafecito.foundry.runtime.FoundryTypedSignal$Of3<A, B, C>, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super games.cafecito.foundry.kotlin.SignalArgs3<A, B, C>>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of3;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+  public static final <A, B, C, D> java.lang.Object await(games.cafecito.foundry.runtime.FoundryTypedSignal$Of4<A, B, C, D>, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super games.cafecito.foundry.kotlin.SignalArgs4<A, B, C, D>>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of4;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+  public static final <A, B, C, D, E> java.lang.Object await(games.cafecito.foundry.runtime.FoundryTypedSignal$Of5<A, B, C, D, E>, games.cafecito.foundry.runtime.FoundryObject, kotlin.coroutines.Continuation<? super games.cafecito.foundry.kotlin.SignalArgs5<A, B, C, D, E>>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of5;Lgames/cafecito/foundry/runtime/FoundryObject;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+## games.cafecito.foundry.kotlin.FoundrySignals
+Compiled from "Signals.kt"
+public final class games.cafecito.foundry.kotlin.FoundrySignals {
+  public static final games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundrySignal, kotlin.jvm.functions.Function1<? super java.util.List<games.cafecito.foundry.types.Variant>, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundrySignal;Lkotlin/jvm/functions/Function1;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+  public static final games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundryTypedSignal$Of0, kotlin.jvm.functions.Function0<kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of0;Lkotlin/jvm/functions/Function0;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+  public static final <A> games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundryTypedSignal$Of1<A>, kotlin.jvm.functions.Function1<? super A, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of1;Lkotlin/jvm/functions/Function1;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+  public static final <A, B> games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundryTypedSignal$Of2<A, B>, kotlin.jvm.functions.Function2<? super A, ? super B, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of2;Lkotlin/jvm/functions/Function2;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+  public static final <A, B, C> games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundryTypedSignal$Of3<A, B, C>, kotlin.jvm.functions.Function3<? super A, ? super B, ? super C, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of3;Lkotlin/jvm/functions/Function3;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+  public static final <A, B, C, D> games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundryTypedSignal$Of4<A, B, C, D>, kotlin.jvm.functions.Function4<? super A, ? super B, ? super C, ? super D, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of4;Lkotlin/jvm/functions/Function4;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+  public static final <A, B, C, D, E> games.cafecito.foundry.runtime.FoundrySignal$Connection listen(games.cafecito.foundry.runtime.FoundryTypedSignal$Of5<A, B, C, D, E>, kotlin.jvm.functions.Function5<? super A, ? super B, ? super C, ? super D, ? super E, kotlin.Unit>);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryTypedSignal$Of5;Lkotlin/jvm/functions/Function5;)Lgames/cafecito/foundry/runtime/FoundrySignal$Connection;
+}
+
+## games.cafecito.foundry.kotlin.FoundryVariants
+Compiled from "Variants.kt"
+public final class games.cafecito.foundry.kotlin.FoundryVariants {
+  public static final <T> games.cafecito.foundry.types.VariantCodec<T> variantCodec();
+    descriptor: ()Lgames/cafecito/foundry/types/VariantCodec;
+  public static final <T> games.cafecito.foundry.types.Variant toVariant(T);
+    descriptor: (Ljava/lang/Object;)Lgames/cafecito/foundry/types/Variant;
+  public static final <T> T decode(games.cafecito.foundry.types.Variant);
+    descriptor: (Lgames/cafecito/foundry/types/Variant;)Ljava/lang/Object;
+  public static final <T> games.cafecito.foundry.types.VariantCodec<T> nullable(games.cafecito.foundry.types.VariantCodec<T>);
+    descriptor: (Lgames/cafecito/foundry/types/VariantCodec;)Lgames/cafecito/foundry/types/VariantCodec;
+  public static final <T> games.cafecito.foundry.types.VariantCodec<T> variantCodec(java.lang.Class<T>);
+    descriptor: (Ljava/lang/Class;)Lgames/cafecito/foundry/types/VariantCodec;
+}
+
+## games.cafecito.foundry.kotlin.SignalArgs2
+Compiled from "SignalResults.kt"
+public final class games.cafecito.foundry.kotlin.SignalArgs2<A, B> {
+  public games.cafecito.foundry.kotlin.SignalArgs2(A, B);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;)V
+  public final A getFirst();
+    descriptor: ()Ljava/lang/Object;
+  public final B getSecond();
+    descriptor: ()Ljava/lang/Object;
+  public final A component1();
+    descriptor: ()Ljava/lang/Object;
+  public final B component2();
+    descriptor: ()Ljava/lang/Object;
+  public final games.cafecito.foundry.kotlin.SignalArgs2<A, B> copy(A, B);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs2;
+  public static games.cafecito.foundry.kotlin.SignalArgs2 copy$default(games.cafecito.foundry.kotlin.SignalArgs2, java.lang.Object, java.lang.Object, int, java.lang.Object);
+    descriptor: (Lgames/cafecito/foundry/kotlin/SignalArgs2;Ljava/lang/Object;Ljava/lang/Object;ILjava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs2;
+  public java.lang.String toString();
+    descriptor: ()Ljava/lang/String;
+  public int hashCode();
+    descriptor: ()I
+  public boolean equals(java.lang.Object);
+    descriptor: (Ljava/lang/Object;)Z
+}
+
+## games.cafecito.foundry.kotlin.SignalArgs3
+Compiled from "SignalResults.kt"
+public final class games.cafecito.foundry.kotlin.SignalArgs3<A, B, C> {
+  public games.cafecito.foundry.kotlin.SignalArgs3(A, B, C);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+  public final A getFirst();
+    descriptor: ()Ljava/lang/Object;
+  public final B getSecond();
+    descriptor: ()Ljava/lang/Object;
+  public final C getThird();
+    descriptor: ()Ljava/lang/Object;
+  public final A component1();
+    descriptor: ()Ljava/lang/Object;
+  public final B component2();
+    descriptor: ()Ljava/lang/Object;
+  public final C component3();
+    descriptor: ()Ljava/lang/Object;
+  public final games.cafecito.foundry.kotlin.SignalArgs3<A, B, C> copy(A, B, C);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs3;
+  public static games.cafecito.foundry.kotlin.SignalArgs3 copy$default(games.cafecito.foundry.kotlin.SignalArgs3, java.lang.Object, java.lang.Object, java.lang.Object, int, java.lang.Object);
+    descriptor: (Lgames/cafecito/foundry/kotlin/SignalArgs3;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;ILjava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs3;
+  public java.lang.String toString();
+    descriptor: ()Ljava/lang/String;
+  public int hashCode();
+    descriptor: ()I
+  public boolean equals(java.lang.Object);
+    descriptor: (Ljava/lang/Object;)Z
+}
+
+## games.cafecito.foundry.kotlin.SignalArgs4
+Compiled from "SignalResults.kt"
+public final class games.cafecito.foundry.kotlin.SignalArgs4<A, B, C, D> {
+  public games.cafecito.foundry.kotlin.SignalArgs4(A, B, C, D);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+  public final A getFirst();
+    descriptor: ()Ljava/lang/Object;
+  public final B getSecond();
+    descriptor: ()Ljava/lang/Object;
+  public final C getThird();
+    descriptor: ()Ljava/lang/Object;
+  public final D getFourth();
+    descriptor: ()Ljava/lang/Object;
+  public final A component1();
+    descriptor: ()Ljava/lang/Object;
+  public final B component2();
+    descriptor: ()Ljava/lang/Object;
+  public final C component3();
+    descriptor: ()Ljava/lang/Object;
+  public final D component4();
+    descriptor: ()Ljava/lang/Object;
+  public final games.cafecito.foundry.kotlin.SignalArgs4<A, B, C, D> copy(A, B, C, D);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs4;
+  public static games.cafecito.foundry.kotlin.SignalArgs4 copy$default(games.cafecito.foundry.kotlin.SignalArgs4, java.lang.Object, java.lang.Object, java.lang.Object, java.lang.Object, int, java.lang.Object);
+    descriptor: (Lgames/cafecito/foundry/kotlin/SignalArgs4;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;ILjava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs4;
+  public java.lang.String toString();
+    descriptor: ()Ljava/lang/String;
+  public int hashCode();
+    descriptor: ()I
+  public boolean equals(java.lang.Object);
+    descriptor: (Ljava/lang/Object;)Z
+}
+
+## games.cafecito.foundry.kotlin.SignalArgs5
+Compiled from "SignalResults.kt"
+public final class games.cafecito.foundry.kotlin.SignalArgs5<A, B, C, D, E> {
+  public games.cafecito.foundry.kotlin.SignalArgs5(A, B, C, D, E);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V
+  public final A getFirst();
+    descriptor: ()Ljava/lang/Object;
+  public final B getSecond();
+    descriptor: ()Ljava/lang/Object;
+  public final C getThird();
+    descriptor: ()Ljava/lang/Object;
+  public final D getFourth();
+    descriptor: ()Ljava/lang/Object;
+  public final E getFifth();
+    descriptor: ()Ljava/lang/Object;
+  public final A component1();
+    descriptor: ()Ljava/lang/Object;
+  public final B component2();
+    descriptor: ()Ljava/lang/Object;
+  public final C component3();
+    descriptor: ()Ljava/lang/Object;
+  public final D component4();
+    descriptor: ()Ljava/lang/Object;
+  public final E component5();
+    descriptor: ()Ljava/lang/Object;
+  public final games.cafecito.foundry.kotlin.SignalArgs5<A, B, C, D, E> copy(A, B, C, D, E);
+    descriptor: (Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs5;
+  public static games.cafecito.foundry.kotlin.SignalArgs5 copy$default(games.cafecito.foundry.kotlin.SignalArgs5, java.lang.Object, java.lang.Object, java.lang.Object, java.lang.Object, java.lang.Object, int, java.lang.Object);
+    descriptor: (Lgames/cafecito/foundry/kotlin/SignalArgs5;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;ILjava/lang/Object;)Lgames/cafecito/foundry/kotlin/SignalArgs5;
+  public java.lang.String toString();
+    descriptor: ()Ljava/lang/String;
+  public int hashCode();
+    descriptor: ()I
+  public boolean equals(java.lang.Object);
+    descriptor: (Ljava/lang/Object;)Z
+}
+
