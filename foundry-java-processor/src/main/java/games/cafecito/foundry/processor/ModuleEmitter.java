@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import javax.annotation.processing.Filer;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.util.Elements;
 import javax.tools.FileObject;
 import javax.tools.JavaFileObject;
 import javax.tools.StandardLocation;
@@ -15,10 +17,13 @@ import javax.tools.StandardLocation;
 final class ModuleEmitter {
     private static final String PROCESSOR =
             "games.cafecito.foundry.processor.FoundryExtensionProcessor";
+    private static final String RUNTIME = "games.cafecito.foundry.runtime.FoundryRuntime";
     private final Filer filer;
+    private final Elements elements;
 
-    ModuleEmitter(Filer filer) {
+    ModuleEmitter(Filer filer, Elements elements) {
         this.filer = filer;
+        this.elements = elements;
     }
 
     ReservedRegistry reserve(String moduleName, TypeElement source) throws IOException {
@@ -39,6 +44,7 @@ final class ModuleEmitter {
                 unsorted.stream()
                         .sorted(Comparator.comparing(ExtensionModel::qualifiedName))
                         .toList();
+        Provenance provenance = provenance();
         TypeElement[] origins = sources.toArray(TypeElement[]::new);
         FileObject descriptor =
                 filer.createResource(
@@ -58,10 +64,14 @@ final class ModuleEmitter {
                             reserved.moduleName(),
                             reserved.packageName(),
                             reserved.className(),
+                            reserved.qualifiedName(),
+                            provenance,
                             models));
         }
         writeResource(
-                descriptor, descriptor(reserved.moduleName(), reserved.qualifiedName(), models));
+                descriptor,
+                descriptor(
+                        reserved.moduleName(), reserved.qualifiedName(), provenance, models));
         writeResource(
                 keepRules, keepRules(reserved.moduleName(), reserved.qualifiedName(), models));
     }
@@ -84,7 +94,12 @@ final class ModuleEmitter {
             JavaFileObject source) {}
 
     private String registrySource(
-            String moduleName, String packageName, String className, List<ExtensionModel> models) {
+            String moduleName,
+            String packageName,
+            String className,
+            String qualifiedName,
+            Provenance provenance,
+            List<ExtensionModel> models) {
         String classes =
                 models.stream()
                         .map(this::classDescriptorExpression)
@@ -94,56 +109,44 @@ final class ModuleEmitter {
                 package %s;
 
                 @javax.annotation.processing.Generated("%s")
-                public final class %s {
+                public final class %s
+                        implements games.cafecito.foundry.runtime.FoundryModuleProvider {
+                    public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER =
+                            new %s();
+
                     private %s() {}
 
-                    private static final ModuleDescriptor DESCRIPTOR =
-                            new ModuleDescriptor(
+                    private static final games.cafecito.foundry.runtime.FoundryModuleDescriptor DESCRIPTOR =
+                            new games.cafecito.foundry.runtime.FoundryModuleDescriptor(
+                                    2,
+                                    "%s",
+                                    "%s",
+                                    "%s",
+                                    "%s",
+                                    "%s",
                                     "%s",
                                     java.util.List.of(
                 %s));
 
-                    public static ModuleDescriptor descriptor() {
+                    @Override
+                    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor() {
                         return DESCRIPTOR;
-                    }
-
-                    public record ModuleDescriptor(String name, java.util.List<ClassDescriptor> classes) {
-                        public ModuleDescriptor {
-                            classes = java.util.List.copyOf(classes);
-                        }
-                    }
-
-                    public record ClassDescriptor(
-                            String javaName,
-                            String foundryName,
-                            String baseName,
-                            String initializationLevel,
-                            java.util.List<String> after,
-                            ExtensionAccess access,
-                            java.util.List<MemberDescriptor> members) {
-                        public ClassDescriptor {
-                            after = java.util.List.copyOf(after);
-                            members = java.util.List.copyOf(members);
-                        }
-                    }
-
-                    public record MemberDescriptor(
-                            String kind, String foundryName, String javaName, String signature) {}
-
-                    public interface ExtensionAccess {
-                        Object construct(
-                                games.cafecito.foundry.runtime.FoundryBindingContext context,
-                                games.cafecito.foundry.runtime.ObjectLease lease);
-
-                        Object invoke(Object target, String name, Object[] arguments);
-
-                        Object getProperty(Object target, String name);
-
-                        void setProperty(Object target, String name, Object value);
                     }
                 }
                 """
-                .formatted(packageName, PROCESSOR, className, className, moduleName, classes);
+                .formatted(
+                        packageName,
+                        PROCESSOR,
+                        className,
+                        className,
+                        className,
+                        moduleName,
+                        qualifiedName,
+                        provenance.apiSha256(),
+                        provenance.generatorVersion(),
+                        provenance.runtimeContractVersion(),
+                        provenance.bridgeContractVersion(),
+                        classes);
     }
 
     private String classDescriptorExpression(ExtensionModel model) {
@@ -159,13 +162,13 @@ final class ModuleEmitter {
                         .reduce((left, right) -> left + ",\n" + right)
                         .orElse("");
         return """
-                                            new ClassDescriptor(
+                                            new games.cafecito.foundry.runtime.FoundryClassDescriptor(
                                                     "%s",
                                                     "%s",
                                                     "%s",
                                                     "%s",
                                                     java.util.List.of(%s),
-                                                    new ExtensionAccess() {
+                                                    new games.cafecito.foundry.runtime.FoundryExtensionAccess() {
                                                         @Override
                                                         public Object construct(
                                                                 games.cafecito.foundry.runtime.FoundryBindingContext context,
@@ -207,15 +210,31 @@ final class ModuleEmitter {
                         memberExpressions);
     }
 
-    private String descriptor(String moduleName, String registryName, List<ExtensionModel> models) {
+    private String descriptor(
+            String moduleName,
+            String registryName,
+            Provenance provenance,
+            List<ExtensionModel> models) {
         StringBuilder descriptor =
                 new StringBuilder()
-                        .append("format=1\n")
+                        .append("format=2\n")
                         .append("module=")
                         .append(moduleName)
                         .append('\n')
                         .append("registry=")
                         .append(registryName)
+                        .append('\n')
+                        .append("api_sha256=")
+                        .append(provenance.apiSha256())
+                        .append('\n')
+                        .append("generator_version=")
+                        .append(provenance.generatorVersion())
+                        .append('\n')
+                        .append("runtime_contract_version=")
+                        .append(provenance.runtimeContractVersion())
+                        .append('\n')
+                        .append("bridge_contract_version=")
+                        .append(provenance.bridgeContractVersion())
                         .append('\n');
         for (ExtensionModel model : models) {
             descriptor
@@ -255,7 +274,10 @@ final class ModuleEmitter {
                         .append(".\n")
                         .append("-keep class ")
                         .append(registryName)
-                        .append(" { public static *** descriptor(); }\n");
+                        .append(" {\n")
+                        .append("    public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER;\n")
+                        .append("    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor();\n")
+                        .append("}\n");
         for (ExtensionModel model : models) {
             rules.append("-keep class ")
                     .append(model.qualifiedName())
@@ -338,10 +360,13 @@ final class ModuleEmitter {
                         + member.signature()
                         + "\")";
         if (continuation.length() + arguments.length() <= 95) {
-            return indentation + "new MemberDescriptor(\n" + continuation + arguments;
+            return indentation
+                    + "new games.cafecito.foundry.runtime.FoundryMemberDescriptor(\n"
+                    + continuation
+                    + arguments;
         }
         return indentation
-                + "new MemberDescriptor(\n"
+                + "new games.cafecito.foundry.runtime.FoundryMemberDescriptor(\n"
                 + continuation
                 + "\""
                 + member.kind()
@@ -371,6 +396,36 @@ final class ModuleEmitter {
         }
         return name.append("Registry").toString();
     }
+
+    private Provenance provenance() throws IOException {
+        TypeElement runtime = elements.getTypeElement(RUNTIME);
+        if (runtime == null) {
+            throw new IOException("required runtime contract type is unavailable: " + RUNTIME);
+        }
+        return new Provenance(
+                constant(runtime, "API_SHA256"),
+                constant(runtime, "GENERATOR_VERSION"),
+                constant(runtime, "RUNTIME_CONTRACT_VERSION"),
+                constant(runtime, "BRIDGE_CONTRACT_VERSION"));
+    }
+
+    private String constant(TypeElement type, String name) throws IOException {
+        for (var element : type.getEnclosedElements()) {
+            if (element instanceof VariableElement field
+                    && field.getSimpleName().contentEquals(name)
+                    && field.getConstantValue() instanceof String value
+                    && !value.isBlank()) {
+                return value;
+            }
+        }
+        throw new IOException("required runtime contract constant is unavailable: " + name);
+    }
+
+    private record Provenance(
+            String apiSha256,
+            String generatorVersion,
+            String runtimeContractVersion,
+            String bridgeContractVersion) {}
 
     private record Member(String kind, String foundryName, String javaName, String signature) {}
 }

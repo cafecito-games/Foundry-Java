@@ -1,20 +1,30 @@
 package games.cafecito.foundry.generated.demomodule;
 
 @javax.annotation.processing.Generated("games.cafecito.foundry.processor.FoundryExtensionProcessor")
-public final class DemoModuleRegistry {
+public final class DemoModuleRegistry
+        implements games.cafecito.foundry.runtime.FoundryModuleProvider {
+    public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER =
+            new DemoModuleRegistry();
+
     private DemoModuleRegistry() {}
 
-    private static final ModuleDescriptor DESCRIPTOR =
-            new ModuleDescriptor(
+    private static final games.cafecito.foundry.runtime.FoundryModuleDescriptor DESCRIPTOR =
+            new games.cafecito.foundry.runtime.FoundryModuleDescriptor(
+                    2,
                     "demo-module",
+                    "games.cafecito.foundry.generated.demomodule.DemoModuleRegistry",
+                    "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51",
+                    "1",
+                    "1",
+                    "1",
                     java.util.List.of(
-                            new ClassDescriptor(
+                            new games.cafecito.foundry.runtime.FoundryClassDescriptor(
                                     "demo.SpinningCube",
                                     "SpinningCube",
                                     "demo.EngineNode",
                                     "SCENE",
                                     java.util.List.of(),
-                                    new ExtensionAccess() {
+                                    new games.cafecito.foundry.runtime.FoundryExtensionAccess() {
                                         @Override
                                         public Object construct(
                                                 games.cafecito.foundry.runtime.FoundryBindingContext context,
@@ -41,57 +51,23 @@ public final class DemoModuleRegistry {
                                         }
                                     },
                                     java.util.List.of(
-                                            new MemberDescriptor(
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "override",
                                                     "_process",
                                                     "onProcess",
                                                     "void(double)"),
-                                            new MemberDescriptor(
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "method", "reset", "reset", "void()"),
-                                            new MemberDescriptor(
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "signal",
                                                     "reset_done",
                                                     "Reset",
                                                     "void(double)"),
-                                            new MemberDescriptor(
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "property", "speed", "speed", "double")))));
 
-    public static ModuleDescriptor descriptor() {
+    @Override
+    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor() {
         return DESCRIPTOR;
-    }
-
-    public record ModuleDescriptor(String name, java.util.List<ClassDescriptor> classes) {
-        public ModuleDescriptor {
-            classes = java.util.List.copyOf(classes);
-        }
-    }
-
-    public record ClassDescriptor(
-            String javaName,
-            String foundryName,
-            String baseName,
-            String initializationLevel,
-            java.util.List<String> after,
-            ExtensionAccess access,
-            java.util.List<MemberDescriptor> members) {
-        public ClassDescriptor {
-            after = java.util.List.copyOf(after);
-            members = java.util.List.copyOf(members);
-        }
-    }
-
-    public record MemberDescriptor(
-            String kind, String foundryName, String javaName, String signature) {}
-
-    public interface ExtensionAccess {
-        Object construct(
-                games.cafecito.foundry.runtime.FoundryBindingContext context,
-                games.cafecito.foundry.runtime.ObjectLease lease);
-
-        Object invoke(Object target, String name, Object[] arguments);
-
-        Object getProperty(Object target, String name);
-
-        void setProperty(Object target, String name, Object value);
     }
 }
