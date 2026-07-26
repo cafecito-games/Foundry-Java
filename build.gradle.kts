@@ -1,5 +1,6 @@
 import com.android.build.api.dsl.LibraryExtension
 import com.diffplug.gradle.spotless.SpotlessExtension
+import com.diffplug.spotless.LineEnding
 import org.gradle.api.DefaultTask
 import org.gradle.api.JavaVersion
 import org.gradle.api.artifacts.FileCollectionDependency
@@ -28,8 +29,6 @@ import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugin.devel.GradlePluginDevelopmentExtension
 import org.w3c.dom.Element
-import java.io.File
-import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
@@ -44,40 +43,31 @@ abstract class ResolveAndLockDependencies : DefaultTask() {
     }
 }
 
-fun stableBoundaryFileSignature(
-    dependency: FileCollectionDependency,
-    projectRoot: File,
-): String {
-    val normalizedRoot = projectRoot.toPath().toAbsolutePath().normalize()
-    val fileIdentities =
-        dependency.files.files
-            .map { dependencyFile ->
-                val normalizedFile = dependencyFile.toPath().toAbsolutePath().normalize()
-                if (normalizedFile.startsWith(normalizedRoot)) {
-                    val relativePath =
-                        normalizedRoot
-                            .relativize(normalizedFile)
-                            .toString()
-                            .replace(File.separatorChar, '/')
-                    "project:$relativePath"
-                } else {
-                    "external:${dependencyFile.name}"
-                }
-            }.sorted()
-    val semanticRole =
-        when {
-            fileIdentities.any { it.contains("gradle-test-kit-") } -> "gradle-test-kit-files"
-            fileIdentities.any { it.contains("gradle-api-") || it.contains("gradle-core-") } ->
-                "gradle-api-files"
-            fileIdentities.all { it.startsWith("project:") } -> "project-files"
-            else -> "external-files"
-        }
-    val digest =
-        MessageDigest
-            .getInstance("SHA-256")
-            .digest(fileIdentities.joinToString("\n").toByteArray(Charsets.UTF_8))
-            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-    return "$semanticRole(${fileIdentities.size}|$digest)"
+fun stableBoundaryFileSignature(dependency: FileCollectionDependency): String {
+    val declaredFiles = dependency.files
+    val displayName = declaredFiles.toString()
+    val buildTaskPaths =
+        declaredFiles.buildDependencies
+            .getDependencies(null)
+            .map { it.path }
+            .sorted()
+
+    // These display names and the plugin metadata task are stable declaration metadata in the
+    // repository's pinned Gradle 8.11.1 wrapper. Do not enumerate the files: doing so makes task
+    // output existence and contents configuration-cache inputs.
+    return when {
+        displayName == "Gradle API files" && buildTaskPaths.isEmpty() -> "gradle-api-files"
+        displayName == "Gradle TestKit files" && buildTaskPaths.isEmpty() -> "gradle-test-kit-files"
+        displayName == "file collection" &&
+            buildTaskPaths == listOf(":foundry-java-gradle-plugin:pluginUnderTestMetadata") ->
+            "project-files(:foundry-java-gradle-plugin:pluginUnderTestMetadata)"
+        else ->
+            error(
+                "Unsupported file collection dependency: " +
+                    "displayName=$displayName, type=${declaredFiles.javaClass.name}, " +
+                    "buildDependencies=$buildTaskPaths",
+            )
+    }
 }
 
 abstract class VerifyRepositoryModel : DefaultTask() {
@@ -489,6 +479,10 @@ tasks.withType<Test>().configureEach {
 }
 
 configure<SpotlessExtension> {
+    // Spotless's git-aware default can capture cold-only JGit state as a Gradle configuration
+    // cache input. Explicit LF matches the repository policy and avoids that clean-state miss.
+    // Related upstream regression: https://github.com/diffplug/spotless/issues/2950
+    lineEndings = LineEnding.UNIX
     java {
         target("src/**/*.java", "*/src/**/*.java")
         googleJavaFormat("1.22.0").aosp()
@@ -582,12 +576,10 @@ val androidMainLockConfigurations =
         "releaseCompileClasspath",
         "releaseRuntimeClasspath",
     )
-val requiredGradleApiFileSignature =
-    "gradle-api-files(18|04d09c0616d12776f93ed6e14d27633c98ab8844f95ef95f43e9a5dc570a64bd)"
-val requiredGradleTestKitFileSignature =
-    "gradle-test-kit-files(19|ea2519b620d8fc8798f0b7cc8ff40ec19eeef16e46f896480dd29b72df142216)"
+val requiredGradleApiFileSignature = "gradle-api-files"
+val requiredGradleTestKitFileSignature = "gradle-test-kit-files"
 val requiredGradlePluginRuntimeFileSignature =
-    "project-files(1|2158e07cb4daf70f241c6184b39c6f779036ad91f13f5705f433d80a761c15a4)"
+    "project-files(:foundry-java-gradle-plugin:pluginUnderTestMetadata)"
 val requiredBoundaryDependencies =
     mapOf(
         ":foundry-java-api-model" to
@@ -1052,7 +1044,7 @@ gradle.projectsEvaluated {
                                 when (dependency) {
                                     is ProjectDependency -> "project(:${dependency.name})"
                                     is FileCollectionDependency ->
-                                        stableBoundaryFileSignature(dependency, rootProject.projectDir)
+                                        stableBoundaryFileSignature(dependency)
                                     else -> "${dependency.group}:${dependency.name}"
                                 }
                             "${configuration.name}=$coordinate"

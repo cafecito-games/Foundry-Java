@@ -21,15 +21,9 @@ jobs:
         with:
           packages: 'tools platform-tools platforms;android-36 build-tools;35.0.0'
       - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
-      - run: ./gradlew --no-daemon clean check --configuration-cache --configuration-cache-problems=fail
-      - name: Prove configuration cache reuse
+      - name: Prove configuration cache reuse from clean outputs
         shell: bash
-        run: |
-          set -o pipefail
-          cache_log="$RUNNER_TEMP/configuration-cache-reuse.log"
-          ./gradlew --no-daemon clean check --configuration-cache --configuration-cache-problems=fail \
-            2>&1 | tee "$cache_log"
-          grep -Eq 'Configuration cache entry reused|Reusing configuration cache' "$cache_log"
+        run: bash gradle/verify-configuration-cache-reuse.sh
       - run: ./gradlew --write-locks resolveAndLockAll
       - name: Verify dependency locks are unchanged
         shell: bash

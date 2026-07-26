@@ -127,6 +127,10 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("gradle-api-files"));
         assertTrue(rootBuild.contains("gradle-test-kit-files"));
         assertTrue(rootBuild.contains("project-files"));
+        assertTrue(rootBuild.contains("declaredFiles.buildDependencies"));
+        assertTrue(rootBuild.contains("Unsupported file collection dependency"));
+        assertFalse(rootBuild.contains("dependency.files.files"));
+        assertFalse(rootBuild.contains("MessageDigest"));
         assertFalse(rootBuild.contains(".toSortedSet()"));
     }
 
@@ -184,6 +188,8 @@ class RepositoryContractTest {
                                         line + " must use an immutable commit SHA"));
         assertTrue(rootBuild.contains("target(\"*/src/**/*.kt\")"));
         assertTrue(rootBuild.contains("ktlint(\"1.3.1\")"));
+        assertTrue(rootBuild.contains("lineEndings = LineEnding.UNIX"));
+        assertTrue(rootBuild.contains("https://github.com/diffplug/spotless/issues/2950"));
         assertTrue(
                 rootBuild.contains(
                         "tasks.named(\"check\") {"
@@ -246,12 +252,22 @@ class RepositoryContractTest {
     @Test
     void ciProvesConfigurationCacheReuseWithoutMaskingGradleFailures() throws IOException {
         String workflow = read(".github/workflows/ci.yml");
+        String cacheVerification = read("gradle/verify-configuration-cache-reuse.sh");
 
-        assertTrue(workflow.contains("set -o pipefail"));
-        assertTrue(workflow.contains("tee \"$cache_log\""));
+        assertTrue(workflow.contains("bash gradle/verify-configuration-cache-reuse.sh"));
+        assertTrue(cacheVerification.contains("set -euo pipefail"));
+        assertTrue(cacheVerification.contains("rm -rf \"$repo_root/build\""));
         assertTrue(
-                workflow.contains("Configuration cache entry reused|Reusing configuration cache"));
-        assertTrue(workflow.contains("--configuration-cache-problems=fail"));
+                cacheVerification.contains(
+                        "find \"$repo_root\" -mindepth 2 -maxdepth 2"
+                                + " -type d -name build -exec rm -rf {} +"));
+        assertEquals(2, cacheVerification.split("\"\\$\\{gradle_command\\[@]}\"", -1).length - 1);
+        assertTrue(cacheVerification.contains("tee \"$second_log\""));
+        assertTrue(
+                cacheVerification.contains(
+                        "Configuration cache entry reused|Reusing configuration cache"));
+        assertTrue(cacheVerification.contains("configuration cache cannot be reused"));
+        assertTrue(cacheVerification.contains("--configuration-cache-problems=fail"));
     }
 
     @Test
