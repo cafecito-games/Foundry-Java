@@ -79,8 +79,8 @@ while IFS= read -r library_path; do
 
   if "$llvm_readelf" --dyn-syms --wide "$library" |
     awk '$7 == "UND" { print $8 }' |
-    grep -Eq '^Java_games_cafecito_foundry_(FoundryLib|android)'; then
-    printf '%s imports a forbidden Android host JNI symbol.\n' "$library_path" >&2
+    grep -Eq '^Java_'; then
+    printf '%s imports a forbidden host JNI symbol.\n' "$library_path" >&2
     exit 1
   fi
 

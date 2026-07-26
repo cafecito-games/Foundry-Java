@@ -113,6 +113,19 @@ bool clear_java_exception(JNIEnv *environment, const std::shared_ptr<FoundryErro
 	return true;
 }
 
+template <typename Value>
+bool jni_reference_failed(
+		JNIEnv *environment,
+		Value value,
+		const std::shared_ptr<FoundryErrorSink> &errors,
+		const char *operation) {
+	const bool exception_was_cleared = clear_java_exception(environment, errors, operation);
+	if (value == nullptr && !exception_was_cleared) {
+		errors->error(std::string("JNI returned null during ") + operation + ".");
+	}
+	return value == nullptr || exception_was_cleared;
+}
+
 class JniCallbackTarget final : public CallbackTarget {
 public:
 	JniCallbackTarget(
@@ -183,7 +196,7 @@ public:
 			return 0;
 		}
 		jlongArray java_arguments = environment->NewLongArray(static_cast<jsize>(arguments.size()));
-		if (java_arguments == nullptr || clear_java_exception(environment, errors, "argument allocation")) {
+		if (jni_reference_failed(environment, java_arguments, errors, "argument allocation")) {
 			return 0;
 		}
 		if (!arguments.empty()) {
@@ -300,8 +313,16 @@ bool jni_bridge_is_ready() noexcept {
 }
 
 ContextHandle jni_bridge_create_context() noexcept {
-	auto runtime = live_runtime();
-	return runtime == nullptr ? 0 : runtime->create_context();
+	try {
+		auto runtime = live_runtime();
+		return runtime == nullptr ? 0 : runtime->create_context();
+	} catch (...) {
+		try {
+			state.errors->error("Could not allocate a Foundry Java context.");
+		} catch (...) {
+		}
+		return 0;
+	}
 }
 
 bool jni_bridge_initialize(ContextHandle context, std::int32_t level) noexcept {
@@ -325,11 +346,11 @@ void jni_bridge_install_foundry_error_interface(FoundryExtensionInterfacePrintEr
 	state.errors->install(print_error);
 }
 
-void jni_bridge_shutdown() noexcept {
+bool jni_bridge_shutdown() noexcept {
 	auto runtime = live_runtime();
 	if (runtime != nullptr &&
 			!runtime->shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE)) {
-		return;
+		return false;
 	}
 	{
 		std::lock_guard lock(state.mutex);
@@ -339,6 +360,7 @@ void jni_bridge_shutdown() noexcept {
 	}
 	release_class_loader();
 	state.errors->install(nullptr);
+	return true;
 }
 
 } // namespace foundry_java
@@ -399,7 +421,7 @@ FOUNDRY_JAVA_JNI_EXPORT jint JNICALL JNI_OnLoad(JavaVM *java_vm, void *) {
 
 FOUNDRY_JAVA_JNI_EXPORT void JNICALL JNI_OnUnload(JavaVM *, void *) {
 	try {
-		foundry_java::jni_bridge_shutdown();
+		(void)foundry_java::jni_bridge_shutdown();
 		std::lock_guard lock(foundry_java::state.mutex);
 		foundry_java::state.java_vm = nullptr;
 	} catch (...) {
@@ -432,53 +454,56 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1(
 			return JNI_FALSE;
 		}
 		jclass callback_class = environment->GetObjectClass(callbacks);
-		if (callback_class == nullptr ||
-				foundry_java::clear_java_exception(
-						environment,
-						foundry_java::state.errors,
-						"callback class resolution")) {
+		if (foundry_java::jni_reference_failed(
+					environment,
+					callback_class,
+					foundry_java::state.errors,
+					"callback class resolution")) {
 			return JNI_FALSE;
 		}
 		jmethodID initialize_method = environment->GetMethodID(callback_class, "initialize", "(JI)Z");
-		if (initialize_method == nullptr ||
-				foundry_java::clear_java_exception(
-						environment,
-						foundry_java::state.errors,
-						"initialize callback resolution")) {
+		if (foundry_java::jni_reference_failed(
+					environment,
+					initialize_method,
+					foundry_java::state.errors,
+					"initialize callback resolution")) {
 			environment->DeleteLocalRef(callback_class);
 			return JNI_FALSE;
 		}
 		jmethodID deinitialize_method = environment->GetMethodID(callback_class, "deinitialize", "(JI)V");
-		if (deinitialize_method == nullptr ||
-				foundry_java::clear_java_exception(
-						environment,
-						foundry_java::state.errors,
-						"deinitialize callback resolution")) {
+		if (foundry_java::jni_reference_failed(
+					environment,
+					deinitialize_method,
+					foundry_java::state.errors,
+					"deinitialize callback resolution")) {
 			environment->DeleteLocalRef(callback_class);
 			return JNI_FALSE;
 		}
 		jmethodID invoke_method = environment->GetMethodID(callback_class, "invoke", "(JJ[J)J");
-		if (invoke_method == nullptr ||
-				foundry_java::clear_java_exception(
-						environment,
-						foundry_java::state.errors,
-						"runtime callback resolution")) {
+		if (foundry_java::jni_reference_failed(
+					environment,
+					invoke_method,
+					foundry_java::state.errors,
+					"runtime callback resolution")) {
 			environment->DeleteLocalRef(callback_class);
 			return JNI_FALSE;
 		}
 		jmethodID invalidate_method = environment->GetMethodID(callback_class, "invalidate", "(J)V");
-		if (invalidate_method == nullptr ||
-				foundry_java::clear_java_exception(
-						environment,
-						foundry_java::state.errors,
-						"invalidation callback resolution")) {
+		if (foundry_java::jni_reference_failed(
+					environment,
+					invalidate_method,
+					foundry_java::state.errors,
+					"invalidation callback resolution")) {
 			environment->DeleteLocalRef(callback_class);
 			return JNI_FALSE;
 		}
 		jobject global_callbacks = environment->NewGlobalRef(callbacks);
 		environment->DeleteLocalRef(callback_class);
-		if (global_callbacks == nullptr ||
-				foundry_java::clear_java_exception(environment, foundry_java::state.errors, "bootstrap validation")) {
+		if (foundry_java::jni_reference_failed(
+					environment,
+					global_callbacks,
+					foundry_java::state.errors,
+					"bootstrap validation")) {
 			if (global_callbacks != nullptr) {
 				environment->DeleteGlobalRef(global_callbacks);
 			}
@@ -616,7 +641,7 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownBridgeV1(
 		JNIEnv *,
 		jclass) {
 	try {
-		foundry_java::jni_bridge_shutdown();
+		(void)foundry_java::jni_bridge_shutdown();
 	} catch (...) {
 	}
 }

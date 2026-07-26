@@ -79,13 +79,16 @@ class NativeBridgeContractTest {
         }
         assertTrue(androidBuild.contains("externalNativeBuild"));
         assertTrue(androidBuild.contains("29.0.14206865"));
+        assertTrue(androidBuild.contains("inputs.file(nativeTestScript)"));
         assertTrue(verifier.contains("llvm-readelf"));
         assertTrue(verifier.contains("libfoundry_java.so"));
         assertTrue(verifier.contains("libfoundry_android.so"));
+        assertTrue(verifier.contains("grep -Eq '^Java_'"));
         assertTrue(workflow.contains("ndk;29.0.14206865"));
         assertTrue(workflow.contains("verify-native-bridge.sh"));
         assertTrue(workflow.contains("system-images;android-36;default;x86_64"));
         assertTrue(workflow.contains("sudo chmod 666 /dev/kvm"));
+        assertTrue(workflow.contains("-port 5554"));
         assertTrue(workflow.contains("sys.boot_completed"));
         assertTrue(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
     }
@@ -126,6 +129,24 @@ class NativeBridgeContractTest {
         assertTrue(contract.contains("@FOUNDRY_JAVA_GENERATOR_VERSION@"));
         assertTrue(contract.contains("@FOUNDRY_JAVA_RUNTIME_VERSION@"));
         assertTrue(contract.contains("@FOUNDRY_JAVA_BRIDGE_CONTRACT_VERSION@"));
+    }
+
+    @Test
+    void jniFailureAndNoexceptPathsContainEveryException() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        String handles = read("foundry-java-android/src/main/cpp/foundry_java_handles.cpp");
+
+        assertFalse(
+                java.util.regex.Pattern.compile(
+                                "==\\s*nullptr\\s*\\|\\|\\s*"
+                                        + "(?:foundry_java::)?clear_java_exception")
+                        .matcher(jni)
+                        .find());
+        assertTrue(jni.contains("jni_reference_failed("));
+        assertTrue(
+                jni.contains("ContextHandle jni_bridge_create_context() noexcept {\n" + "\ttry {"));
+        assertFalse(handles.contains("thread_local std::vector<ContextHandle>"));
+        assertFalse(handles.contains("std::vector<ContextHandle> handles"));
     }
 
     @Test

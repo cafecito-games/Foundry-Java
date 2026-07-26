@@ -59,7 +59,7 @@ bool jni_bridge_initialize(ContextHandle context, std::int32_t level) noexcept;
 void jni_bridge_deinitialize(ContextHandle context, std::int32_t level) noexcept;
 bool jni_bridge_shutdown_context(ContextHandle context, std::int32_t level) noexcept;
 void jni_bridge_install_foundry_error_interface(FoundryExtensionInterfacePrintError print_error) noexcept;
-void jni_bridge_shutdown() noexcept;
+bool jni_bridge_shutdown() noexcept;
 
 FoundryExtensionBool initialize_extension(
 		FoundryExtensionInterfaceGetProcAddress get_proc_address,

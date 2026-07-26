@@ -123,7 +123,9 @@ void deinitialize_level(void *userdata, FoundryExtensionInitializationLevel leve
 	}
 	if (context != 0) {
 		if (final_level) {
-			jni_bridge_shutdown_context(context, static_cast<std::int32_t>(level));
+			if (!jni_bridge_shutdown_context(context, static_cast<std::int32_t>(level))) {
+				return;
+			}
 		} else {
 			jni_bridge_deinitialize(context, static_cast<std::int32_t>(level));
 		}
@@ -131,7 +133,9 @@ void deinitialize_level(void *userdata, FoundryExtensionInitializationLevel leve
 	if (!final_level) {
 		return;
 	}
-	jni_bridge_shutdown();
+	if (!jni_bridge_shutdown()) {
+		return;
+	}
 	std::lock_guard lock(state->mutex);
 	state->context = 0;
 	state->interface = {};

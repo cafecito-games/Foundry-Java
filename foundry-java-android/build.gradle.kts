@@ -67,6 +67,7 @@ val nativeHostTest =
             fileTree("src/test/cpp"),
             rootProject.fileTree("api/current"),
         )
+        inputs.file(nativeTestScript)
         outputs.dir(layout.buildDirectory.dir("native-host"))
         commandLine("bash", nativeTestScript.asFile.absolutePath, "host", projectDir.absolutePath)
     }
@@ -80,6 +81,7 @@ val nativeSanitizerTest =
             fileTree("src/test/cpp"),
             rootProject.fileTree("api/current"),
         )
+        inputs.file(nativeTestScript)
         outputs.dir(layout.buildDirectory.dir("native-host-sanitized"))
         commandLine("bash", nativeTestScript.asFile.absolutePath, "sanitizer", projectDir.absolutePath)
     }

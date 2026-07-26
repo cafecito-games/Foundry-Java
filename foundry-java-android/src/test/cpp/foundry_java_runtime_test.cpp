@@ -20,6 +20,7 @@ int jni_initialize_count = 0;
 int jni_deinitialize_count = 0;
 int jni_shutdown_context_count = 0;
 int jni_shutdown_count = 0;
+bool jni_shutdown_context_result = true;
 FoundryExtensionInterfacePrintError installed_print_error = nullptr;
 
 void fake_print_error(const char *, const char *, const char *, std::int32_t, FoundryExtensionBool) {
@@ -109,6 +110,10 @@ public:
 		last_context = context;
 		last_level = level;
 		deinitialize_count++;
+		if (shutdown_during_deinitialize) {
+			shutdown_during_deinitialize_result =
+					runtime->shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+		}
 	}
 
 	std::int64_t invoke(
@@ -174,6 +179,8 @@ public:
 	bool callback_started = false;
 	bool release_callback = false;
 	bool shutdown_from_callback_result = true;
+	bool shutdown_during_deinitialize = false;
+	bool shutdown_during_deinitialize_result = true;
 };
 
 void test_context_identity_reentrancy_and_exception_containment() {
@@ -206,7 +213,11 @@ void test_context_identity_reentrancy_and_exception_containment() {
 	expect(runtime.invoke(second_context, 7, {}) == 0, "old-generation context must be rejected");
 	const auto third_context = runtime.create_context();
 	expect(third_context != second_context, "handles must not be reused across generations");
+	callbacks->shutdown_during_deinitialize = true;
 	expect(runtime.shutdown_context(third_context, 0), "new-generation context must shut down");
+	expect(
+			!callbacks->shutdown_during_deinitialize_result,
+			"bridge shutdown must reject reentry from a deinitialization callback");
 }
 
 void test_shutdown_waits_for_active_callback_lease() {
@@ -300,6 +311,17 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 	expect(jni_initialize_count == 2, "every initialization level must enter Java");
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
 	expect(jni_deinitialize_count == 1, "non-final deinitialization level must enter Java");
+	jni_shutdown_context_result = false;
+	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_count == 0, "failed context drain must not release JNI state");
+	FoundryExtensionInitialization rejected_after_failed_shutdown{};
+	expect(
+			foundry_java::initialize_extension(
+					complete_get_proc_address,
+					reinterpret_cast<void *>(2),
+					&rejected_after_failed_shutdown) == 0,
+			"failed core shutdown must keep the active entry from being replaced");
+	jni_shutdown_context_result = true;
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
 	expect(jni_shutdown_context_count == 1, "core deinit must drain its context once");
 	expect(jni_shutdown_count == 1, "core deinit must release JNI state once");
@@ -330,8 +352,10 @@ void jni_bridge_deinitialize(ContextHandle context, std::int32_t) noexcept {
 
 bool jni_bridge_shutdown_context(ContextHandle context, std::int32_t) noexcept {
 	if (context == 77) {
-		jni_shutdown_context_count++;
-		return true;
+		if (jni_shutdown_context_result) {
+			jni_shutdown_context_count++;
+		}
+		return jni_shutdown_context_result;
 	}
 	return false;
 }
@@ -340,8 +364,9 @@ void jni_bridge_install_foundry_error_interface(FoundryExtensionInterfacePrintEr
 	installed_print_error = print_error;
 }
 
-void jni_bridge_shutdown() noexcept {
+bool jni_bridge_shutdown() noexcept {
 	jni_shutdown_count++;
+	return true;
 }
 
 } // namespace foundry_java

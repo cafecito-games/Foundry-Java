@@ -21,7 +21,47 @@ struct Context {
 	std::size_t active_callbacks = 0;
 };
 
-thread_local std::vector<ContextHandle> active_contexts;
+struct ActiveContextFrame {
+	ContextHandle handle = 0;
+	ActiveContextFrame *previous = nullptr;
+};
+
+thread_local ActiveContextFrame *active_context = nullptr;
+
+class ActiveContextScope {
+public:
+	ActiveContextScope() = default;
+
+	explicit ActiveContextScope(ContextHandle handle) {
+		enter(handle);
+	}
+
+	~ActiveContextScope() {
+		leave();
+	}
+
+	ActiveContextScope(const ActiveContextScope &) = delete;
+	ActiveContextScope &operator=(const ActiveContextScope &) = delete;
+
+	void enter(ContextHandle handle) {
+		frame.handle = handle;
+		frame.previous = active_context;
+		active_context = &frame;
+		entered = true;
+	}
+
+	void leave() {
+		if (!entered) {
+			return;
+		}
+		active_context = frame.previous;
+		entered = false;
+	}
+
+private:
+	ActiveContextFrame frame;
+	bool entered = false;
+};
 
 class CallbackLease {
 public:
@@ -30,7 +70,7 @@ public:
 		std::lock_guard lock(this->context->mutex);
 		if (this->context->accepting_callbacks) {
 			this->context->active_callbacks++;
-			active_contexts.push_back(this->context->handle);
+			active_scope.enter(this->context->handle);
 			acquired = true;
 		}
 	}
@@ -39,10 +79,7 @@ public:
 		if (!acquired) {
 			return;
 		}
-		auto active = std::find(active_contexts.rbegin(), active_contexts.rend(), context->handle);
-		if (active != active_contexts.rend()) {
-			active_contexts.erase(std::next(active).base());
-		}
+		active_scope.leave();
 		std::lock_guard lock(context->mutex);
 		context->active_callbacks--;
 		if (context->active_callbacks == 0) {
@@ -56,11 +93,17 @@ public:
 
 private:
 	std::shared_ptr<Context> context;
+	ActiveContextScope active_scope;
 	bool acquired = false;
 };
 
 bool current_thread_owns(ContextHandle handle) {
-	return std::find(active_contexts.begin(), active_contexts.end(), handle) != active_contexts.end();
+	for (ActiveContextFrame *frame = active_context; frame != nullptr; frame = frame->previous) {
+		if (frame->handle == handle) {
+			return true;
+		}
+	}
+	return false;
 }
 
 } // namespace
@@ -71,9 +114,12 @@ struct BridgeRuntime::Impl {
 			errors(std::move(errors)) {
 	}
 
-	void report(const std::string &message) noexcept {
-		if (errors != nullptr) {
-			errors->error(message);
+	void report(const char *message) noexcept {
+		try {
+			if (errors != nullptr) {
+				errors->error(std::string(message));
+			}
+		} catch (...) {
 		}
 	}
 
@@ -133,10 +179,8 @@ bool BridgeRuntime::initialize(ContextHandle handle, std::int32_t level) noexcep
 	}
 	try {
 		return impl->callbacks->initialize(handle, level);
-	} catch (const std::exception &exception) {
-		impl->report(std::string("Java initialization callback failed: ") + exception.what());
 	} catch (...) {
-		impl->report("Java initialization callback failed with an unknown exception.");
+		impl->report("Java initialization callback failed.");
 	}
 	return false;
 }
@@ -152,10 +196,8 @@ void BridgeRuntime::deinitialize(ContextHandle handle, std::int32_t level) noexc
 	}
 	try {
 		impl->callbacks->deinitialize(handle, level);
-	} catch (const std::exception &exception) {
-		impl->report(std::string("Java deinitialization callback failed: ") + exception.what());
 	} catch (...) {
-		impl->report("Java deinitialization callback failed with an unknown exception.");
+		impl->report("Java deinitialization callback failed.");
 	}
 }
 
@@ -173,10 +215,8 @@ std::int64_t BridgeRuntime::invoke(
 	}
 	try {
 		return impl->callbacks->invoke(handle, callback, arguments);
-	} catch (const std::exception &exception) {
-		impl->report(std::string("Java callback failed: ") + exception.what());
 	} catch (...) {
-		impl->report("Java callback failed with an unknown exception.");
+		impl->report("Java callback failed.");
 	}
 	return 0;
 }
@@ -204,19 +244,16 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 		std::unique_lock lock(context->mutex);
 		context->drained.wait(lock, [&context] { return context->active_callbacks == 0; });
 	}
+	ActiveContextScope shutdown_callback_scope(handle);
 	try {
 		impl->callbacks->deinitialize(handle, level);
-	} catch (const std::exception &exception) {
-		impl->report(std::string("Java deinitialization callback failed: ") + exception.what());
 	} catch (...) {
-		impl->report("Java deinitialization callback failed with an unknown exception.");
+		impl->report("Java deinitialization callback failed.");
 	}
 	try {
 		impl->callbacks->invalidate(handle);
-	} catch (const std::exception &exception) {
-		impl->report(std::string("Java context invalidation failed: ") + exception.what());
 	} catch (...) {
-		impl->report("Java context invalidation failed with an unknown exception.");
+		impl->report("Java context invalidation failed.");
 	}
 	return true;
 }
@@ -231,34 +268,25 @@ void BridgeRuntime::begin_new_generation() noexcept {
 }
 
 bool BridgeRuntime::shutdown_all(std::int32_t level) noexcept {
-	std::vector<ContextHandle> handles;
-	bool callback_owned_by_current_thread = false;
 	{
 		std::lock_guard lock(impl->mutex);
-		for (const auto &[handle, context] : impl->contexts) {
-			(void)context;
-			if (current_thread_owns(handle)) {
-				callback_owned_by_current_thread = true;
-				break;
-			}
+		if (active_context != nullptr) {
+			impl->report("The Foundry Java bridge cannot shut down from an active callback.");
+			return false;
 		}
-		if (!callback_owned_by_current_thread) {
-			impl->accepting_contexts = false;
-			handles.reserve(impl->contexts.size());
-			for (const auto &[handle, context] : impl->contexts) {
-				(void)context;
-				handles.push_back(handle);
+		impl->accepting_contexts = false;
+	}
+	while (true) {
+		ContextHandle handle = 0;
+		{
+			std::lock_guard lock(impl->mutex);
+			if (impl->contexts.empty()) {
+				return true;
 			}
+			handle = impl->contexts.begin()->first;
 		}
+		(void)shutdown_context(handle, level);
 	}
-	if (callback_owned_by_current_thread) {
-		impl->report("The Foundry Java bridge cannot shut down from an active callback.");
-		return false;
-	}
-	for (ContextHandle handle : handles) {
-		shutdown_context(handle, level);
-	}
-	return true;
 }
 
 } // namespace foundry_java
