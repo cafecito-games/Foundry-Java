@@ -65,9 +65,15 @@ class RepositoryContractTest {
 
     @Test
     void platformBoundariesProtectThePublicJavaAbi() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+
         assertFalse(readTree("foundry-java-api-model").contains("android."));
         assertFalse(readTree("foundry-java-annotations").contains("android."));
+        assertFalse(readTree("foundry-java-generator").contains("android."));
+        assertFalse(readTree("foundry-java-processor").contains("android."));
         assertFalse(readTree("foundry-java-runtime").contains("android."));
+        assertTrue(rootBuild.contains("\":foundry-java-generator\" to"));
+        assertTrue(rootBuild.contains("\":foundry-java-processor\" to"));
         assertTrue(read("foundry-java-kotlin/build.gradle.kts").contains("foundry-java-runtime"));
         assertTrue(read("foundry-java-android/build.gradle.kts").contains("foundry-java-runtime"));
         assertFalse(readTree("foundry-java-android").contains("libfoundry_android.so"));
@@ -96,6 +102,10 @@ class RepositoryContractTest {
                                         line + " must use an immutable commit SHA"));
         assertTrue(rootBuild.contains("target(\"*/src/**/*.kt\")"));
         assertTrue(rootBuild.contains("ktlint(\"1.3.1\")"));
+        assertTrue(
+                rootBuild.contains(
+                        "tasks.named(\"check\") {"
+                                + " dependsOn(\"spotlessCheck\", \"verifyRepositoryContract\") }"));
         assertFalse(rootBuild.contains("notCompatibleWithConfigurationCache"));
     }
 

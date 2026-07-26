@@ -550,6 +550,23 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
+        ":foundry-java-generator" to
+            setOf(
+                "implementation=project(:foundry-java-api-model)",
+                "implementation=project(:foundry-java-annotations)",
+                "testImplementation=org.junit:junit-bom",
+                "testImplementation=org.junit.jupiter:junit-jupiter",
+                "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+            ),
+        ":foundry-java-processor" to
+            setOf(
+                "implementation=project(:foundry-java-annotations)",
+                "testImplementation=org.junit:junit-bom",
+                "testImplementation=org.junit.jupiter:junit-jupiter",
+                "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+            ),
         ":foundry-java-runtime" to
             setOf(
                 "api=project(:foundry-java-api-model)",
@@ -825,7 +842,7 @@ tasks.register("verifyRepositoryContract") {
     dependsOn(verifyRepositoryModel, verifyAndroidAar, verifyPublications)
 }
 
-tasks.named("check") { dependsOn("verifyRepositoryContract") }
+tasks.named("check") { dependsOn("spotlessCheck", "verifyRepositoryContract") }
 
 subprojects {
     if (name != "foundry-java-android") {
