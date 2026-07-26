@@ -1,12 +1,16 @@
+import com.android.build.api.dsl.LibraryExtension
 import com.diffplug.gradle.spotless.SpotlessExtension
 import org.gradle.api.JavaVersion
+import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.plugin.devel.GradlePluginDevelopmentExtension
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 plugins {
     `java-library`
@@ -72,6 +76,29 @@ val requiredProjects =
         "foundry-java-kotlin",
         "foundry-java-test",
     )
+val requiredGroup = "games.cafecito.foundry"
+val requiredJavaVersion = JavaVersion.VERSION_17
+val requiredJavaLanguageVersion = JavaLanguageVersion.of(17)
+val requiredPluginId = "games.cafecito.foundry.java"
+val junitVersion = libs.versions.junit.get()
+val forbiddenBoundaryPluginIds =
+    setOf(
+        "com.android.application",
+        "com.android.dynamic-feature",
+        "com.android.library",
+        "com.android.test",
+    )
+val unsupportedAndroidLockConfigurations =
+    setOf(
+        // AGP injects the tested library into these synthetic configurations, whose self-variants
+        // are ambiguous when they are resolved directly outside the Android test variant tasks.
+        "debugAndroidTestCompileClasspath",
+        "debugAndroidTestRuntimeClasspath",
+        "debugUnitTestCompileClasspath",
+        "debugUnitTestRuntimeClasspath",
+        "releaseUnitTestCompileClasspath",
+        "releaseUnitTestRuntimeClasspath",
+    )
 
 val resolveLockTasks =
     allprojects.map { project ->
@@ -81,8 +108,10 @@ val resolveLockTasks =
                 project.configurations
                     .filter {
                         it.isCanBeResolved &&
-                            (it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath")) &&
-                            !it.name.contains("Test", ignoreCase = true)
+                            !(
+                                project.path == ":foundry-java-android" &&
+                                    it.name in unsupportedAndroidLockConfigurations
+                            )
                     }.forEach { it.resolve() }
             }
         }
@@ -102,19 +131,87 @@ tasks.register("verifyRepositoryContract") {
     doLast {
         check(subprojects.map { it.name }.toSet() == requiredProjects) { "Included project set differs from contract." }
         check(file("gradle/wrapper/gradle-wrapper.properties").readText().contains("gradle-8.11.1-bin.zip"))
+        check(allprojects.all { it.group.toString() == requiredGroup }) {
+            "Every project must use Maven group $requiredGroup."
+        }
         allprojects.forEach { project ->
-            check(project.file("gradle.lockfile").isFile || project == rootProject) {
+            check(project.file("gradle.lockfile").isFile) {
                 "Dependency lock state is missing for ${project.path}."
             }
             project.tasks.withType(AbstractArchiveTask::class.java).forEach { archive ->
                 check(!archive.isPreserveFileTimestamps && archive.isReproducibleFileOrder)
             }
         }
+        allprojects.filter { it.pluginManager.hasPlugin("java") }.forEach { project ->
+            val javaExtension = project.extensions.getByType(JavaPluginExtension::class.java)
+            check(javaExtension.toolchain.languageVersion.get() == requiredJavaLanguageVersion) {
+                "${project.path} must use a Java 17 toolchain."
+            }
+            check(javaExtension.sourceCompatibility == requiredJavaVersion) {
+                "${project.path} must compile Java 17 sources."
+            }
+            check(javaExtension.targetCompatibility == requiredJavaVersion) {
+                "${project.path} must produce Java 17 bytecode."
+            }
+        }
         val android = project(":foundry-java-android")
         check(android.pluginManager.hasPlugin("com.android.library"))
         check(subprojects.filter { it != android }.none { it.pluginManager.hasPlugin("com.android.library") })
-        listOf(":foundry-java-api-model", ":foundry-java-annotations", ":foundry-java-runtime").forEach { path ->
-            check(!project(path).pluginManager.hasPlugin("com.android.library"))
+        val androidExtension = android.extensions.getByType(LibraryExtension::class.java)
+        check(androidExtension.compileOptions.sourceCompatibility == requiredJavaVersion) {
+            "Android sources must compile as Java 17."
+        }
+        check(androidExtension.compileOptions.targetCompatibility == requiredJavaVersion) {
+            "Android bytecode must target Java 17."
+        }
+        val expectedBoundaryDependencies =
+            mapOf(
+                ":foundry-java-api-model" to
+                    setOf(
+                        "api=project(:foundry-java-annotations)",
+                        "testImplementation=org.junit:junit-bom",
+                        "testImplementation=org.junit.jupiter:junit-jupiter",
+                        "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                        "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+                    ),
+                ":foundry-java-annotations" to
+                    setOf(
+                        "testImplementation=org.junit:junit-bom",
+                        "testImplementation=org.junit.jupiter:junit-jupiter",
+                        "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                        "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+                    ),
+                ":foundry-java-runtime" to
+                    setOf(
+                        "api=project(:foundry-java-api-model)",
+                        "implementation=project(:foundry-java-annotations)",
+                        "testImplementation=org.junit:junit-bom",
+                        "testImplementation=org.junit.jupiter:junit-jupiter",
+                        "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                        "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+                    ),
+            )
+        expectedBoundaryDependencies.forEach { (path, expectedDependencies) ->
+            val boundaryProject = project(path)
+            check(forbiddenBoundaryPluginIds.none { boundaryProject.pluginManager.hasPlugin(it) }) {
+                "$path must remain free of Android plugins and artifacts."
+            }
+            val declaredDependencies =
+                boundaryProject.configurations
+                    .flatMap { configuration ->
+                        configuration.dependencies.map { dependency ->
+                            val coordinate =
+                                if (dependency is ProjectDependency) {
+                                    "project(${dependency.path})"
+                                } else {
+                                    "${dependency.group}:${dependency.name}"
+                                }
+                            "${configuration.name}=$coordinate"
+                        }
+                    }.toSet()
+            check(declaredDependencies == expectedDependencies) {
+                "$path declared dependencies differ from the Android-free boundary: $declaredDependencies"
+            }
         }
         check(
             project(":foundry-java-kotlin").configurations.getByName("api").dependencies.any {
@@ -130,6 +227,10 @@ tasks.register("verifyRepositoryContract") {
         check(pluginPublishing.publications.names.contains("pluginMaven"))
         check(pluginPublishing.publications.names.none { it == "mavenJava" })
         check(plugin.tasks.names.any { it.startsWith("publishPluginMavenPublication") })
+        val pluginDevelopment = plugin.extensions.getByType(GradlePluginDevelopmentExtension::class.java)
+        check(pluginDevelopment.plugins.map { it.id }.toSet() == setOf(requiredPluginId)) {
+            "Declared Gradle plugin IDs must be exactly $requiredPluginId."
+        }
         val aar =
             android.layout.buildDirectory
                 .file("outputs/aar/foundry-java-android-release.aar")
@@ -137,12 +238,21 @@ tasks.register("verifyRepositoryContract") {
                 .asFile
         check(aar.isFile) { "Release AAR was not produced." }
         ZipFile(aar).use { zip ->
-            check(
-                zip.entries().asSequence().none {
-                    it.name.contains("libfoundry_android.so") ||
-                        it.name.contains("FoundryAndroidHost")
-                },
-            )
+            check(zip.entries().asSequence().none { it.name.contains("libfoundry_android.so") }) {
+                "Release AAR must not package libfoundry_android.so."
+            }
+            val classesJar = zip.getEntry("classes.jar")
+            check(classesJar != null) { "Release AAR must contain classes.jar." }
+            ZipInputStream(zip.getInputStream(classesJar)).use { nestedZip ->
+                check(
+                    generateSequence(nestedZip::getNextEntry).none {
+                        it.name.endsWith(".class") &&
+                            it.name.substringAfterLast('/').contains("Host")
+                    },
+                ) {
+                    "Release AAR classes.jar must not contain forbidden Android host classes."
+                }
+            }
         }
     }
 }
@@ -162,7 +272,7 @@ subprojects {
             sourceCompatibility = JavaVersion.VERSION_17
             targetCompatibility = JavaVersion.VERSION_17
         }
-        dependencies.add("testImplementation", dependencies.platform("org.junit:junit-bom:5.11.3"))
+        dependencies.add("testImplementation", dependencies.platform("org.junit:junit-bom:$junitVersion"))
         dependencies.add("testImplementation", "org.junit.jupiter:junit-jupiter")
         dependencies.add("testRuntimeOnly", "org.junit.jupiter:junit-jupiter-engine")
         dependencies.add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
