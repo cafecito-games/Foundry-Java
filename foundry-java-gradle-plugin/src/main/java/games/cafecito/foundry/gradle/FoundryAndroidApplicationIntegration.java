@@ -32,6 +32,10 @@ final class FoundryAndroidApplicationIntegration {
     private static void selectRequestedBridgeAbis(
             FoundryJavaExtension extension, ApplicationVariant variant) {
         variant.getPackaging()
+                .getResources()
+                .getExcludes()
+                .add(RegistryIndexTask.FIXED_CONFIGURATION);
+        variant.getPackaging()
                 .getJniLibs()
                 .getExcludes()
                 .addAll(

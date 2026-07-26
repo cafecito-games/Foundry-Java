@@ -34,12 +34,16 @@ incompatible graphs, sorts modules by stable identity, and emits:
 
 ```text
 assets/foundry_java/registry-index-v2.txt
+assets/FoundryJava.foundryextension
 games.cafecito.foundry.generated.FoundryGeneratedBootstrap
 ```
 
 The bootstrap source directly references each generated registry's `PROVIDER`. It constructs one
 immutable `FoundryRegistryBootstrap`; it does not resolve provider names at runtime. Reordering
-dependencies cannot change output bytes, and zero modules produce no opt-in marker.
+dependencies cannot change output bytes. For a nonempty registry, the application plugin also
+copies the exact fixed configuration bytes from the one validated binding AAR into the variant
+assets; it never interprets, synthesizes, or publishes a replacement configuration. Zero modules
+produce none of these three outputs.
 AGP owns variant outputs below `build/generated/assets/generate<Variant>FoundryJavaRegistry/` and
 `build/generated/java/generate<Variant>FoundryJavaRegistry/`. A non-Android supplemental invocation
 retains the unscoped `generateFoundryJavaRegistry` task and `build/generated/foundryJava/` paths.

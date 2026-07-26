@@ -5,13 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.gradle.testkit.runner.BuildResult;
@@ -28,6 +32,15 @@ class FoundryJavaPluginTest {
     private static final String BOOTSTRAP =
             "build/generated/foundryJava/java/"
                     + "games/cafecito/foundry/generated/FoundryGeneratedBootstrap.java";
+    private static final String CONFIGURATION =
+            "build/generated/foundryJava/assets/FoundryJava.foundryextension";
+    private static final byte[] BINDING_CONFIGURATION =
+            """
+            [configuration]
+            entry_symbol = "foundry_java_library_init"
+            ; exact donor bytes must survive aggregation
+            """
+                    .getBytes(StandardCharsets.UTF_8);
 
     @TempDir Path temporaryDirectory;
 
@@ -40,6 +53,7 @@ class FoundryJavaPluginTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":generateFoundryJavaRegistry").getOutcome());
         assertFalse(Files.exists(project.resolve(INDEX)));
         assertFalse(Files.exists(project.resolve(BOOTSTRAP)));
+        assertFalse(Files.exists(project.resolve(CONFIGURATION)));
     }
 
     @Test
@@ -68,6 +82,48 @@ class FoundryJavaPluginTest {
                 bootstrap.contains("new games.cafecito.foundry.runtime.FoundryRegistryBootstrap"));
         assertFalse(bootstrap.contains("Class.forName"));
         assertFalse(bootstrap.contains("java.lang.reflect"));
+    }
+
+    @Test
+    void rejectsDescriptorPathsThatDoNotExactlyMatchTheDeclaredModule() throws IOException {
+        Path nested =
+                moduleJarAtPath(
+                        temporaryDirectory.resolve("nested.jar"),
+                        "META-INF/foundry-java/modules/nested/demo.descriptor",
+                        descriptor("demo", "example.DemoRegistry"));
+        Path misnamed =
+                moduleJarAtPath(
+                        temporaryDirectory.resolve("misnamed.jar"),
+                        "META-INF/foundry-java/modules/stale.descriptor",
+                        descriptor("demo", "example.DemoRegistry"));
+
+        for (Path invalid : List.of(nested, misnamed)) {
+            Path project = project(invalid.getFileName().toString() + "-project", List.of(invalid));
+
+            BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+            assertTrue(failure.getOutput().contains(invalid.toAbsolutePath().toString()));
+            assertTrue(
+                    failure.getOutput().contains("META-INF/foundry-java/modules/demo.descriptor"));
+        }
+    }
+
+    @Test
+    void rejectsMisnamedDescriptorInsideAnAarClassesJar() throws IOException {
+        Path binding =
+                bindingAarAtPath(
+                        temporaryDirectory.resolve("misnamed-descriptor.aar"),
+                        "META-INF/foundry-java/modules/stale.descriptor",
+                        descriptor("demo", "example.DemoRegistry"),
+                        List.of("x86_64"));
+        Path project =
+                projectWithPayloads("misnamed-aar-descriptor", List.of(binding), List.of("x86_64"));
+
+        BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+        assertTrue(failure.getOutput().contains(binding.toAbsolutePath().toString()));
+        assertTrue(failure.getOutput().contains("classes.jar!META-INF"));
+        assertTrue(failure.getOutput().contains("META-INF/foundry-java/modules/demo.descriptor"));
     }
 
     @Test
@@ -189,6 +245,41 @@ class FoundryJavaPluginTest {
     }
 
     @Test
+    void duplicateConfigurationEntriesInsideOneBindingFailBeforeGeneration() throws IOException {
+        Path binding =
+                bindingAarWithDuplicatePayload(
+                        temporaryDirectory.resolve("duplicate-configuration.aar"),
+                        "FoundryJava.foundryextension");
+        Path project =
+                projectWithPayloads(
+                        "duplicate-configuration-entry", List.of(binding), List.of("x86_64"));
+
+        BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+        assertTrue(failure.getOutput().contains(binding.toAbsolutePath().toString()));
+        assertTrue(failure.getOutput().contains("duplicate FoundryJava.foundryextension"));
+        assertFalse(Files.exists(project.resolve(INDEX)));
+    }
+
+    @Test
+    void duplicateBridgeEntriesInsideOneBindingFailBeforeGeneration() throws IOException {
+        Path binding =
+                bindingAarWithDuplicatePayload(
+                        temporaryDirectory.resolve("duplicate-bridge.aar"),
+                        "jni/x86_64/libfoundry_java.so");
+        Path project =
+                projectWithPayloads("duplicate-bridge-entry", List.of(binding), List.of("x86_64"));
+
+        BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+        assertTrue(failure.getOutput().contains(binding.toAbsolutePath().toString()));
+        assertTrue(
+                failure.getOutput()
+                        .contains("duplicate bridge abi=x86_64 at jni/x86_64/libfoundry_java.so"));
+        assertFalse(Files.exists(project.resolve(INDEX)));
+    }
+
+    @Test
     void androidApplicationGetsLazyVariantRegistryTasks() throws IOException {
         Path project = androidProject("variant-wiring");
 
@@ -219,8 +310,65 @@ class FoundryJavaPluginTest {
                         "build/generated/java/generateReleaseFoundryJavaRegistry/"
                                 + "games/cafecito/foundry/generated/"
                                 + "FoundryGeneratedBootstrap.java");
+        Path variantConfiguration =
+                project.resolve(
+                        "build/generated/assets/generateReleaseFoundryJavaRegistry/"
+                                + "FoundryJava.foundryextension");
         assertTrue(Files.readString(variantIndex).contains("module=demo|example.DemoRegistry"));
         assertTrue(Files.readString(variantBootstrap).contains("example.DemoRegistry.PROVIDER"));
+        assertArrayEquals(BINDING_CONFIGURATION, Files.readAllBytes(variantConfiguration));
+    }
+
+    @Test
+    void androidBindingWithoutDescriptorsProducesNoRegistryOrConfiguration() throws IOException {
+        Path binding =
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("binding-without-descriptors.aar"),
+                        List.of("x86_64"));
+        Path project = androidProject("binding-without-descriptors", binding, List.of("x86_64"));
+
+        run(project, "generateDebugFoundryJavaRegistry");
+
+        Path generatedAssets =
+                project.resolve("build/generated/assets/generateDebugFoundryJavaRegistry");
+        assertFalse(Files.exists(generatedAssets.resolve("foundry_java/registry-index-v2.txt")));
+        assertFalse(Files.exists(generatedAssets.resolve("FoundryJava.foundryextension")));
+        assertFalse(
+                Files.exists(
+                        project.resolve(
+                                "build/generated/java/generateDebugFoundryJavaRegistry/"
+                                        + "games/cafecito/foundry/generated/"
+                                        + "FoundryGeneratedBootstrap.java")));
+    }
+
+    @Test
+    void androidApplicationRejectsAnEmptyRequestedAbiSetBeforeGeneratingOutputs()
+            throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("empty-requested-abis.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("arm64-v8a", "x86_64"));
+        Path project = androidProject("empty-requested-abis", binding, List.of());
+
+        BuildResult failure = runAndFail(project, "generateReleaseFoundryJavaRegistry");
+
+        assertTrue(
+                failure.getOutput()
+                        .contains("requested_abis must contain at least one Android ABI"));
+        assertTrue(failure.getOutput().contains(binding.toAbsolutePath().toString()));
+        assertFalse(
+                Files.exists(
+                        project.resolve(
+                                "build/generated/assets/generateReleaseFoundryJavaRegistry/"
+                                        + "foundry_java/registry-index-v2.txt")));
+        assertFalse(
+                Files.exists(
+                        project.resolve(
+                                "build/generated/java/generateReleaseFoundryJavaRegistry/"
+                                        + "games/cafecito/foundry/generated/"
+                                        + "FoundryGeneratedBootstrap.java")));
     }
 
     @Test
@@ -256,10 +404,15 @@ class FoundryJavaPluginTest {
                                                                     + "registry-index-v2.txt"))
                             .count());
             assertEquals(
-                    1,
+                    List.of("assets/FoundryJava.foundryextension"),
                     archive.stream()
-                            .filter(entry -> entry.getName().equals("FoundryJava.foundryextension"))
-                            .count());
+                            .map(ZipEntry::getName)
+                            .filter(name -> name.endsWith("FoundryJava.foundryextension"))
+                            .toList());
+            assertArrayEquals(
+                    BINDING_CONFIGURATION,
+                    archive.getInputStream(archive.getEntry("assets/FoundryJava.foundryextension"))
+                            .readAllBytes());
             assertTrue(archive.getEntry("lib/x86_64/libfoundry_java.so") != null);
             assertFalse(archive.stream().anyMatch(entry -> entry.getName().contains("arm64-v8a")));
             assertFalse(
@@ -270,6 +423,7 @@ class FoundryJavaPluginTest {
                 Files.readString(project.resolve("build/outputs/mapping/release/mapping.txt"));
         assertTrue(mapping.contains("games.cafecito.foundry.generated.FoundryGeneratedBootstrap"));
         assertTrue(mapping.contains("example.DemoRegistry"));
+        assertTrue(mapping.contains("example.DemoRegistry$1"));
         assertTrue(
                 Files.readString(project.resolve("build/outputs/apk/release/output-metadata.json"))
                         .contains("games.cafecito.test.custom"));
@@ -292,9 +446,77 @@ class FoundryJavaPluginTest {
 
         run(project, "assembleDebug");
 
+        assertArrayEquals(
+                BINDING_CONFIGURATION,
+                Files.readAllBytes(
+                        project.resolve(
+                                "build/generated/assets/generateDebugFoundryJavaRegistry/"
+                                        + "FoundryJava.foundryextension")));
         assertTrue(
                 Files.readString(project.resolve("build/outputs/apk/debug/output-metadata.json"))
                         .contains("games.cafecito.test"));
+    }
+
+    @Test
+    void agp891DownstreamUsesPublicVariantsAndPackagesTheValidatedPayload() throws Exception {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("agp-8.9.1-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("arm64-v8a", "x86_64"));
+        Path project = androidProject("agp-8.9.1-downstream", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        + "\nprintln 'AGP_VERSION='"
+                        + " + com.android.Version.ANDROID_GRADLE_PLUGIN_VERSION\n");
+        writeBootstrapStubs(project);
+
+        BuildResult first =
+                runWithFoundryPluginOnly(project, "assembleDebug", "--configuration-cache");
+        BuildResult second =
+                runWithFoundryPluginOnly(project, "assembleDebug", "--configuration-cache");
+
+        assertEquals(
+                TaskOutcome.SUCCESS, first.task(":generateDebugFoundryJavaRegistry").getOutcome());
+        assertTrue(first.getOutput().contains("AGP_VERSION=8.9.1"));
+        assertTrue(second.getOutput().contains("Reusing configuration cache."));
+        Path generatedAssets =
+                project.resolve("build/generated/assets/generateDebugFoundryJavaRegistry");
+        assertTrue(
+                Files.readString(generatedAssets.resolve("foundry_java/registry-index-v2.txt"))
+                        .contains("module=demo|example.DemoRegistry"));
+        assertArrayEquals(
+                BINDING_CONFIGURATION,
+                Files.readAllBytes(generatedAssets.resolve("FoundryJava.foundryextension")));
+        assertTrue(
+                Files.readString(
+                                project.resolve(
+                                        "build/generated/java/"
+                                                + "generateDebugFoundryJavaRegistry/"
+                                                + "games/cafecito/foundry/generated/"
+                                                + "FoundryGeneratedBootstrap.java"))
+                        .contains("example.DemoRegistry.PROVIDER"));
+        Path apk =
+                Files.list(project.resolve("build/outputs/apk/debug"))
+                        .filter(path -> path.getFileName().toString().endsWith(".apk"))
+                        .findFirst()
+                        .orElseThrow();
+        try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(apk.toFile())) {
+            assertTrue(archive.getEntry("lib/x86_64/libfoundry_java.so") != null);
+            assertFalse(archive.stream().anyMatch(entry -> entry.getName().contains("arm64-v8a")));
+            assertEquals(
+                    List.of("assets/FoundryJava.foundryextension"),
+                    archive.stream()
+                            .map(ZipEntry::getName)
+                            .filter(name -> name.endsWith("FoundryJava.foundryextension"))
+                            .toList());
+            assertArrayEquals(
+                    BINDING_CONFIGURATION,
+                    archive.getInputStream(archive.getEntry("assets/FoundryJava.foundryextension"))
+                            .readAllBytes());
+        }
     }
 
     @Test
@@ -392,6 +614,10 @@ class FoundryJavaPluginTest {
                 android {
                     namespace 'games.cafecito.test'
                     compileSdk 36
+                    compileOptions {
+                        sourceCompatibility JavaVersion.VERSION_17
+                        targetCompatibility JavaVersion.VERSION_17
+                    }
                     defaultConfig {
                         applicationId 'games.cafecito.test.custom'
                         minSdk 23
@@ -430,7 +656,9 @@ class FoundryJavaPluginTest {
                 """
                 package games.cafecito.foundry.runtime;
 
-                public interface FoundryModuleProvider {}
+                public interface FoundryModuleProvider {
+                    FoundryModuleDescriptor descriptor();
+                }
                 """);
         Files.writeString(
                 runtime.resolve("FoundryRegistryBootstrap.java"),
@@ -443,16 +671,115 @@ class FoundryJavaPluginTest {
                 }
                 """);
         Files.writeString(
+                runtime.resolve("FoundryExtensionAccess.java"),
+                """
+                package games.cafecito.foundry.runtime;
+
+                public interface FoundryExtensionAccess {
+                    Object construct(Object context, Object lease);
+                    Object invoke(Object target, String name, Object[] arguments);
+                    Object getProperty(Object target, String name);
+                    void setProperty(Object target, String name, Object value);
+                }
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryClassDescriptor.java"),
+                """
+                package games.cafecito.foundry.runtime;
+
+                public record FoundryClassDescriptor(FoundryExtensionAccess access) {}
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryModuleDescriptor.java"),
+                """
+                package games.cafecito.foundry.runtime;
+
+                public record FoundryModuleDescriptor(
+                        java.util.List<FoundryClassDescriptor> classes) {}
+                """);
+        Files.writeString(
+                example.resolve("Extension_FoundryTrampoline.java"),
+                """
+                package example;
+
+                public final class Extension_FoundryTrampoline {
+                    public static Object construct(Object context, Object lease) {
+                        return new Object();
+                    }
+                    public static Object invoke(Object target, String name, Object[] arguments) {
+                        return null;
+                    }
+                    public static Object getProperty(Object target, String name) {
+                        return null;
+                    }
+                    public static void setProperty(Object target, String name, Object value) {}
+                }
+                """);
+        Files.writeString(
                 example.resolve("DemoRegistry.java"),
                 """
                 package example;
 
-                public final class DemoRegistry {
+                public final class DemoRegistry
+                        implements games.cafecito.foundry.runtime.FoundryModuleProvider {
                     public static final games.cafecito.foundry.runtime.FoundryModuleProvider
-                            PROVIDER =
-                                    new games.cafecito.foundry.runtime.FoundryModuleProvider() {};
+                            PROVIDER = new DemoRegistry();
+
+                    private static final games.cafecito.foundry.runtime.FoundryModuleDescriptor
+                            DESCRIPTOR =
+                                    new games.cafecito.foundry.runtime.FoundryModuleDescriptor(
+                                            java.util.List.of(
+                                                    new games.cafecito.foundry.runtime
+                                                            .FoundryClassDescriptor(
+                                                            new games.cafecito.foundry.runtime
+                                                                    .FoundryExtensionAccess() {
+                                                                @Override
+                                                                public Object construct(
+                                                                        Object context,
+                                                                        Object lease) {
+                                                                    return Extension_FoundryTrampoline
+                                                                            .construct(context, lease);
+                                                                }
+
+                                                                @Override
+                                                                public Object invoke(
+                                                                        Object target,
+                                                                        String name,
+                                                                        Object[] arguments) {
+                                                                    return Extension_FoundryTrampoline
+                                                                            .invoke(
+                                                                                    target,
+                                                                                    name,
+                                                                                    arguments);
+                                                                }
+
+                                                                @Override
+                                                                public Object getProperty(
+                                                                        Object target,
+                                                                        String name) {
+                                                                    return Extension_FoundryTrampoline
+                                                                            .getProperty(target, name);
+                                                                }
+
+                                                                @Override
+                                                                public void setProperty(
+                                                                        Object target,
+                                                                        String name,
+                                                                        Object value) {
+                                                                    Extension_FoundryTrampoline
+                                                                            .setProperty(
+                                                                                    target,
+                                                                                    name,
+                                                                                    value);
+                                                                }
+                                                            })));
 
                     private DemoRegistry() {}
+
+                    @Override
+                    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor() {
+                        return DESCRIPTOR;
+                    }
                 }
                 """);
     }
@@ -495,14 +822,53 @@ class FoundryJavaPluginTest {
                 .buildAndFail();
     }
 
+    private BuildResult runWithFoundryPluginOnly(Path project, String... arguments)
+            throws Exception {
+        Path classes =
+                Path.of(
+                        FoundryJavaPlugin.class
+                                .getProtectionDomain()
+                                .getCodeSource()
+                                .getLocation()
+                                .toURI());
+        Path descriptor =
+                Path.of(
+                        FoundryJavaPlugin.class
+                                .getClassLoader()
+                                .getResource(
+                                        "META-INF/gradle-plugins/"
+                                                + "games.cafecito.foundry.java.properties")
+                                .toURI());
+        Path resources = descriptor.getParent().getParent().getParent();
+        List<File> pluginClasspath = new ArrayList<>(List.of(classes.toFile(), resources.toFile()));
+        for (String entry :
+                System.getProperty("foundry.agp891.plugin.classpath")
+                        .split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+            pluginClasspath.add(Path.of(entry).toFile());
+        }
+        return GradleRunner.create()
+                .withProjectDir(project.toFile())
+                .withPluginClasspath(pluginClasspath)
+                .withArguments(arguments)
+                .forwardOutput()
+                .build();
+    }
+
     private Path moduleJar(Path output, String module, String registry) throws IOException {
+        return moduleJarAtPath(
+                output,
+                "META-INF/foundry-java/modules/" + module + ".descriptor",
+                descriptor(module, registry));
+    }
+
+    private Path moduleJarAtPath(Path output, String descriptorPath, String descriptorContents)
+            throws IOException {
         Files.createDirectories(output.getParent());
         try (JarOutputStream archive = new JarOutputStream(Files.newOutputStream(output))) {
-            JarEntry entry =
-                    new JarEntry("META-INF/foundry-java/modules/" + module + ".descriptor");
+            JarEntry entry = new JarEntry(descriptorPath);
             entry.setTime(0);
             archive.putNextEntry(entry);
-            archive.write(descriptor(module, registry).getBytes(StandardCharsets.UTF_8));
+            archive.write(descriptorContents.getBytes(StandardCharsets.UTF_8));
             archive.closeEntry();
         }
         return output;
@@ -510,26 +876,44 @@ class FoundryJavaPluginTest {
 
     private Path bindingAar(Path output, String module, String registry, List<String> abis)
             throws IOException {
+        return bindingAar(output, descriptor(module, registry), abis);
+    }
+
+    private Path bindingAarWithoutDescriptor(Path output, List<String> abis) throws IOException {
+        return bindingAar(output, null, abis);
+    }
+
+    private Path bindingAar(Path output, String descriptorContents, List<String> abis)
+            throws IOException {
         Files.createDirectories(output.getParent());
-        java.io.ByteArrayOutputStream classesBytes = new java.io.ByteArrayOutputStream();
-        try (JarOutputStream classes = new JarOutputStream(classesBytes)) {
-            JarEntry descriptor =
-                    new JarEntry("META-INF/foundry-java/modules/" + module + ".descriptor");
-            descriptor.setTime(0);
-            classes.putNextEntry(descriptor);
-            classes.write(descriptor(module, registry).getBytes(StandardCharsets.UTF_8));
-            classes.closeEntry();
-            JarEntry configuration = new JarEntry("FoundryJava.foundryextension");
-            configuration.setTime(0);
-            classes.putNextEntry(configuration);
-            classes.write(
-                    """
-                    [configuration]
-                    entry_symbol = "foundry_java_library_init"
-                    """
-                            .getBytes(StandardCharsets.UTF_8));
-            classes.closeEntry();
+        String descriptorPath = null;
+        if (descriptorContents != null) {
+            String module =
+                    descriptorContents
+                            .lines()
+                            .filter(line -> line.startsWith("module="))
+                            .findFirst()
+                            .orElseThrow()
+                            .substring("module=".length());
+            descriptorPath = "META-INF/foundry-java/modules/" + module + ".descriptor";
         }
+        return bindingAarAtPath(output, descriptorPath, descriptorContents, abis);
+    }
+
+    private Path bindingAarAtPath(
+            Path output, String descriptorPath, String descriptorContents, List<String> abis)
+            throws IOException {
+        Files.createDirectories(output.getParent());
+        String registry =
+                descriptorContents == null
+                        ? "example.DemoRegistry"
+                        : descriptorContents
+                                .lines()
+                                .filter(line -> line.startsWith("registry="))
+                                .findFirst()
+                                .orElseThrow()
+                                .substring("registry=".length());
+        byte[] classesBytes = classesJar(descriptorPath, descriptorContents, true);
         try (ZipOutputStream archive = new ZipOutputStream(Files.newOutputStream(output))) {
             ZipEntry manifest = new ZipEntry("AndroidManifest.xml");
             manifest.setTime(0);
@@ -542,16 +926,21 @@ class FoundryJavaPluginTest {
             ZipEntry classes = new ZipEntry("classes.jar");
             classes.setTime(0);
             archive.putNextEntry(classes);
-            archive.write(classesBytes.toByteArray());
+            archive.write(classesBytes);
             archive.closeEntry();
             ZipEntry consumerRules = new ZipEntry("proguard.txt");
             consumerRules.setTime(0);
             archive.putNextEntry(consumerRules);
             archive.write(
-                    """
+                    ("""
                     -keep class games.cafecito.foundry.generated.FoundryGeneratedBootstrap { *; }
-                    -keep class example.DemoRegistry { *; }
+                    -keep class %s {
+                        public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER;
+                        public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor();
+                    }
+                    -keep class example.Extension_FoundryTrampoline { public static *** *(...); }
                     """
+                                    .formatted(registry))
                             .getBytes(StandardCharsets.UTF_8));
             archive.closeEntry();
             for (String abi : abis) {
@@ -563,6 +952,123 @@ class FoundryJavaPluginTest {
             }
         }
         return output;
+    }
+
+    private Path bindingAarWithDuplicatePayload(Path output, String duplicatePath)
+            throws IOException {
+        Files.createDirectories(output.getParent());
+        boolean duplicateConfiguration = duplicatePath.equals("FoundryJava.foundryextension");
+        byte[] classesBytes =
+                classesJar(
+                        "META-INF/foundry-java/modules/demo.descriptor",
+                        descriptor("demo", "example.DemoRegistry"),
+                        !duplicateConfiguration);
+        List<RawZipEntry> entries =
+                new ArrayList<>(
+                        List.of(
+                                new RawZipEntry(
+                                        "AndroidManifest.xml",
+                                        "<manifest package=\"games.cafecito.binding\" />\n"
+                                                .getBytes(StandardCharsets.UTF_8)),
+                                new RawZipEntry("classes.jar", classesBytes)));
+        if (duplicateConfiguration) {
+            entries.add(new RawZipEntry(duplicatePath, BINDING_CONFIGURATION));
+            entries.add(new RawZipEntry(duplicatePath, BINDING_CONFIGURATION));
+            entries.add(new RawZipEntry("jni/x86_64/libfoundry_java.so", new byte[] {0}));
+        } else {
+            entries.add(new RawZipEntry(duplicatePath, new byte[] {0}));
+            entries.add(new RawZipEntry(duplicatePath, new byte[] {0}));
+        }
+        writeRawZip(output, entries);
+        return output;
+    }
+
+    private static byte[] classesJar(
+            String descriptorPath, String descriptorContents, boolean includeConfiguration)
+            throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (JarOutputStream classes = new JarOutputStream(output)) {
+            if (descriptorContents != null) {
+                JarEntry descriptor = new JarEntry(descriptorPath);
+                descriptor.setTime(0);
+                classes.putNextEntry(descriptor);
+                classes.write(descriptorContents.getBytes(StandardCharsets.UTF_8));
+                classes.closeEntry();
+            }
+            if (includeConfiguration) {
+                JarEntry configuration = new JarEntry("FoundryJava.foundryextension");
+                configuration.setTime(0);
+                classes.putNextEntry(configuration);
+                classes.write(BINDING_CONFIGURATION);
+                classes.closeEntry();
+            }
+        }
+        return output.toByteArray();
+    }
+
+    private static void writeRawZip(Path output, List<RawZipEntry> entries) throws IOException {
+        ByteArrayOutputStream archive = new ByteArrayOutputStream();
+        List<Integer> offsets = new ArrayList<>();
+        List<Long> checksums = new ArrayList<>();
+        for (RawZipEntry entry : entries) {
+            offsets.add(archive.size());
+            CRC32 checksum = new CRC32();
+            checksum.update(entry.contents());
+            checksums.add(checksum.getValue());
+            byte[] name = entry.name().getBytes(StandardCharsets.UTF_8);
+            writeLittleEndian(archive, 0x04034b50, 4);
+            writeLittleEndian(archive, 20, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, checksum.getValue(), 4);
+            writeLittleEndian(archive, entry.contents().length, 4);
+            writeLittleEndian(archive, entry.contents().length, 4);
+            writeLittleEndian(archive, name.length, 2);
+            writeLittleEndian(archive, 0, 2);
+            archive.write(name);
+            archive.write(entry.contents());
+        }
+        int centralDirectoryOffset = archive.size();
+        for (int index = 0; index < entries.size(); index++) {
+            RawZipEntry entry = entries.get(index);
+            byte[] name = entry.name().getBytes(StandardCharsets.UTF_8);
+            writeLittleEndian(archive, 0x02014b50, 4);
+            writeLittleEndian(archive, 20, 2);
+            writeLittleEndian(archive, 20, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, checksums.get(index), 4);
+            writeLittleEndian(archive, entry.contents().length, 4);
+            writeLittleEndian(archive, entry.contents().length, 4);
+            writeLittleEndian(archive, name.length, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 2);
+            writeLittleEndian(archive, 0, 4);
+            writeLittleEndian(archive, offsets.get(index), 4);
+            archive.write(name);
+        }
+        int centralDirectorySize = archive.size() - centralDirectoryOffset;
+        writeLittleEndian(archive, 0x06054b50, 4);
+        writeLittleEndian(archive, 0, 2);
+        writeLittleEndian(archive, 0, 2);
+        writeLittleEndian(archive, entries.size(), 2);
+        writeLittleEndian(archive, entries.size(), 2);
+        writeLittleEndian(archive, centralDirectorySize, 4);
+        writeLittleEndian(archive, centralDirectoryOffset, 4);
+        writeLittleEndian(archive, 0, 2);
+        Files.write(output, archive.toByteArray());
+    }
+
+    private static void writeLittleEndian(ByteArrayOutputStream output, long value, int byteCount) {
+        for (int index = 0; index < byteCount; index++) {
+            output.write((int) (value >>> (index * 8)) & 0xff);
+        }
     }
 
     private void publishModule(
@@ -612,8 +1118,10 @@ class FoundryJavaPluginTest {
                 generator_version=1
                 runtime_contract_version=1
                 bridge_contract_version=1
-                class=example.Extension|Extension|Node|SCENE|
+                class=example.Extension|Extension|example.Node|SCENE|
                 """
                 .formatted(module, registry, API_SHA);
     }
+
+    private record RawZipEntry(String name, byte[] contents) {}
 }

@@ -1,3 +1,4 @@
+import org.gradle.api.tasks.testing.Test
 import org.gradle.plugin.devel.tasks.PluginUnderTestMetadata
 
 plugins {
@@ -16,8 +17,22 @@ val agpTestPluginClasspath =
         ),
     )
 
+val agp891TestPluginClasspath =
+    configurations.detachedConfiguration(
+        dependencies.create("com.android.tools.build:gradle:8.9.1"),
+    )
+val agp891TestPluginFiles = agp891TestPluginClasspath.files
+
 tasks.named<PluginUnderTestMetadata>("pluginUnderTestMetadata") {
     pluginClasspath.from(agpTestPluginClasspath)
+}
+
+tasks.withType<Test>().configureEach {
+    inputs.files(agp891TestPluginFiles)
+    systemProperty(
+        "foundry.agp891.plugin.classpath",
+        agp891TestPluginFiles.joinToString(File.pathSeparator),
+    )
 }
 
 gradlePlugin {

@@ -29,8 +29,15 @@ final class DescriptorValidator {
                     "[\\p{javaJavaIdentifierStart}][\\p{javaJavaIdentifierPart}]*"
                             + "(?:\\.[\\p{javaJavaIdentifierStart}]"
                             + "[\\p{javaJavaIdentifierPart}]*)+");
+    private static final Pattern JAVA_NAME =
+            Pattern.compile("[\\p{javaJavaIdentifierStart}][\\p{javaJavaIdentifierPart}]*");
+    private static final Pattern EXPORTED_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern VERSION = Pattern.compile("[1-9][0-9]*");
+    private static final Set<String> INITIALIZATION_LEVELS =
+            Set.of("CORE", "SERVERS", "SCENE", "EDITOR");
+    private static final Set<String> PRIMITIVE_TYPES =
+            Set.of("boolean", "byte", "short", "int", "long", "char", "float", "double");
 
     private DescriptorValidator() {}
 
@@ -192,6 +199,13 @@ final class DescriptorValidator {
         if (payloads.isEmpty() && requestedAbis.isEmpty()) {
             return;
         }
+        if (requestedAbis.isEmpty()) {
+            for (AndroidPayload bridge : bridges) {
+                diagnostics.add(
+                        bridge.artifact()
+                                + ": requested_abis must contain at least one Android ABI");
+            }
+        }
         if (bridges.size() != 1) {
             diagnostics.add("bridge payload count=" + bridges.size() + "; expected 1");
         }
@@ -299,6 +313,127 @@ final class DescriptorValidator {
                 throw invalid(artifact, path, kind + "=" + value);
             }
         }
+        if (kind.equals("class")) {
+            if (!QUALIFIED_JAVA_NAME.matcher(parts[0]).matches()
+                    || !EXPORTED_NAME.matcher(parts[1]).matches()
+                    || !QUALIFIED_JAVA_NAME.matcher(parts[2]).matches()
+                    || !INITIALIZATION_LEVELS.contains(parts[3])
+                    || !validDependencies(parts[4])) {
+                throw invalid(artifact, path, kind + "=" + value);
+            }
+            return;
+        }
+        if (!QUALIFIED_JAVA_NAME.matcher(parts[0]).matches()
+                || !EXPORTED_NAME.matcher(parts[1]).matches()
+                || !JAVA_NAME.matcher(parts[2]).matches()) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+        boolean validSignature =
+                kind.equals("property")
+                        ? validJavaType(parts[3], false)
+                        : validMethodSignature(parts[3], kind.equals("signal"));
+        if (!validSignature) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+    }
+
+    private static boolean validDependencies(String value) {
+        if (value.isEmpty()) {
+            return true;
+        }
+        for (String dependency : value.split(",", -1)) {
+            if (!QUALIFIED_JAVA_NAME.matcher(dependency).matches()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean validMethodSignature(String value, boolean requireVoid) {
+        int opening = value.indexOf('(');
+        if (opening <= 0 || !value.endsWith(")") || value.indexOf('(', opening + 1) >= 0) {
+            return false;
+        }
+        String returnType = value.substring(0, opening);
+        if ((requireVoid && !returnType.equals("void")) || !validJavaType(returnType, true)) {
+            return false;
+        }
+        String parameters = value.substring(opening + 1, value.length() - 1);
+        if (parameters.isEmpty()) {
+            return true;
+        }
+        List<String> types = splitTopLevelTypes(parameters);
+        return types != null && types.stream().allMatch(type -> validJavaType(type, false));
+    }
+
+    private static boolean validJavaType(String value, boolean allowVoid) {
+        if (PRIMITIVE_TYPES.contains(value)) {
+            return true;
+        }
+        if (value.equals("void")) {
+            return allowVoid;
+        }
+        int genericStart = value.indexOf('<');
+        if (genericStart < 0) {
+            return QUALIFIED_JAVA_NAME.matcher(value).matches();
+        }
+        if (!value.endsWith(">")
+                || !QUALIFIED_JAVA_NAME.matcher(value.substring(0, genericStart)).matches()) {
+            return false;
+        }
+        List<String> arguments =
+                splitTopLevelTypes(value.substring(genericStart + 1, value.length() - 1));
+        if (arguments == null || arguments.isEmpty()) {
+            return false;
+        }
+        for (String argument : arguments) {
+            String trimmed = argument.trim();
+            if (trimmed.equals("?")) {
+                continue;
+            }
+            if (trimmed.startsWith("? extends ")) {
+                trimmed = trimmed.substring("? extends ".length());
+            } else if (trimmed.startsWith("? super ")) {
+                trimmed = trimmed.substring("? super ".length());
+            }
+            if (!validJavaType(trimmed, false)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<String> splitTopLevelTypes(String value) {
+        List<String> types = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int index = 0; index < value.length(); index++) {
+            char character = value.charAt(index);
+            if (character == '<') {
+                depth++;
+            } else if (character == '>') {
+                depth--;
+                if (depth < 0) {
+                    return null;
+                }
+            } else if (character == ',' && depth == 0) {
+                String type = value.substring(start, index);
+                if (type.isBlank()) {
+                    return null;
+                }
+                types.add(type);
+                start = index + 1;
+            }
+        }
+        if (depth != 0) {
+            return null;
+        }
+        String type = value.substring(start);
+        if (type.isBlank()) {
+            return null;
+        }
+        types.add(type);
+        return types;
     }
 
     private static IllegalArgumentException invalid(String artifact, String path, String detail) {

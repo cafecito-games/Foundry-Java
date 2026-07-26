@@ -65,7 +65,9 @@ public abstract class RegistryIndexTask extends DefaultTask {
             }
         }
         List<FoundryDescriptor> modules = readModules();
-        List<DescriptorValidator.AndroidPayload> payloads = readPayloads();
+        List<PayloadScan> payloadScans = readPayloads();
+        List<DescriptorValidator.AndroidPayload> payloads =
+                payloadScans.stream().map(PayloadScan::validation).toList();
         modules = DescriptorValidator.validateGraph(modules, payloads, requestedAbis);
         getLogger()
                 .lifecycle(
@@ -81,6 +83,12 @@ public abstract class RegistryIndexTask extends DefaultTask {
                         javaSources);
         if (modules.isEmpty()) {
             return;
+        }
+
+        for (PayloadScan payload : payloadScans) {
+            if (payload.configurationBytes() != null) {
+                Files.write(assets.resolve(FIXED_CONFIGURATION), payload.configurationBytes());
+            }
         }
 
         Path index = assets.resolve("foundry_java/registry-index-v2.txt");
@@ -126,8 +134,8 @@ public abstract class RegistryIndexTask extends DefaultTask {
                             .sorted()
                             .toList()) {
                 modules.add(
-                        DescriptorValidator.parse(
-                                artifact.toString(),
+                        parseDescriptor(
+                                artifact,
                                 artifact.relativize(descriptor).toString().replace('\\', '/'),
                                 Files.readString(descriptor, StandardCharsets.UTF_8)));
             }
@@ -151,9 +159,7 @@ public abstract class RegistryIndexTask extends DefaultTask {
                         new String(
                                 archive.getInputStream(descriptor).readAllBytes(),
                                 StandardCharsets.UTF_8);
-                modules.add(
-                        DescriptorValidator.parse(
-                                artifact.toString(), descriptor.getName(), contents));
+                modules.add(parseDescriptor(artifact, descriptor.getName(), contents));
             }
             ZipEntry classesJar = archive.getEntry("classes.jar");
             if (classesJar != null) {
@@ -173,23 +179,24 @@ public abstract class RegistryIndexTask extends DefaultTask {
                         && entry.getName().startsWith(DESCRIPTOR_PREFIX)
                         && entry.getName().endsWith(DESCRIPTOR_SUFFIX)) {
                     modules.add(
-                            DescriptorValidator.parse(
-                                    artifact.toString(),
+                            parseDescriptor(
+                                    artifact,
                                     "classes.jar!" + entry.getName(),
+                                    entry.getName(),
                                     new String(archive.readAllBytes(), StandardCharsets.UTF_8)));
                 }
             }
         }
     }
 
-    private List<DescriptorValidator.AndroidPayload> readPayloads() throws IOException {
-        List<DescriptorValidator.AndroidPayload> payloads = new ArrayList<>();
+    private List<PayloadScan> readPayloads() throws IOException {
+        List<PayloadScan> payloads = new ArrayList<>();
         for (Path artifact : sortedArtifacts(getPayloadArtifacts())) {
             if (!Files.isRegularFile(artifact)) {
                 continue;
             }
             try (ZipFile archive = new ZipFile(artifact.toFile())) {
-                boolean configuration = false;
+                byte[] configuration = null;
                 Set<String> bridgeAbis = new java.util.TreeSet<>();
                 for (ZipEntry entry :
                         archive.stream().filter(item -> !item.isDirectory()).toList()) {
@@ -200,43 +207,88 @@ public abstract class RegistryIndexTask extends DefaultTask {
                                 artifact + ": forbidden host payload " + name + ".");
                     }
                     String bridgeAbi = bridgeAbi(name);
-                    if (bridgeAbi != null) {
-                        bridgeAbis.add(bridgeAbi);
+                    if (bridgeAbi != null && !bridgeAbis.add(bridgeAbi)) {
+                        throw new GradleException(
+                                artifact + ": duplicate bridge abi=" + bridgeAbi + " at " + name);
                     }
                     if (name.equals(FIXED_CONFIGURATION)) {
-                        configuration = true;
+                        if (configuration != null) {
+                            throw new GradleException(
+                                    artifact
+                                            + ": duplicate "
+                                            + FIXED_CONFIGURATION
+                                            + " entries at AAR root.");
+                        }
+                        configuration = archive.getInputStream(entry).readAllBytes();
                     }
                 }
                 ZipEntry classesJar = archive.getEntry("classes.jar");
-                if (classesJar != null
-                        && nestedEntryExists(
-                                archive.getInputStream(classesJar), FIXED_CONFIGURATION)) {
-                    configuration = true;
+                if (classesJar != null) {
+                    byte[] nestedConfiguration =
+                            nestedEntryBytes(
+                                    archive.getInputStream(classesJar), FIXED_CONFIGURATION);
+                    if (configuration != null && nestedConfiguration != null) {
+                        throw new GradleException(
+                                artifact
+                                        + ": duplicate "
+                                        + FIXED_CONFIGURATION
+                                        + " entries at AAR root and classes.jar.");
+                    }
+                    if (nestedConfiguration != null) {
+                        configuration = nestedConfiguration;
+                    }
                 }
-                if (configuration || !bridgeAbis.isEmpty()) {
+                if (configuration != null || !bridgeAbis.isEmpty()) {
                     payloads.add(
-                            new DescriptorValidator.AndroidPayload(
-                                    artifact.toString(),
-                                    !bridgeAbis.isEmpty(),
-                                    configuration,
-                                    bridgeAbis));
+                            new PayloadScan(
+                                    new DescriptorValidator.AndroidPayload(
+                                            artifact.toString(),
+                                            !bridgeAbis.isEmpty(),
+                                            configuration != null,
+                                            bridgeAbis),
+                                    configuration));
                 }
             }
         }
         return payloads;
     }
 
-    private static boolean nestedEntryExists(InputStream input, String expected)
-            throws IOException {
+    private static FoundryDescriptor parseDescriptor(
+            Path artifact, String descriptorPath, String contents) {
+        return parseDescriptor(artifact, descriptorPath, descriptorPath, contents);
+    }
+
+    private static FoundryDescriptor parseDescriptor(
+            Path artifact, String descriptorPath, String contractPath, String contents) {
+        FoundryDescriptor descriptor =
+                DescriptorValidator.parse(artifact.toString(), descriptorPath, contents);
+        String expectedPath = DESCRIPTOR_PREFIX + descriptor.module() + DESCRIPTOR_SUFFIX;
+        if (!contractPath.equals(expectedPath)) {
+            throw new GradleException(
+                    descriptor.identity()
+                            + ": descriptor path must be "
+                            + expectedPath
+                            + "; found "
+                            + contractPath);
+        }
+        return descriptor;
+    }
+
+    private static byte[] nestedEntryBytes(InputStream input, String expected) throws IOException {
         try (ZipInputStream archive = new ZipInputStream(input)) {
+            byte[] contents = null;
             ZipEntry entry;
             while ((entry = archive.getNextEntry()) != null) {
                 if (!entry.isDirectory() && entry.getName().equals(expected)) {
-                    return true;
+                    if (contents != null) {
+                        throw new GradleException(
+                                "classes.jar contains duplicate " + expected + " entries.");
+                    }
+                    contents = archive.readAllBytes();
                 }
             }
+            return contents;
         }
-        return false;
     }
 
     private static String bridgeAbi(String name) {
@@ -318,5 +370,17 @@ public abstract class RegistryIndexTask extends DefaultTask {
             }
         }
         Files.createDirectories(directory);
+    }
+
+    private record PayloadScan(
+            DescriptorValidator.AndroidPayload validation, byte[] configurationBytes) {
+        private PayloadScan {
+            configurationBytes = configurationBytes == null ? null : configurationBytes.clone();
+        }
+
+        @Override
+        public byte[] configurationBytes() {
+            return configurationBytes == null ? null : configurationBytes.clone();
+        }
     }
 }

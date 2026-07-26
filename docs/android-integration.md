@@ -83,18 +83,21 @@ META-INF/foundry-java/modules/<module>.descriptor
 With one or more modules, the task writes:
 
 - `foundry_java/registry-index-v2.txt` relative to
-  `build/generated/assets/generate<Variant>FoundryJavaRegistry/`; and
+  `build/generated/assets/generate<Variant>FoundryJavaRegistry/`;
+- `FoundryJava.foundryextension` at the root of that generated assets directory; and
 - `games/cafecito/foundry/generated/FoundryGeneratedBootstrap.java` relative to
   `build/generated/java/generate<Variant>FoundryJavaRegistry/`.
 
-The packaged asset path is `assets/foundry_java/registry-index-v2.txt`. The index records the common
+The packaged asset paths are `assets/foundry_java/registry-index-v2.txt` and
+`assets/FoundryJava.foundryextension`. The configuration is copied byte-for-byte from the single
+validated binding AAR; the plugin never synthesizes or republishes it. The index records the common
 API, generator, runtime, and bridge provenance followed by modules sorted by stable module and
 registry identity. The generated Java source directly references each registry's `PROVIDER` field
 and exposes the immutable result through `FoundryGeneratedBootstrap.bootstrap()`.
 
-Dependency declaration order, filesystem order, and archive entry order cannot change either
-generated file. An application with zero descriptors produces neither an opt-in registry asset nor
-a generated bootstrap class.
+Dependency declaration order, filesystem order, and archive entry order cannot change the generated
+files. An application with zero descriptors produces no registry asset, copied configuration, or
+generated bootstrap class.
 
 When the plugin is applied outside an Android application, the explicit supplemental workflow keeps
 the task `generateFoundryJavaRegistry` and the non-variant paths

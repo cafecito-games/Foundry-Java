@@ -156,7 +156,57 @@ class DescriptorValidatorTest {
                                 valid.replace(
                                         "method=demo.SpinningCube|reset|reset|void()",
                                         "method=demo.SpinningCube||reset|void()"),
-                                "method="));
+                                "method="),
+                        new InvalidDescriptor(
+                                "class java name",
+                                valid.replace("class=demo.SpinningCube|", "class=not-a-java-name|"),
+                                "class=not-a-java-name|"),
+                        new InvalidDescriptor(
+                                "class exported name",
+                                valid.replace("|SpinningCube|", "|spinning-cube|"),
+                                "class=demo.SpinningCube|spinning-cube|"),
+                        new InvalidDescriptor(
+                                "base java name",
+                                valid.replace("|demo.EngineNode|SCENE|", "|not-a-base|SCENE|"),
+                                "class=demo.SpinningCube|SpinningCube|not-a-base|"),
+                        new InvalidDescriptor(
+                                "initialization level",
+                                valid.replace("|SCENE|", "|WORLD|"),
+                                "class=demo.SpinningCube|SpinningCube|demo.EngineNode|WORLD|"),
+                        new InvalidDescriptor(
+                                "initialization dependency",
+                                valid.replace("|SCENE|", "|SCENE|demo.Dependency,not-a-dependency"),
+                                "not-a-dependency"),
+                        new InvalidDescriptor(
+                                "member owner",
+                                valid.replace(
+                                        "method=demo.SpinningCube|reset|reset|void()",
+                                        "method=not-an-owner|reset|reset|void()"),
+                                "method=not-an-owner|"),
+                        new InvalidDescriptor(
+                                "member exported name",
+                                valid.replace(
+                                        "method=demo.SpinningCube|reset|reset|void()",
+                                        "method=demo.SpinningCube|bad-name|reset|void()"),
+                                "method=demo.SpinningCube|bad-name|"),
+                        new InvalidDescriptor(
+                                "member java name",
+                                valid.replace(
+                                        "method=demo.SpinningCube|reset|reset|void()",
+                                        "method=demo.SpinningCube|reset|bad-name|void()"),
+                                "method=demo.SpinningCube|reset|bad-name|"),
+                        new InvalidDescriptor(
+                                "method signature",
+                                valid.replace(
+                                        "method=demo.SpinningCube|reset|reset|void()",
+                                        "method=demo.SpinningCube|reset|reset|void("),
+                                "method=demo.SpinningCube|reset|reset|void("),
+                        new InvalidDescriptor(
+                                "property signature",
+                                valid.replace(
+                                        "property=demo.SpinningCube|speed|speed|double",
+                                        "property=demo.SpinningCube|speed|speed|not a type"),
+                                "property=demo.SpinningCube|speed|speed|not a type"));
 
         for (InvalidDescriptor invalid : cases) {
             assertInvalid(invalid.name(), invalid.contents(), invalid.expected());
@@ -307,6 +357,20 @@ class DescriptorValidatorTest {
                         Set.of("x86_64", "arm64-v8a"));
 
         assertContainsAll(failure.getMessage(), "bridge-arm64.aar", "abi=x86_64");
+    }
+
+    @Test
+    void rejectsEmptyRequestedAbisWhenBridgePayloadIsPresent() {
+        IllegalArgumentException failure =
+                assertGraphInvalid(
+                        List.of(parse("demo.jar", "demo", "example.Demo", API_SHA, "1", "1", "1")),
+                        payloads(),
+                        Set.of());
+
+        assertContainsAll(
+                failure.getMessage(),
+                "foundry-java-android.aar",
+                "requested_abis must contain at least one Android ABI");
     }
 
     @Test
