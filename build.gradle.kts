@@ -66,21 +66,23 @@ val requiredProjects = setOf(
     "foundry-java-gradle-plugin", "foundry-java-kotlin", "foundry-java-test",
 )
 
+val resolveLockTasks = allprojects.map { project ->
+    project.tasks.register("resolveAndLockProject") {
+        notCompatibleWithConfigurationCache("Resolves project dependency configurations for lock generation.")
+        doLast {
+            project.configurations.filter {
+                it.isCanBeResolved &&
+                    (it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath")) &&
+                    !it.name.contains("Test", ignoreCase = true)
+            }.forEach { it.resolve() }
+        }
+    }
+}
+
 tasks.register("resolveAndLockAll") {
     group = "verification"
-    description = "Resolves every resolvable configuration in every project for dependency locking."
-    notCompatibleWithConfigurationCache("Resolves project dependency configurations for lock generation.")
-    dependsOn(allprojects.map { project ->
-        project.tasks.register("resolveAndLockProject") {
-            doLast {
-                project.configurations.filter {
-                    it.isCanBeResolved &&
-                        (it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath")) &&
-                        !it.name.contains("AndroidTest", ignoreCase = true)
-                }.forEach { it.resolve() }
-            }
-        }
-    })
+    description = "Resolves every relevant project configuration for dependency locking."
+    dependsOn(resolveLockTasks)
 }
 
 tasks.register("verifyRepositoryContract") {
