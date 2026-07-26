@@ -459,35 +459,64 @@ final class ExtensionValidator {
         } else {
             checkAccessorReuse(usedAccessors, getter, field, property);
             List<ExecutableElement> candidates = methodsNamed(extension, getter);
-            if (candidates.stream()
-                    .noneMatch(
-                            method ->
-                                    isPublicInstance(method)
-                                            && method.getParameters().isEmpty()
-                                            && types.isSameType(
-                                                    method.getReturnType(), field.asType()))) {
+            Optional<ExecutableElement> matchingGetter =
+                    candidates.stream()
+                            .filter(
+                                    method ->
+                                            isPublicInstance(method)
+                                                    && method.getParameters().isEmpty()
+                                                    && types.isSameType(
+                                                            method.getReturnType(), field.asType()))
+                            .findFirst();
+            if (matchingGetter.isEmpty()) {
                 error(
                         field,
                         property,
                         "property getter " + getter + " must return " + field.asType());
+            } else {
+                matchingGetter
+                        .filter(this::declaresCheckedException)
+                        .ifPresent(
+                                method ->
+                                        error(
+                                                field,
+                                                property,
+                                                "property getter "
+                                                        + getter
+                                                        + " cannot declare checked exceptions"));
             }
         }
         if (!setter.isEmpty()) {
             checkAccessorReuse(usedAccessors, setter, field, property);
             List<ExecutableElement> candidates = methodsNamed(extension, setter);
-            if (candidates.stream()
-                    .noneMatch(
-                            method ->
-                                    isPublicInstance(method)
-                                            && method.getReturnType().getKind() == TypeKind.VOID
-                                            && method.getParameters().size() == 1
-                                            && types.isSameType(
-                                                    method.getParameters().get(0).asType(),
-                                                    field.asType()))) {
+            Optional<ExecutableElement> matchingSetter =
+                    candidates.stream()
+                            .filter(
+                                    method ->
+                                            isPublicInstance(method)
+                                                    && method.getReturnType().getKind()
+                                                            == TypeKind.VOID
+                                                    && method.getParameters().size() == 1
+                                                    && types.isSameType(
+                                                            method.getParameters().get(0).asType(),
+                                                            field.asType()))
+                            .findFirst();
+            if (matchingSetter.isEmpty()) {
                 error(
                         field,
                         property,
                         "property setter " + setter + " must accept exactly " + field.asType());
+            } else {
+                matchingSetter
+                        .filter(this::declaresCheckedException)
+                        .ifPresent(
+                                method ->
+                                        error(
+                                                field,
+                                                property,
+                                                "property setter "
+                                                        + setter
+                                                        + " cannot declare checked exceptions"));
             }
         }
     }

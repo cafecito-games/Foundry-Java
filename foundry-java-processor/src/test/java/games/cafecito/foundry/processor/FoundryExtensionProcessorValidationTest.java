@@ -326,6 +326,41 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
+    void rejectsCheckedPropertyAccessorsWithoutWritingRegistrationArtifacts() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "ThrowingAccessors",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class ThrowingAccessors extends EngineNode {
+                            @FoundryProperty(getter = "read")
+                            private int readable;
+                            public int read() throws java.io.IOException { return readable; }
+                            @FoundryProperty(getter = "safe", setter = "write")
+                            private int writable;
+                            public int safe() { return writable; }
+                            public void write(int value) throws java.io.IOException {
+                                writable = value;
+                            }
+                        }
+                        """);
+
+        assertDiagnostic(
+                result,
+                "property getter read cannot declare checked exceptions",
+                "ThrowingAccessors",
+                5);
+        assertDiagnostic(
+                result,
+                "property setter write cannot declare checked exceptions",
+                "ThrowingAccessors",
+                8);
+        assertNoRegistrationArtifacts(result);
+    }
+
+    @Test
     void rejectsInvalidSignalsAndInitializationDependencies() throws IOException {
         Map<String, String> sources = baseSources();
         sources.put(
@@ -536,7 +571,7 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
-    void allowsUncheckedExceptionsOnConstructorsAndExportedMethods() throws IOException {
+    void allowsUncheckedExceptionsOnCallableMembers() throws IOException {
         ProcessorCompilation.Result result =
                 compile(
                         "UncheckedExceptions",
@@ -546,6 +581,12 @@ class FoundryExtensionProcessorValidationTest {
                         @FoundryClass(base = EngineNode.class)
                         public final class UncheckedExceptions extends EngineNode {
                             public UncheckedExceptions() throws IllegalStateException {}
+                            @FoundryProperty(getter = "read", setter = "write")
+                            private int value;
+                            public int read() throws IllegalStateException { return value; }
+                            public void write(int value) throws AssertionError {
+                                this.value = value;
+                            }
                             @FoundryMethod
                             public void invoke() throws IllegalArgumentException, AssertionError {}
                         }
@@ -708,5 +749,23 @@ class FoundryExtensionProcessorValidationTest {
                 diagnostic.getSource().getName());
         assertEquals(line, diagnostic.getLineNumber(), diagnostic.getMessage(null));
         assertTrue(diagnostic.getColumnNumber() > 0, "diagnostic must include a source column");
+    }
+
+    private static void assertNoRegistrationArtifacts(ProcessorCompilation.Result result) {
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(
+                                path ->
+                                        path.endsWith("_FoundryTrampoline.java")
+                                                || path.endsWith("Registry.java")),
+                result.generatedSources().keySet().toString());
+        assertTrue(
+                result.classOutput().keySet().stream()
+                        .noneMatch(
+                                path ->
+                                        path.startsWith("META-INF/foundry-java/modules/")
+                                                || path.startsWith(
+                                                        "META-INF/proguard/foundry-java-")),
+                result.classOutput().keySet().toString());
     }
 }
