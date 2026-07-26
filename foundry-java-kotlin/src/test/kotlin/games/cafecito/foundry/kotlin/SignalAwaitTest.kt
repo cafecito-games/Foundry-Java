@@ -1,5 +1,6 @@
 package games.cafecito.foundry.kotlin
 
+import games.cafecito.foundry.runtime.FoundryObject
 import games.cafecito.foundry.runtime.FoundryObjectDisposedException
 import games.cafecito.foundry.runtime.FoundrySignal
 import games.cafecito.foundry.runtime.FoundryTypedSignal
@@ -10,13 +11,22 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.RepeatedTest
 import org.junit.jupiter.api.Test
+import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.CancellationException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -31,10 +41,12 @@ class SignalAwaitTest {
                 async(start = CoroutineStart.UNDISPATCHED) {
                     signal.await(fixture.owner)
                 }
+            assertEquals(1, invalidationListenerCount(fixture.owner))
 
             signal.emit(Variant.of("ready"), Variant.of(2L))
 
             assertEquals(listOf(Variant.of("ready"), Variant.of(2L)), result.await())
+            assertEquals(0, invalidationListenerCount(fixture.owner))
         }
 
     @Test
@@ -110,12 +122,14 @@ class SignalAwaitTest {
                 async(start = CoroutineStart.UNDISPATCHED) {
                     signal.await(fixture.owner)
                 }
+            assertEquals(1, invalidationListenerCount(fixture.owner))
 
             result.cancelAndJoin()
             signal.emit("late")
 
             assertTrue(result.isCancelled)
             assertEquals(0, decodes.get())
+            assertEquals(0, invalidationListenerCount(fixture.owner))
         }
 
     @Test
@@ -204,6 +218,88 @@ class SignalAwaitTest {
     }
 
     @Test
+    fun `signal termination before invalidation publication closes the late token`() =
+        runTest {
+            val listener = AtomicReference<(String) -> Unit>()
+            val connectionCloseCount = AtomicInteger()
+            val invalidationCloseCount = AtomicInteger()
+            val invalidationFailureCalls = AtomicInteger()
+
+            val result =
+                async(start = CoroutineStart.UNDISPATCHED) {
+                    awaitWithRegistrationHooks(
+                        connect = { signalListener ->
+                            listener.set(signalListener)
+                            countingCloseable(connectionCloseCount)
+                        },
+                        subscribeInvalidation = { invalidated ->
+                            listener.get()("ready")
+                            invalidated()
+                            countingCloseable(invalidationCloseCount)
+                        },
+                        invalidationFailure = {
+                            invalidationFailureCalls.incrementAndGet()
+                            AssertionError("Losing invalidation must not inspect owner lifecycle.")
+                        },
+                    )
+                }
+
+            assertEquals("ready", result.await())
+            assertEquals(1, connectionCloseCount.get())
+            assertEquals(1, invalidationCloseCount.get())
+            assertEquals(0, invalidationFailureCalls.get())
+        }
+
+    @Test
+    fun `typed await decodes and resumes on the signal caller thread`() {
+        val fixture = liveOwner()
+        val decodeThread = AtomicLong()
+        val emissionThread = AtomicLong()
+        val completionThread = AtomicLong()
+        val completion = AtomicReference<Result<String>>()
+        val completed = CountDownLatch(1)
+        val codec =
+            object : VariantCodec<String> {
+                override fun encode(value: String): Variant = VariantCodec.STRING.encode(value)
+
+                override fun decode(value: Variant): String {
+                    decodeThread.set(Thread.currentThread().id)
+                    return VariantCodec.STRING.decode(value)
+                }
+            }
+        val signal = FoundryTypedSignal.Of1(FoundrySignal(), codec)
+
+        suspend { signal.await(fixture.owner) }
+            .startCoroutine(
+                object : Continuation<String> {
+                    override val context = EmptyCoroutineContext
+
+                    override fun resumeWith(result: Result<String>) {
+                        completionThread.set(Thread.currentThread().id)
+                        completion.set(result)
+                        completed.countDown()
+                    }
+                },
+            )
+
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            executor
+                .submit {
+                    emissionThread.set(Thread.currentThread().id)
+                    signal.emit("ready")
+                }.get(5, TimeUnit.SECONDS)
+
+            assertTrue(completed.await(5, TimeUnit.SECONDS))
+            assertEquals("ready", completion.get().getOrThrow())
+            assertEquals(emissionThread.get(), decodeThread.get())
+            assertEquals(emissionThread.get(), completionThread.get())
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @RepeatedTest(16)
     fun `signal and cancellation race to one terminal outcome`() =
         runTest {
             val fixture = liveOwner()
@@ -239,7 +335,7 @@ class SignalAwaitTest {
             }
         }
 
-    @Test
+    @RepeatedTest(16)
     fun `signal and invalidation race to one terminal outcome`() =
         runTest {
             supervisorScope {
@@ -280,7 +376,7 @@ class SignalAwaitTest {
             }
         }
 
-    @Test
+    @RepeatedTest(16)
     fun `cancellation and invalidation race then disconnect before emission`() =
         runTest {
             supervisorScope {
@@ -314,6 +410,50 @@ class SignalAwaitTest {
                     )
                     signal.emit("late")
                     assertEquals(0, decodes.get())
+                } finally {
+                    executor.shutdownNow()
+                }
+            }
+        }
+
+    @RepeatedTest(16)
+    fun `signal cancellation and invalidation race to one terminal outcome`() =
+        runTest {
+            supervisorScope {
+                val fixture = liveOwner()
+                val decodes = AtomicInteger()
+                val signal =
+                    FoundryTypedSignal.Of1(
+                        FoundrySignal(),
+                        countingCodec(VariantCodec.STRING, decodes),
+                    )
+                val result =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        signal.await(fixture.owner)
+                    }
+                val barrier = CyclicBarrier(4)
+                val executor = Executors.newFixedThreadPool(3)
+                try {
+                    val emit = executor.submit { barrierRace(barrier) { signal.emit("winner") } }
+                    val cancel = executor.submit { barrierRace(barrier) { result.cancel() } }
+                    val invalidate =
+                        executor.submit {
+                            barrierRace(barrier) { fixture.context.invalidateObject(7) }
+                        }
+                    barrier.await(5, TimeUnit.SECONDS)
+                    emit.get(5, TimeUnit.SECONDS)
+                    cancel.get(5, TimeUnit.SECONDS)
+                    invalidate.get(5, TimeUnit.SECONDS)
+
+                    val outcome = runCatching { result.await() }
+                    assertTrue(
+                        outcome.getOrNull() == "winner" ||
+                            outcome.exceptionOrNull() is CancellationException ||
+                            outcome.exceptionOrNull() is FoundryObjectDisposedException,
+                    )
+                    val terminalDecodes = decodes.get()
+                    signal.emit("late")
+                    assertEquals(terminalDecodes, decodes.get())
                 } finally {
                     executor.shutdownNow()
                 }
@@ -354,6 +494,46 @@ class SignalAwaitTest {
 
     private fun countingCloseable(closeCount: AtomicInteger): AutoCloseable =
         AutoCloseable { closeCount.incrementAndGet() }
+
+    private suspend fun <T> awaitWithRegistrationHooks(
+        connect: ((T) -> Unit) -> AutoCloseable,
+        subscribeInvalidation: ((() -> Unit) -> AutoCloseable),
+        invalidationFailure: () -> Throwable,
+    ): T =
+        suspendCancellableCoroutine { continuation ->
+            val method =
+                Class
+                    .forName("games.cafecito.foundry.kotlin.FoundrySignalAwait")
+                    .declaredMethods
+                    .single { candidate ->
+                        candidate.name == "registerAwait" && candidate.parameterCount == 4
+                    }.apply { isAccessible = true }
+            try {
+                method.invoke(
+                    null,
+                    continuation,
+                    connect,
+                    subscribeInvalidation,
+                    invalidationFailure,
+                )
+            } catch (failure: InvocationTargetException) {
+                throw failure.cause ?: failure
+            }
+        }
+
+    private fun invalidationListenerCount(owner: TestObject): Int {
+        val lease =
+            FoundryObject::class.java
+                .getDeclaredField("lease")
+                .apply { isAccessible = true }
+                .get(owner)
+        val listeners =
+            lease.javaClass
+                .getDeclaredField("invalidationListeners")
+                .apply { isAccessible = true }
+                .get(lease) as Map<*, *>
+        return listeners.size
+    }
 
     private fun barrierRace(
         barrier: CyclicBarrier,

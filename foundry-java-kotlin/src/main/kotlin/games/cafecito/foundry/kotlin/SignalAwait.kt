@@ -56,26 +56,39 @@ private suspend fun <T> awaitSignal(
     connect: ((T) -> Unit) -> FoundrySignal.Connection,
 ): T =
     suspendCancellableCoroutine { continuation ->
-        val registrations = AwaitRegistrations()
-        val connection =
-            connect { value ->
-                registrations.tryTerminate {
-                    continuation.resumeValue(value)
-                }
-            }
-        registrations.publishConnection(connection)
-        continuation.invokeOnCancellation {
-            registrations.tryTerminate {}
-        }
-        val invalidation =
-            owner.onInvalidated {
-                val failure = owner.disposedFailure()
-                registrations.tryTerminate {
-                    continuation.resumeFailure(failure)
-                }
-            }
-        registrations.publishInvalidation(invalidation)
+        registerAwait(
+            continuation = continuation,
+            connect = connect,
+            subscribeInvalidation = { listener -> owner.onInvalidated(listener) },
+            invalidationFailure = owner::disposedFailure,
+        )
     }
+
+private fun <T> registerAwait(
+    continuation: CancellableContinuation<T>,
+    connect: ((T) -> Unit) -> AutoCloseable,
+    subscribeInvalidation: ((() -> Unit) -> AutoCloseable),
+    invalidationFailure: () -> Throwable,
+) {
+    val registrations = AwaitRegistrations()
+    val connection =
+        connect { value ->
+            registrations.tryTerminate {
+                continuation.resumeValue(value)
+            }
+        }
+    registrations.publishConnection(connection)
+    continuation.invokeOnCancellation {
+        registrations.tryTerminate {}
+    }
+    val invalidation =
+        subscribeInvalidation {
+            registrations.tryTerminate {
+                continuation.resumeFailure(invalidationFailure())
+            }
+        }
+    registrations.publishInvalidation(invalidation)
+}
 
 private class AwaitRegistrations {
     private val terminal = AtomicBoolean()
