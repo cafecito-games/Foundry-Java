@@ -20,5 +20,5 @@ jobs:
       - uses: android-actions/setup-android@v3
       - uses: gradle/actions/wrapper-validation@v4
       - run: ./gradlew --no-daemon clean check
-      - run: ./gradlew --no-daemon dependencies --write-locks
-      - run: git diff --exit-code -- '**/gradle.lockfile' settings-gradle.lockfile
+      - run: ./gradlew --no-daemon --write-locks resolveAndLockAll
+      - run: git diff --exit-code -- gradle.lockfile '**/gradle.lockfile' settings-gradle.lockfile

@@ -6,6 +6,7 @@ import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
+import java.util.zip.ZipFile
 
 plugins {
     `java-library`
@@ -58,6 +59,61 @@ allprojects {
         isReproducibleFileOrder = true
     }
 }
+
+val requiredProjects = setOf(
+    "foundry-java-api-model", "foundry-java-generator", "foundry-java-annotations",
+    "foundry-java-processor", "foundry-java-runtime", "foundry-java-android",
+    "foundry-java-gradle-plugin", "foundry-java-kotlin", "foundry-java-test",
+)
+
+tasks.register("resolveAndLockAll") {
+    group = "verification"
+    description = "Resolves every resolvable configuration in every project for dependency locking."
+    doLast {
+        allprojects.flatMap { it.configurations }.filter { it.isCanBeResolved }.forEach { it.resolve() }
+    }
+}
+
+tasks.register("verifyRepositoryContract") {
+    group = "verification"
+    description = "Verifies evaluated repository model, publications, boundaries, and Android archive contents."
+    dependsOn(":foundry-java-android:bundleReleaseAar")
+    notCompatibleWithConfigurationCache("Inspects evaluated Gradle project and publication models.")
+    doLast {
+        check(subprojects.map { it.name }.toSet() == requiredProjects) { "Included project set differs from contract." }
+        check(file("gradle/wrapper/gradle-wrapper.properties").readText().contains("gradle-8.11.1-bin.zip"))
+        allprojects.forEach { project ->
+            check(project.file("gradle.lockfile").isFile || project == rootProject) {
+                "Dependency lock state is missing for ${project.path}."
+            }
+            project.tasks.withType(AbstractArchiveTask::class.java).forEach { archive ->
+                check(!archive.isPreserveFileTimestamps && archive.isReproducibleFileOrder)
+            }
+        }
+        val android = project(":foundry-java-android")
+        check(android.pluginManager.hasPlugin("com.android.library"))
+        check(subprojects.filter { it != android }.none { it.pluginManager.hasPlugin("com.android.library") })
+        listOf(":foundry-java-api-model", ":foundry-java-annotations", ":foundry-java-runtime").forEach { path ->
+            check(!project(path).pluginManager.hasPlugin("com.android.library"))
+        }
+        check(project(":foundry-java-kotlin").configurations.getByName("api").dependencies.any { it.name == "foundry-java-runtime" })
+        val androidPublishing = android.extensions.getByType(PublishingExtension::class.java)
+        check(androidPublishing.publications.names.contains("release"))
+        check(android.tasks.names.contains("publishReleasePublicationToMavenLocal"))
+        val plugin = project(":foundry-java-gradle-plugin")
+        val pluginPublishing = plugin.extensions.getByType(PublishingExtension::class.java)
+        check(pluginPublishing.publications.names.contains("pluginMaven"))
+        check(pluginPublishing.publications.names.none { it == "mavenJava" })
+        check(plugin.tasks.names.any { it.startsWith("publishPluginMavenPublication") })
+        val aar = android.layout.buildDirectory.file("outputs/aar/foundry-java-android-release.aar").get().asFile
+        check(aar.isFile) { "Release AAR was not produced." }
+        ZipFile(aar).use { zip ->
+            check(zip.entries().asSequence().none { it.name.contains("libfoundry_android.so") || it.name.contains("FoundryAndroidHost") })
+        }
+    }
+}
+
+tasks.named("check") { dependsOn("verifyRepositoryContract") }
 
 subprojects {
     if (name != "foundry-java-android") {
