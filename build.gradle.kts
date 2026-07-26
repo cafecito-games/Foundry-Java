@@ -69,9 +69,18 @@ val requiredProjects = setOf(
 tasks.register("resolveAndLockAll") {
     group = "verification"
     description = "Resolves every resolvable configuration in every project for dependency locking."
-    doLast {
-        allprojects.flatMap { it.configurations }.filter { it.isCanBeResolved }.forEach { it.resolve() }
-    }
+    notCompatibleWithConfigurationCache("Resolves project dependency configurations for lock generation.")
+    dependsOn(allprojects.map { project ->
+        project.tasks.register("resolveAndLockProject") {
+            doLast {
+                project.configurations.filter {
+                    it.isCanBeResolved &&
+                        (it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath")) &&
+                        !it.name.contains("AndroidTest", ignoreCase = true)
+                }.forEach { it.resolve() }
+            }
+        }
+    })
 }
 
 tasks.register("verifyRepositoryContract") {
@@ -156,7 +165,7 @@ subprojects {
                     }
                 }
             }
-            if (plugins.hasPlugin("java") && !plugins.hasPlugin("java-gradle-plugin") && publications.findByName("mavenJava") == null) {
+            if (project.name != "foundry-java-gradle-plugin" && plugins.hasPlugin("java") && publications.findByName("mavenJava") == null) {
                 publications.create<MavenPublication>("mavenJava") {
                     from(components.getByName("java"))
                 }
