@@ -80,6 +80,9 @@ abstract class VerifyRepositoryModel : DefaultTask() {
     abstract val expectedBoundaryDependencies: MapProperty<String, String>
 
     @get:Input
+    abstract val requiredHostNeutralProjectPaths: SetProperty<String>
+
+    @get:Input
     abstract val actualBoundaryDependencies: MapProperty<String, String>
 
     @get:Input
@@ -140,6 +143,11 @@ abstract class VerifyRepositoryModel : DefaultTask() {
         }
         check(boundaryAndroidPlugins.get().values.all { it.isEmpty() }) {
             "Android-free boundary projects applied forbidden plugins: ${boundaryAndroidPlugins.get()}"
+        }
+        check(
+            expectedBoundaryDependencies.get().keys == requiredHostNeutralProjectPaths.get(),
+        ) {
+            "Every host-neutral project must declare an exact dependency contract."
         }
         check(actualBoundaryDependencies.get() == expectedBoundaryDependencies.get()) {
             "Android-free boundary dependencies differ from the contract: ${actualBoundaryDependencies.get()}"
@@ -482,6 +490,8 @@ val requiredProjects =
         "foundry-java-kotlin",
         "foundry-java-test",
     )
+val requiredHostNeutralProjects = requiredProjects - "foundry-java-android"
+val requiredHostNeutralProjectPaths = requiredHostNeutralProjects.map { ":$it" }.toSet()
 val requiredLockFilePaths =
     setOf(
         "gradle.lockfile",
@@ -559,9 +569,38 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
+        ":foundry-java-gradle-plugin" to
+            setOf(
+                "api=null:unspecified",
+                "testImplementation=null:unspecified",
+                "testImplementation=org.junit:junit-bom",
+                "testImplementation=org.junit.jupiter:junit-jupiter",
+                "testRuntimeOnly=null:unspecified",
+                "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+            ),
+        ":foundry-java-kotlin" to
+            setOf(
+                "api=project(:foundry-java-runtime)",
+                "kotlinBuildToolsApiClasspath=org.jetbrains.kotlin:kotlin-build-tools-impl",
+                "kotlinCompilerPluginClasspathMain=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
+                "kotlinCompilerPluginClasspathTest=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
+                "testImplementation=org.junit:junit-bom",
+                "testImplementation=org.junit.jupiter:junit-jupiter",
+                "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+            ),
         ":foundry-java-processor" to
             setOf(
                 "implementation=project(:foundry-java-annotations)",
+                "testImplementation=org.junit:junit-bom",
+                "testImplementation=org.junit.jupiter:junit-jupiter",
+                "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
+                "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
+            ),
+        ":foundry-java-test" to
+            setOf(
+                "api=project(:foundry-java-runtime)",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
@@ -790,6 +829,7 @@ tasks.register("resolveAndLockAll") {
 }
 
 val exactRequiredLockFilePaths = requiredLockFilePaths
+val exactRequiredHostNeutralProjectPaths = requiredHostNeutralProjectPaths
 val verifyRepositoryModel =
     tasks.register<VerifyRepositoryModel>("verifyRepositoryModel") {
         group = "verification"
@@ -799,6 +839,7 @@ val verifyRepositoryModel =
         expectedBoundaryDependencies.set(
             requiredBoundaryDependencies.mapValues { (_, dependencies) -> dependencies.sorted().joinToString(",") },
         )
+        requiredHostNeutralProjectPaths.set(exactRequiredHostNeutralProjectPaths)
         expectedPublicationNames.set(requiredPublicationNames)
         requiredPluginId.set(requiredPluginIdentifier)
         wrapperProperties.set(layout.projectDirectory.file("gradle/wrapper/gradle-wrapper.properties"))

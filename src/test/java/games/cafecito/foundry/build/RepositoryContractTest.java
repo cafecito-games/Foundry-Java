@@ -25,6 +25,16 @@ class RepositoryContractTest {
                     "foundry-java-gradle-plugin",
                     "foundry-java-kotlin",
                     "foundry-java-test");
+    private static final List<String> HOST_NEUTRAL_MODULES =
+            List.of(
+                    "foundry-java-annotations",
+                    "foundry-java-api-model",
+                    "foundry-java-generator",
+                    "foundry-java-gradle-plugin",
+                    "foundry-java-kotlin",
+                    "foundry-java-processor",
+                    "foundry-java-runtime",
+                    "foundry-java-test");
     private static final List<String> LOCK_FILES =
             List.of(
                     "gradle.lockfile",
@@ -67,16 +77,50 @@ class RepositoryContractTest {
     void platformBoundariesProtectThePublicJavaAbi() throws IOException {
         String rootBuild = read("build.gradle.kts");
 
-        assertFalse(readTree("foundry-java-api-model").contains("android."));
-        assertFalse(readTree("foundry-java-annotations").contains("android."));
-        assertFalse(readTree("foundry-java-generator").contains("android."));
-        assertFalse(readTree("foundry-java-processor").contains("android."));
-        assertFalse(readTree("foundry-java-runtime").contains("android."));
-        assertTrue(rootBuild.contains("\":foundry-java-generator\" to"));
-        assertTrue(rootBuild.contains("\":foundry-java-processor\" to"));
+        assertEquals(MODULES.size() - 1, HOST_NEUTRAL_MODULES.size());
+        assertTrue(rootBuild.contains("val requiredHostNeutralProjects ="));
+        for (String module : HOST_NEUTRAL_MODULES) {
+            assertFalse(readTree(module).contains("android."), module);
+            assertTrue(rootBuild.contains("\":%s\" to".formatted(module)), module);
+        }
+        assertTrue(
+                rootBuild.contains(
+                        "expectedBoundaryDependencies.get().keys"
+                                + " == requiredHostNeutralProjectPaths.get()"));
         assertTrue(read("foundry-java-kotlin/build.gradle.kts").contains("foundry-java-runtime"));
         assertTrue(read("foundry-java-android/build.gradle.kts").contains("foundry-java-runtime"));
         assertFalse(readTree("foundry-java-android").contains("libfoundry_android.so"));
+    }
+
+    @Test
+    void ciPinsTheAndroidPackagesRequiredByTheCompileSdk() throws IOException {
+        String androidBuild = read("foundry-java-android/build.gradle.kts");
+        String catalog = read("gradle/libs.versions.toml");
+        String workflow = read(".github/workflows/ci.yml");
+        var compileSdkMatcher = Pattern.compile("compileSdk\\s*=\\s*(\\d+)").matcher(androidBuild);
+        var buildToolsMatcher =
+                Pattern.compile("android-build-tools\\s*=\\s*\"([^\"]+)\"").matcher(catalog);
+
+        assertTrue(compileSdkMatcher.find());
+        assertTrue(buildToolsMatcher.find());
+        assertEquals("36", compileSdkMatcher.group(1));
+        assertEquals("35.0.0", buildToolsMatcher.group(1));
+        assertTrue(catalog.contains("android-gradle-plugin = \"8.10.0\""));
+        assertTrue(
+                Pattern.compile(
+                                "buildToolsVersion\\s*=\\s*"
+                                        + "libs\\.versions\\.android\\.build\\.tools\\s*"
+                                        + "\\.get\\(\\)",
+                                Pattern.DOTALL)
+                        .matcher(androidBuild)
+                        .find());
+        assertTrue(
+                workflow.contains(
+                        "packages: 'tools platform-tools platforms;android-"
+                                + compileSdkMatcher.group(1)
+                                + " build-tools;"
+                                + buildToolsMatcher.group(1)
+                                + "'"));
     }
 
     @Test

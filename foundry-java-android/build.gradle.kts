@@ -6,6 +6,9 @@ plugins {
 android {
     namespace = "games.cafecito.foundry.android"
     compileSdk = 36
+    buildToolsVersion =
+        libs.versions.android.build.tools
+            .get()
 
     defaultConfig {
         minSdk = 23
