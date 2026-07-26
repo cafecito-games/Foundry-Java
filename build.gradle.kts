@@ -18,6 +18,7 @@ import org.gradle.api.tasks.Input
 import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.InputFile
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.Internal
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
@@ -25,6 +26,7 @@ import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugin.devel.GradlePluginDevelopmentExtension
+import org.w3c.dom.Element
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
@@ -55,6 +57,12 @@ abstract class VerifyRepositoryModel : DefaultTask() {
     @get:InputFiles
     @get:PathSensitive(PathSensitivity.RELATIVE)
     abstract val lockFiles: ConfigurableFileCollection
+
+    @get:Input
+    abstract val requiredLockFilePaths: SetProperty<String>
+
+    @get:Internal
+    abstract val repositoryRoot: DirectoryProperty
 
     @get:Input
     abstract val invalidArchiveTasks: ListProperty<String>
@@ -105,8 +113,18 @@ abstract class VerifyRepositoryModel : DefaultTask() {
         check(projectGroups.get().values.all { it == group }) {
             "Every project must use Maven group $group: ${projectGroups.get()}"
         }
-        check(lockFiles.files.size == expectedProjectNames.get().size + 1) {
-            "Every project, including the root, must have dependency lock state."
+        val rootDirectory = repositoryRoot.get().asFile
+        val configuredLockFilePaths =
+            lockFiles.files
+                .map { it.relativeTo(rootDirectory).invariantSeparatorsPath }
+                .toSet()
+        check(configuredLockFilePaths == requiredLockFilePaths.get()) {
+            "Configured lock files differ from the exact repository contract: $configuredLockFilePaths"
+        }
+        requiredLockFilePaths.get().forEach { relativePath ->
+            check(rootDirectory.resolve(relativePath).isFile) {
+                "Required dependency lock must exist as a regular file: $relativePath"
+            }
         }
         check(invalidArchiveTasks.get().isEmpty()) {
             "Archive tasks must use reproducible order and timestamps: ${invalidArchiveTasks.get()}"
@@ -195,11 +213,73 @@ abstract class VerifyPublications : DefaultTask() {
     abstract val expectedModules: MapProperty<String, String>
 
     @get:Input
+    abstract val expectedPomDependencies: MapProperty<String, String>
+
+    @get:Input
+    abstract val expectedModuleDependencies: MapProperty<String, String>
+
+    @get:Input
+    abstract val expectedModuleArtifactNames: MapProperty<String, String>
+
+    @get:Input
     abstract val expectedArtifacts: ListProperty<String>
 
     @TaskAction
     fun verifyPublishedFiles() {
         val repository = repositoryDirectory.get().asFile
+        val poms = expectedPoms.get()
+        val modules = expectedModules.get()
+        val pomDependencies = expectedPomDependencies.get()
+        val moduleDependencies = expectedModuleDependencies.get()
+        val moduleArtifactNames = expectedModuleArtifactNames.get()
+        val artifacts = expectedArtifacts.get()
+        val jarCount = artifacts.count { it.split('|')[2] == "jar" }
+        val aarCount = artifacts.count { it.split('|')[2] == "aar" }
+
+        check(poms.size == 10) { "Bootstrap topology must contain exactly 10 POM publications." }
+        check(modules.size == 9) { "Bootstrap topology must contain exactly 9 Gradle module publications." }
+        check(jarCount == 8 && aarCount == 1) {
+            "Bootstrap topology must contain exactly 8 JARs and 1 AAR."
+        }
+        check(pomDependencies.keys == poms.keys) {
+            "Every expected POM must declare an exact dependency contract."
+        }
+        check(moduleDependencies.keys == modules.keys) {
+            "Every expected Gradle module must declare an exact dependency contract."
+        }
+        check(moduleArtifactNames.keys == modules.keys) {
+            "Every expected Gradle module must declare exact logical artifact names."
+        }
+
+        fun publishedDirectories(extension: String) =
+            repository
+                .walkTopDown()
+                .filter { it.isFile && it.extension == extension }
+                .map { it.parentFile.relativeTo(repository).invariantSeparatorsPath }
+                .toSet()
+
+        check(publishedDirectories("pom") == poms.keys) {
+            "Published POM coordinates differ from the exact bootstrap topology."
+        }
+        check(publishedDirectories("module") == modules.keys) {
+            "Published Gradle module coordinates differ from the exact bootstrap topology."
+        }
+        val expectedArchiveDirectories =
+            artifacts
+                .map {
+                    val artifactSpec = it.split('|')
+                    "${artifactSpec[0]}|${artifactSpec[2]}"
+                }.toSet()
+        val actualArchiveDirectories =
+            repository
+                .walkTopDown()
+                .filter { it.isFile && it.extension in setOf("jar", "aar") }
+                .map {
+                    "${it.parentFile.relativeTo(repository).invariantSeparatorsPath}|${it.extension}"
+                }.toSet()
+        check(actualArchiveDirectories == expectedArchiveDirectories) {
+            "Published archive coordinates differ from the exact bootstrap topology."
+        }
 
         fun publishedFile(
             relativeDirectory: String,
@@ -221,18 +301,60 @@ abstract class VerifyPublications : DefaultTask() {
             return candidates.maxBy { it.lastModified() }
         }
 
-        expectedPoms.get().forEach { (relativeDirectory, encodedCoordinates) ->
+        fun directChildValue(
+            element: Element,
+            name: String,
+        ): String? =
+            (0 until element.childNodes.length)
+                .map { element.childNodes.item(it) }
+                .filterIsInstance<Element>()
+                .firstOrNull { it.tagName == name }
+                ?.textContent
+
+        fun decodeDependencies(encodedDependencies: String) =
+            if (encodedDependencies.isEmpty()) {
+                emptySet()
+            } else {
+                encodedDependencies.split(';').toSet()
+            }
+
+        poms.forEach { (relativeDirectory, encodedCoordinates) ->
             val coordinates = encodedCoordinates.split('|')
             val pom = publishedFile(relativeDirectory, coordinates[1], "pom")
             check(pom.length() > 0L) { "Generated POM is empty: $pom" }
             val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(pom)
-
-            fun firstValue(name: String) = document.getElementsByTagName(name).item(0)?.textContent
-            check(firstValue("groupId") == coordinates[0]) { "POM groupId differs for $pom." }
-            check(firstValue("artifactId") == coordinates[1]) { "POM artifactId differs for $pom." }
-            check(firstValue("version") == coordinates[2]) { "POM version differs for $pom." }
+            val root = document.documentElement
+            check(directChildValue(root, "groupId") == coordinates[0]) {
+                "POM groupId differs for $pom."
+            }
+            check(directChildValue(root, "artifactId") == coordinates[1]) {
+                "POM artifactId differs for $pom."
+            }
+            check(directChildValue(root, "version") == coordinates[2]) {
+                "POM version differs for $pom."
+            }
+            val actualDependencies =
+                document
+                    .getElementsByTagName("dependency")
+                    .let { nodes ->
+                        (0 until nodes.length)
+                            .map { nodes.item(it) }
+                            .filterIsInstance<Element>()
+                            .map { dependency ->
+                                listOf(
+                                    directChildValue(dependency, "scope") ?: "compile",
+                                    directChildValue(dependency, "groupId"),
+                                    directChildValue(dependency, "artifactId"),
+                                    directChildValue(dependency, "version"),
+                                ).joinToString("|")
+                            }.toSet()
+                    }
+            check(actualDependencies == decodeDependencies(pomDependencies.getValue(relativeDirectory))) {
+                "POM dependencies differ for $pom. Expected " +
+                    "${pomDependencies.getValue(relativeDirectory)}, found $actualDependencies."
+            }
         }
-        expectedModules.get().forEach { (relativeDirectory, encodedCoordinates) ->
+        modules.forEach { (relativeDirectory, encodedCoordinates) ->
             val coordinates = encodedCoordinates.split('|')
             val module = publishedFile(relativeDirectory, coordinates[1], "module")
             check(module.length() > 0L) { "Gradle module metadata is empty: $module" }
@@ -246,8 +368,34 @@ abstract class VerifyPublications : DefaultTask() {
             check(content.contains("\"version\": \"${coordinates[2]}\"")) {
                 "Module metadata version differs for $module."
             }
+            val actualDependencies =
+                Regex(
+                    """"group": "([^"]+)",\s*"module": "([^"]+)",\s*"version": \{\s*"requires": "([^"]+)"""",
+                ).findAll(content)
+                    .map { match ->
+                        match.groupValues.drop(1).joinToString("|")
+                    }.toSet()
+            check(
+                actualDependencies ==
+                    decodeDependencies(moduleDependencies.getValue(relativeDirectory)),
+            ) {
+                "Gradle module dependencies differ for $module. Expected " +
+                    "${moduleDependencies.getValue(relativeDirectory)}, found $actualDependencies."
+            }
+            val actualArtifactNames =
+                Regex(""""name": "([^"]+\.(?:jar|aar))"""")
+                    .findAll(content)
+                    .map { it.groupValues[1] }
+                    .toSet()
+            check(
+                actualArtifactNames ==
+                    decodeDependencies(moduleArtifactNames.getValue(relativeDirectory)),
+            ) {
+                "Gradle module artifact names differ for $module. Expected " +
+                    "${moduleArtifactNames.getValue(relativeDirectory)}, found $actualArtifactNames."
+            }
         }
-        expectedArtifacts.get().forEach { encodedArtifact ->
+        artifacts.forEach { encodedArtifact ->
             val artifactSpec = encodedArtifact.split('|')
             val artifact =
                 publishedFile(
@@ -334,6 +482,20 @@ val requiredProjects =
         "foundry-java-kotlin",
         "foundry-java-test",
     )
+val requiredLockFilePaths =
+    setOf(
+        "gradle.lockfile",
+        "settings-gradle.lockfile",
+        "foundry-java-android/gradle.lockfile",
+        "foundry-java-annotations/gradle.lockfile",
+        "foundry-java-api-model/gradle.lockfile",
+        "foundry-java-generator/gradle.lockfile",
+        "foundry-java-gradle-plugin/gradle.lockfile",
+        "foundry-java-kotlin/gradle.lockfile",
+        "foundry-java-processor/gradle.lockfile",
+        "foundry-java-runtime/gradle.lockfile",
+        "foundry-java-test/gradle.lockfile",
+    )
 val requiredGroupCoordinate = "games.cafecito.foundry"
 val requiredJavaVersion = JavaVersion.VERSION_17
 val requiredJavaLanguageVersion = JavaLanguageVersion.of(17)
@@ -408,6 +570,157 @@ val requiredPublicationNames =
                 else -> "mavenJava"
             }
     }
+val requiredPublicationVersion = version.toString()
+
+fun publicationDirectory(
+    groupId: String,
+    artifactId: String,
+) = "${groupId.replace('.', '/')}/$artifactId/$requiredPublicationVersion"
+
+val androidPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-android")
+val annotationsPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-annotations")
+val apiModelPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-api-model")
+val generatorPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-generator")
+val gradlePluginPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-gradle-plugin")
+val kotlinPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-kotlin")
+val processorPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-processor")
+val runtimePublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-runtime")
+val testPublicationDirectory =
+    publicationDirectory(requiredGroupCoordinate, "foundry-java-test")
+val pluginMarkerGroup = "games.cafecito.foundry.java"
+val pluginMarkerArtifact = "games.cafecito.foundry.java.gradle.plugin"
+val pluginMarkerPublicationDirectory =
+    publicationDirectory(pluginMarkerGroup, pluginMarkerArtifact)
+
+val requiredPublicationCoordinates =
+    mapOf(
+        androidPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-android|$requiredPublicationVersion",
+        annotationsPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+        apiModelPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
+        generatorPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-generator|$requiredPublicationVersion",
+        gradlePluginPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-gradle-plugin|$requiredPublicationVersion",
+        kotlinPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-kotlin|$requiredPublicationVersion",
+        processorPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-processor|$requiredPublicationVersion",
+        runtimePublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+        testPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-test|$requiredPublicationVersion",
+        pluginMarkerPublicationDirectory to
+            "$pluginMarkerGroup|$pluginMarkerArtifact|$requiredPublicationVersion",
+    )
+val requiredPomDependencies =
+    mapOf(
+        androidPublicationDirectory to
+            "compile|$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+        annotationsPublicationDirectory to "",
+        apiModelPublicationDirectory to
+            "compile|$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+        generatorPublicationDirectory to
+            listOf(
+                "runtime|$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+                "runtime|$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
+            ).sorted()
+                .joinToString(";"),
+        gradlePluginPublicationDirectory to "",
+        kotlinPublicationDirectory to
+            listOf(
+                "compile|$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+                "compile|org.jetbrains.kotlin|kotlin-stdlib|2.0.21",
+            ).sorted()
+                .joinToString(";"),
+        processorPublicationDirectory to
+            "runtime|$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+        runtimePublicationDirectory to
+            listOf(
+                "compile|$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
+                "runtime|$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+            ).sorted()
+                .joinToString(";"),
+        testPublicationDirectory to
+            "compile|$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+        pluginMarkerPublicationDirectory to
+            "compile|$requiredGroupCoordinate|foundry-java-gradle-plugin|$requiredPublicationVersion",
+    )
+val requiredModuleDependencies =
+    mapOf(
+        androidPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+        annotationsPublicationDirectory to "",
+        apiModelPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+        generatorPublicationDirectory to
+            listOf(
+                "$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+                "$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
+            ).sorted()
+                .joinToString(";"),
+        gradlePluginPublicationDirectory to "",
+        kotlinPublicationDirectory to
+            listOf(
+                "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+                "org.jetbrains.kotlin|kotlin-stdlib|2.0.21",
+            ).sorted()
+                .joinToString(";"),
+        processorPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+        runtimePublicationDirectory to
+            listOf(
+                "$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
+                "$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
+            ).sorted()
+                .joinToString(";"),
+        testPublicationDirectory to
+            "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
+    )
+val requiredModuleArtifactNames =
+    mapOf(
+        androidPublicationDirectory to "foundry-java-android-$requiredPublicationVersion.aar",
+        annotationsPublicationDirectory to "foundry-java-annotations-$requiredPublicationVersion.jar",
+        apiModelPublicationDirectory to "foundry-java-api-model-$requiredPublicationVersion.jar",
+        generatorPublicationDirectory to "foundry-java-generator-$requiredPublicationVersion.jar",
+        gradlePluginPublicationDirectory to
+            "foundry-java-gradle-plugin-$requiredPublicationVersion.jar",
+        kotlinPublicationDirectory to "foundry-java-kotlin-$requiredPublicationVersion.jar",
+        processorPublicationDirectory to "foundry-java-processor-$requiredPublicationVersion.jar",
+        runtimePublicationDirectory to "foundry-java-runtime-$requiredPublicationVersion.jar",
+        testPublicationDirectory to "foundry-java-test-$requiredPublicationVersion.jar",
+    )
+val requiredPublicationArtifacts =
+    listOf(
+        "$androidPublicationDirectory|foundry-java-android|aar||" +
+            "foundry-java-android-$requiredPublicationVersion.aar",
+        "$annotationsPublicationDirectory|foundry-java-annotations|jar||" +
+            "foundry-java-annotations-$requiredPublicationVersion.jar",
+        "$apiModelPublicationDirectory|foundry-java-api-model|jar||" +
+            "foundry-java-api-model-$requiredPublicationVersion.jar",
+        "$generatorPublicationDirectory|foundry-java-generator|jar||" +
+            "foundry-java-generator-$requiredPublicationVersion.jar",
+        "$gradlePluginPublicationDirectory|foundry-java-gradle-plugin|jar||" +
+            "foundry-java-gradle-plugin-$requiredPublicationVersion.jar",
+        "$kotlinPublicationDirectory|foundry-java-kotlin|jar||" +
+            "foundry-java-kotlin-$requiredPublicationVersion.jar",
+        "$processorPublicationDirectory|foundry-java-processor|jar||" +
+            "foundry-java-processor-$requiredPublicationVersion.jar",
+        "$runtimePublicationDirectory|foundry-java-runtime|jar||" +
+            "foundry-java-runtime-$requiredPublicationVersion.jar",
+        "$testPublicationDirectory|foundry-java-test|jar||" +
+            "foundry-java-test-$requiredPublicationVersion.jar",
+    )
 val allowedBootstrapAndroidClasses = emptySet<String>()
 
 val resolveLockTasks =
@@ -459,6 +772,7 @@ tasks.register("resolveAndLockAll") {
     dependsOn(":foundry-java-android:check")
 }
 
+val exactRequiredLockFilePaths = requiredLockFilePaths
 val verifyRepositoryModel =
     tasks.register<VerifyRepositoryModel>("verifyRepositoryModel") {
         group = "verification"
@@ -471,6 +785,9 @@ val verifyRepositoryModel =
         expectedPublicationNames.set(requiredPublicationNames)
         requiredPluginId.set(requiredPluginIdentifier)
         wrapperProperties.set(layout.projectDirectory.file("gradle/wrapper/gradle-wrapper.properties"))
+        requiredLockFilePaths.set(exactRequiredLockFilePaths)
+        repositoryRoot.set(layout.projectDirectory)
+        lockFiles.from(exactRequiredLockFilePaths.map { layout.projectDirectory.file(it) })
     }
 
 val verifyAndroidAar =
@@ -491,6 +808,14 @@ val verifyPublications =
         group = "verification"
         description = "Publishes and validates every configured bootstrap Maven publication."
         repositoryDirectory.set(layout.buildDirectory.dir("repository"))
+        expectedPoms.set(requiredPublicationCoordinates)
+        expectedModules.set(
+            requiredPublicationCoordinates.filterKeys { it != pluginMarkerPublicationDirectory },
+        )
+        expectedPomDependencies.set(requiredPomDependencies)
+        expectedModuleDependencies.set(requiredModuleDependencies)
+        expectedModuleArtifactNames.set(requiredModuleArtifactNames)
+        expectedArtifacts.set(requiredPublicationArtifacts)
         dependsOn(requiredProjects.map { ":$it:publishAllPublicationsToBootstrapRepository" })
     }
 
@@ -570,7 +895,6 @@ gradle.projectsEvaluated {
     verifyRepositoryModel.configure {
         actualProjectNames.set(subprojects.map { it.name }.toSet())
         projectGroups.set(allprojects.associate { it.path to it.group.toString() })
-        lockFiles.from(allprojects.map { it.layout.projectDirectory.file("gradle.lockfile") })
         invalidArchiveTasks.set(
             allprojects.flatMap { currentProject ->
                 currentProject.tasks
@@ -657,32 +981,5 @@ gradle.projectsEvaluated {
                 .map { it.id }
                 .toSet(),
         )
-    }
-
-    val expectedPoms = mutableMapOf<String, String>()
-    val expectedModules = mutableMapOf<String, String>()
-    val expectedArtifacts = mutableListOf<String>()
-    subprojects.forEach { currentProject ->
-        val publishing = currentProject.extensions.getByType(PublishingExtension::class.java)
-        publishing.publications.withType(MavenPublication::class.java).forEach { publication ->
-            val groupId = publication.groupId
-            val artifactId = publication.artifactId
-            val publicationVersion = publication.version
-            val coordinates = "$groupId|$artifactId|$publicationVersion"
-            val relativeDirectory = "${groupId.replace('.', '/')}/$artifactId/$publicationVersion"
-            expectedPoms[relativeDirectory] = coordinates
-            publication.artifacts.forEach { artifact ->
-                expectedArtifacts +=
-                    "$relativeDirectory|$artifactId|${artifact.extension}|${artifact.classifier.orEmpty()}"
-            }
-            if (publication.artifacts.isNotEmpty()) {
-                expectedModules[relativeDirectory] = coordinates
-            }
-        }
-    }
-    verifyPublications.configure {
-        this.expectedPoms.set(expectedPoms)
-        this.expectedModules.set(expectedModules)
-        this.expectedArtifacts.set(expectedArtifacts.sorted())
     }
 }

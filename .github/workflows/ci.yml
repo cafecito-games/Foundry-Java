@@ -20,6 +20,25 @@ jobs:
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
       - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
       - run: ./gradlew --no-daemon clean check --configuration-cache --configuration-cache-problems=fail
-      - run: ./gradlew --no-daemon clean check --configuration-cache --configuration-cache-problems=fail
+      - name: Prove configuration cache reuse
+        shell: bash
+        run: |
+          set -o pipefail
+          cache_log="$RUNNER_TEMP/configuration-cache-reuse.log"
+          ./gradlew --no-daemon clean check --configuration-cache --configuration-cache-problems=fail \
+            2>&1 | tee "$cache_log"
+          grep -Eq 'Configuration cache entry reused|Reusing configuration cache' "$cache_log"
       - run: ./gradlew --write-locks resolveAndLockAll
-      - run: git diff --exit-code -- gradle.lockfile '**/gradle.lockfile' settings-gradle.lockfile
+      - name: Verify dependency locks are unchanged
+        shell: bash
+        run: |
+          lock_status="$(
+            git status --porcelain --untracked-files=all -- \
+              gradle.lockfile \
+              ':(glob)**/gradle.lockfile' \
+              settings-gradle.lockfile
+          )"
+          if [[ -n "$lock_status" ]]; then
+            printf '%s\n' "$lock_status"
+            exit 1
+          fi

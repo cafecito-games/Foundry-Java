@@ -25,6 +25,19 @@ class RepositoryContractTest {
                     "foundry-java-gradle-plugin",
                     "foundry-java-kotlin",
                     "foundry-java-test");
+    private static final List<String> LOCK_FILES =
+            List.of(
+                    "gradle.lockfile",
+                    "settings-gradle.lockfile",
+                    "foundry-java-android/gradle.lockfile",
+                    "foundry-java-annotations/gradle.lockfile",
+                    "foundry-java-api-model/gradle.lockfile",
+                    "foundry-java-generator/gradle.lockfile",
+                    "foundry-java-gradle-plugin/gradle.lockfile",
+                    "foundry-java-kotlin/gradle.lockfile",
+                    "foundry-java-processor/gradle.lockfile",
+                    "foundry-java-runtime/gradle.lockfile",
+                    "foundry-java-test/gradle.lockfile");
 
     @Test
     void repositoryDeclaresTheCompleteJavaFirstAndroidOnlyContract() throws IOException {
@@ -99,6 +112,54 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("layout.buildDirectory.dir(\"repository\")"));
         assertTrue(rootBuild.contains("VerifyPublications"));
         assertFalse(rootBuild.contains("publishReleasePublicationToMavenLocal"));
+    }
+
+    @Test
+    void repositoryPinsTheExactLockInventoryAndCiRejectsAllLockDrift() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+        String workflow = read(".github/workflows/ci.yml");
+
+        assertEquals(11, LOCK_FILES.size());
+        assertTrue(rootBuild.contains("val requiredLockFilePaths ="));
+        for (String lockFile : LOCK_FILES) {
+            assertTrue(Files.isRegularFile(ROOT.resolve(lockFile)), lockFile + " must exist");
+            assertTrue(
+                    rootBuild.contains("\"%s\"".formatted(lockFile)),
+                    lockFile + " must be part of the typed verifier contract");
+        }
+        assertTrue(workflow.contains("git status --porcelain --untracked-files=all --"));
+        assertTrue(workflow.contains("':(glob)**/gradle.lockfile'"));
+        assertFalse(workflow.contains("git diff --exit-code -- gradle.lockfile"));
+    }
+
+    @Test
+    void publicationVerificationUsesAnIndependentExactTopology() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+
+        assertTrue(rootBuild.contains("val requiredPublicationCoordinates ="));
+        assertTrue(rootBuild.contains("val requiredPomDependencies ="));
+        assertTrue(rootBuild.contains("val requiredModuleDependencies ="));
+        assertTrue(rootBuild.contains("val requiredModuleArtifactNames ="));
+        assertTrue(rootBuild.contains("games.cafecito.foundry.java.gradle.plugin"));
+        assertTrue(rootBuild.contains("foundry-java-gradle-plugin"));
+        assertTrue(rootBuild.contains("foundry-java-runtime"));
+        assertTrue(rootBuild.contains("org.jetbrains.kotlin|kotlin-stdlib|2.0.21"));
+        assertTrue(rootBuild.contains("check(poms.size == 10)"));
+        assertTrue(rootBuild.contains("check(modules.size == 9)"));
+        assertTrue(rootBuild.contains("check(jarCount == 8 && aarCount == 1)"));
+        assertFalse(rootBuild.contains("val expectedPoms = mutableMapOf"));
+        assertFalse(rootBuild.contains("publication.artifacts.forEach"));
+    }
+
+    @Test
+    void ciProvesConfigurationCacheReuseWithoutMaskingGradleFailures() throws IOException {
+        String workflow = read(".github/workflows/ci.yml");
+
+        assertTrue(workflow.contains("set -o pipefail"));
+        assertTrue(workflow.contains("tee \"$cache_log\""));
+        assertTrue(
+                workflow.contains("Configuration cache entry reused|Reusing configuration cache"));
+        assertTrue(workflow.contains("--configuration-cache-problems=fail"));
     }
 
     @Test
