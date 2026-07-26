@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.processing.Filer;
 import javax.lang.model.element.TypeElement;
+import javax.tools.JavaFileObject;
 
 final class SourceEmitter {
     private static final String PROCESSOR =
@@ -16,16 +17,22 @@ final class SourceEmitter {
         this.filer = filer;
     }
 
-    String emitTrampoline(ExtensionModel model, TypeElement source) throws IOException {
+    ReservedTrampoline reserveTrampoline(ExtensionModel model, TypeElement source)
+            throws IOException {
         String qualifiedName =
                 model.packageName().isEmpty()
                         ? model.simpleName() + "_FoundryTrampoline"
                         : model.packageName() + "." + model.simpleName() + "_FoundryTrampoline";
-        try (Writer writer = filer.createSourceFile(qualifiedName, source).openWriter()) {
-            writer.write(trampolineSource(model));
-        }
-        return qualifiedName;
+        return new ReservedTrampoline(model, filer.createSourceFile(qualifiedName, source));
     }
+
+    void emitTrampoline(ReservedTrampoline reserved) throws IOException {
+        try (Writer writer = reserved.source().openWriter()) {
+            writer.write(trampolineSource(reserved.model()));
+        }
+    }
+
+    record ReservedTrampoline(ExtensionModel model, JavaFileObject source) {}
 
     private String trampolineSource(ExtensionModel model) {
         StringBuilder source = new StringBuilder();

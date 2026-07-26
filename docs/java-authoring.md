@@ -8,8 +8,9 @@ consumer module and give that module a stable lowercase identity:
 ```
 
 The identity becomes part of the generated registry class and descriptor path. Changing it is an
-artifact compatibility change. It must be a stable lowercase hyphen-separated name whose generated
-Java package segment is not a Java 17 keyword.
+artifact compatibility change. It must be a stable lowercase hyphen-separated name whose first and
+subsequent segments start with a letter, and whose generated Java package segment is not a Java 17
+keyword.
 
 ## Extension declarations
 

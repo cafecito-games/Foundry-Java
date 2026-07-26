@@ -55,6 +55,7 @@ final class ExtensionValidator {
     }
 
     Optional<ExtensionModel> validate(TypeElement extension) {
+        int errorsBefore = errorCount;
         AnnotationMirror classAnnotation = annotation(extension, CLASS).orElseThrow();
         if (extension.getKind() != ElementKind.CLASS) {
             error(extension, "extension declaration must be a class");
@@ -201,13 +202,17 @@ final class ExtensionValidator {
         }
 
         String qualifiedName = extension.getQualifiedName().toString();
+        String exportedClassName =
+                exportedName(extension, classAnnotation, extension.getSimpleName().toString());
+        if (errorCount != errorsBefore) {
+            return Optional.empty();
+        }
         return Optional.of(
                 new ExtensionModel(
                         qualifiedName,
                         elements.getPackageOf(extension).getQualifiedName().toString(),
                         extension.getSimpleName().toString(),
-                        exportedName(
-                                extension, classAnnotation, extension.getSimpleName().toString()),
+                        exportedClassName,
                         base.toString(),
                         initializationLevel,
                         bindingConstructor,

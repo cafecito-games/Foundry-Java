@@ -468,6 +468,10 @@ class FoundryExtensionProcessorValidationTest {
                 "initialization dependency must be part of the current compilation",
                 "DependsOnForeignExtension",
                 4);
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.endsWith("_FoundryTrampoline.java")),
+                result.generatedSources().keySet().toString());
     }
 
     @Test
@@ -551,7 +555,7 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
-    void rejectsReusedAccessorsAndDuplicateModuleClassNames() throws IOException {
+    void rejectsDuplicateModuleClassNamesWithoutWritingReservedArtifacts() throws IOException {
         Map<String, String> sources = baseSources();
         sources.put(
                 "demo.FirstName",
@@ -562,8 +566,6 @@ class FoundryExtensionProcessorValidationTest {
                 public final class FirstName extends EngineNode {
                     @FoundryProperty(getter = "readFirst")
                     private int first;
-                    @FoundryProperty(getter = "readFirst")
-                    private int second;
                     public int readFirst() { return first; }
                 }
                 """);
@@ -577,17 +579,46 @@ class FoundryExtensionProcessorValidationTest {
                 """);
         ProcessorCompilation.Result result = ProcessorCompilation.compile(sources);
 
-        assertDiagnostic(result, "property accessor readFirst is already used", "FirstName", 7);
         assertDiagnostic(result, "duplicate exported class name Duplicate", "SecondName", 4);
         assertTrue(
                 result.generatedSources().keySet().stream()
                         .noneMatch(path -> path.endsWith("Registry.java")),
+                result.generatedSources().keySet().toString());
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.endsWith("_FoundryTrampoline.java")),
                 result.generatedSources().keySet().toString());
         assertFalse(
                 result.classOutput()
                         .containsKey("META-INF/foundry-java/modules/demo-module.descriptor"));
         assertFalse(
                 result.classOutput().containsKey("META-INF/proguard/foundry-java-demo-module.pro"));
+    }
+
+    @Test
+    void rejectsReusedAccessorsWithoutRetainingAnInvalidExtensionModel() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "ReusedAccessor",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class ReusedAccessor extends EngineNode {
+                            @FoundryProperty(getter = "readFirst")
+                            private int first;
+                            @FoundryProperty(getter = "readFirst")
+                            private int second;
+                            public int readFirst() { return first; }
+                        }
+                        """);
+
+        assertDiagnostic(
+                result, "property accessor readFirst is already used", "ReusedAccessor", 7);
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.endsWith("_FoundryTrampoline.java")),
+                result.generatedSources().keySet().toString());
     }
 
     @Test

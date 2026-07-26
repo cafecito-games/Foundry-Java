@@ -14,10 +14,12 @@ import javax.lang.model.element.TypeElement;
 
 /** Validates Java extension declarations and generates reflection-free registration artifacts. */
 public final class FoundryExtensionProcessor extends AbstractProcessor {
+    private static final String MODULE_NAME_PATTERN = "[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*";
     private final Map<String, ExtensionModel> models = new LinkedHashMap<>();
     private final Map<String, TypeElement> sourceElements = new LinkedHashMap<>();
     // JSR-269 source identities are single-assignment; Filer rejects recreating the same FQN.
-    private final Set<String> emittedTrampolines = new LinkedHashSet<>();
+    private final Map<String, SourceEmitter.ReservedTrampoline> reservedTrampolines =
+            new LinkedHashMap<>();
     private final Set<String> reportedModuleNameConflicts = new LinkedHashSet<>();
     private ExtensionValidator validator;
     private SourceEmitter sourceEmitter;
@@ -61,19 +63,19 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
             for (Element element : roundEnvironment.getElementsAnnotatedWith(foundryClass)) {
                 if (element instanceof TypeElement type) {
                     discovered++;
-                    int errorsBefore = validator.errorCount();
                     validator
                             .validate(type)
                             .ifPresent(
                                     model -> {
                                         models.put(model.qualifiedName(), model);
                                         sourceElements.put(model.qualifiedName(), type);
-                                        if (validator.errorCount() == errorsBefore
-                                                && !emittedTrampolines.contains(
-                                                        model.qualifiedName())) {
+                                        if (!reservedTrampolines.containsKey(
+                                                model.qualifiedName())) {
                                             try {
-                                                sourceEmitter.emitTrampoline(model, type);
-                                                emittedTrampolines.add(model.qualifiedName());
+                                                reservedTrampolines.put(
+                                                        model.qualifiedName(),
+                                                        sourceEmitter.reserveTrampoline(
+                                                                model, type));
                                                 reserveModuleRegistry(type);
                                             } catch (IOException exception) {
                                                 moduleErrorCount++;
@@ -106,7 +108,10 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
             validator.validateCycles(Map.copyOf(models), Map.copyOf(sourceElements));
             validateModuleNames();
             if (validator.errorCount() == 0 && moduleErrorCount == 0) {
-                emitModule();
+                emitTrampolines();
+                if (moduleErrorCount == 0) {
+                    emitModule();
+                }
             }
         }
         return true;
@@ -144,7 +149,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
 
     private void emitModule() {
         String moduleName = processingEnv.getOptions().get("foundry.module");
-        if (moduleName == null || !moduleName.matches("[a-z][a-z0-9]*(?:-[a-z0-9]+)*")) {
+        if (moduleName == null || !moduleName.matches(MODULE_NAME_PATTERN)) {
             processingEnv
                     .getMessager()
                     .printMessage(
@@ -190,7 +195,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
         }
         String moduleName = processingEnv.getOptions().get("foundry.module");
         if (moduleName == null
-                || !moduleName.matches("[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+                || !moduleName.matches(MODULE_NAME_PATTERN)
                 || SourceVersion.isKeyword(moduleName.replace("-", ""), SourceVersion.RELEASE_17)) {
             return;
         }
@@ -205,5 +210,25 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                             "cannot reserve module registry: " + exception.getMessage(),
                             source);
         }
+    }
+
+    private void emitTrampolines() {
+        reservedTrampolines.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .forEach(
+                        entry -> {
+                            try {
+                                sourceEmitter.emitTrampoline(entry.getValue());
+                            } catch (IOException exception) {
+                                moduleErrorCount++;
+                                processingEnv
+                                        .getMessager()
+                                        .printMessage(
+                                                javax.tools.Diagnostic.Kind.ERROR,
+                                                "cannot generate trampoline: "
+                                                        + exception.getMessage(),
+                                                sourceElements.get(entry.getKey()));
+                            }
+                        });
     }
 }

@@ -42,6 +42,12 @@ class FoundryProcessorBuildModeTest {
         ProcessorCompilation.Result invalid =
                 ProcessorCompilation.compile(
                         FoundryTrampolineGenerationTest.extensionSources(), "Demo Module");
+        ProcessorCompilation.Result colliding =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(), "a-1");
+        ProcessorCompilation.Result digitWithinSegment =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(), "a1");
         ProcessorCompilation.Result keyword =
                 ProcessorCompilation.compile(
                         FoundryTrampolineGenerationTest.extensionSources(), "class");
@@ -54,6 +60,13 @@ class FoundryProcessorBuildModeTest {
         assertTrue(
                 invalid.errorMessages().stream()
                         .anyMatch(message -> message.contains("-Afoundry.module")));
+        assertFalse(colliding.successful());
+        assertTrue(
+                colliding.errorMessages().stream()
+                        .anyMatch(message -> message.contains("-Afoundry.module")));
+        assertTrue(
+                digitWithinSegment.successful(),
+                () -> digitWithinSegment.errorMessages().toString());
         assertFalse(keyword.successful());
         assertTrue(
                 keyword.errorMessages().stream()
@@ -254,7 +267,7 @@ class FoundryProcessorBuildModeTest {
     }
 
     @Test
-    void includesAnExtensionGeneratedAfterAnEarlierRegistryRound() throws IOException {
+    void includesAnExtensionGeneratedInALaterActiveRound() throws IOException {
         ProcessorCompilation.Result result =
                 ProcessorCompilation.compile(
                         FoundryTrampolineGenerationTest.extensionSources(),
@@ -465,7 +478,6 @@ class FoundryProcessorBuildModeTest {
     }
 
     private static final class PostEmissionExtensionProcessor extends AbstractProcessor {
-        private int round;
         private boolean triggerWritten;
         private boolean extensionWritten;
 
@@ -485,20 +497,8 @@ class FoundryProcessorBuildModeTest {
             if (roundEnvironment.processingOver() || extensionWritten) {
                 return false;
             }
-            boolean barrierPresent =
-                    roundEnvironment.getRootElements().stream()
-                            .filter(TypeElement.class::isInstance)
-                            .map(TypeElement.class::cast)
-                            .map(type -> type.getSimpleName().toString())
-                            .anyMatch(name -> name.startsWith("FoundryProcessorRoundBarrier"));
-            boolean registryPresent =
-                    roundEnvironment.getRootElements().stream()
-                            .filter(TypeElement.class::isInstance)
-                            .map(TypeElement.class::cast)
-                            .map(type -> type.getSimpleName().toString())
-                            .anyMatch(name -> name.endsWith("ModuleRegistry"));
             try {
-                if (registryPresent || (round >= 2 && triggerWritten && !barrierPresent)) {
+                if (triggerWritten) {
                     writeSource(
                             "demo.LateExtension",
                             """
@@ -515,7 +515,7 @@ class FoundryProcessorBuildModeTest {
                             }
                             """);
                     extensionWritten = true;
-                } else if (round >= 1 && !triggerWritten && !barrierPresent) {
+                } else {
                     writeSource(
                             "demo.PostEmissionTrigger",
                             "package demo; public final class PostEmissionTrigger {}");
@@ -524,7 +524,6 @@ class FoundryProcessorBuildModeTest {
             } catch (IOException exception) {
                 throw new java.io.UncheckedIOException(exception);
             }
-            round++;
             return false;
         }
 
