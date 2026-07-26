@@ -62,6 +62,7 @@ class FoundrySourceGeneratorTest {
                         .map(FoundryApi.Entity::identity)
                         .collect(Collectors.toSet());
         assertEquals(parsedIdentities, generated.coveredIdentities());
+        assertEquals(parsedIdentities, publicIdentityMarkers(generated));
         assertEquals(
                 parsedIdentities,
                 manifest.entries().stream()
@@ -167,6 +168,74 @@ class FoundrySourceGeneratorTest {
                         .toList());
         assertTrue(registration.contains("public static java.util.List<Descriptor> descriptors()"));
 
+        String objectWrapper =
+                generated
+                        .sources()
+                        .get(
+                                "games/cafecito/foundry/generated/classes/"
+                                        + "ApiObject_9a9c800c766e.java");
+        String nodeWrapper =
+                generated
+                        .sources()
+                        .get(
+                                "games/cafecito/foundry/generated/classes/"
+                                        + "ApiNode_55aa10d9c1aa.java");
+        String builtinWrapper =
+                generated
+                        .sources()
+                        .get(
+                                "games/cafecito/foundry/generated/builtins/"
+                                        + "ApiArray_2652de84a90c.java");
+        String utilityWrapper =
+                generated
+                        .sources()
+                        .get(
+                                "games/cafecito/foundry/generated/utilities/"
+                                        + "ApiType_convert128_b1055cd0b571.java");
+        String singletonWrapper =
+                generated
+                        .sources()
+                        .get(
+                                "games/cafecito/foundry/generated/singletons/"
+                                        + "ApiEngine_d0c5170cce56.java");
+        assertNotNull(objectWrapper);
+        assertNotNull(nodeWrapper);
+        assertNotNull(builtinWrapper);
+        assertNotNull(utilityWrapper);
+        assertNotNull(singletonWrapper);
+        assertTrue(
+                nodeWrapper.contains(
+                        "public class ApiNode_55aa10d9c1aa extends ApiObject_9a9c800c766e"));
+        assertTrue(
+                objectWrapper.contains(
+                        "public class ApiObject_9a9c800c766e extends "
+                                + "games.cafecito.foundry.runtime.FoundryObject"));
+        assertTrue(nodeWrapper.contains("games.cafecito.foundry.runtime.FoundryBindingContext"));
+        assertTrue(nodeWrapper.contains("games.cafecito.foundry.runtime.ObjectLease lease"));
+        assertTrue(
+                nodeWrapper.contains("games.cafecito.foundry.runtime.ObjectOwnership ownership"));
+        assertTrue(nodeWrapper.contains("context.bind("));
+        assertTrue(objectWrapper.contains("return call(identity, arguments);"));
+        assertTrue(
+                singletonWrapper.contains("extends games.cafecito.foundry.runtime.FoundryObject"));
+        assertTrue(singletonWrapper.contains("ObjectOwnership.BORROWED"));
+        assertTrue(
+                nodeWrapper.contains(
+                        "public-identity-base64 "
+                                + base64("classes/Node/methods/get_children#101")));
+        assertTrue(builtinWrapper.contains("games.cafecito.foundry.types.Variant value"));
+        assertTrue(builtinWrapper.contains("argumentsWithReceiver.add(value);"));
+        assertTrue(builtinWrapper.contains("context.call(0, identity, argumentsWithReceiver)"));
+        assertTrue(builtinWrapper.contains("if (!context.isAlive())"));
+        assertTrue(utilityWrapper.contains("public static games.cafecito.foundry.types.Variant"));
+        assertTrue(
+                utilityWrapper.contains("context.call(0, identity, java.util.List.of(arguments))"));
+        assertTrue(utilityWrapper.contains("if (!context.isAlive())"));
+        assertNotNull(
+                generated
+                        .sources()
+                        .get("games/cafecito/foundry/generated/" + "GeneratedPublicApi.java"));
+
         String typeConvertDescriptor =
                 generated
                         .sources()
@@ -254,7 +323,7 @@ class FoundrySourceGeneratorTest {
         second.writeTo(secondOutput);
         assertEquals(57_904, api.entities().size());
         assertEquals(57_904, acceptedManifest.entries().size());
-        assertEquals(1_300, first.sources().size());
+        assertEquals(2_599, first.sources().size());
         assertEquals(1_298, first.descriptorCatalog().size());
         assertEquals(
                 57_904,
@@ -270,6 +339,7 @@ class FoundrySourceGeneratorTest {
                         .map(FoundryApi.Entity::identity)
                         .collect(Collectors.toSet()),
                 first.coveredIdentities());
+        assertEquals(first.coveredIdentities(), publicIdentityMarkers(first));
         assertEquals(first.sha256ByPath(), second.sha256ByPath());
         assertEquals(treeHashes(output), treeHashes(secondOutput));
         assertEquals(acceptedManifest.canonicalJson(), first.manifest().canonicalJson());
@@ -290,10 +360,16 @@ class FoundrySourceGeneratorTest {
                 new String[] {
                     acceptedDirectory.toString(), output.toString(), manifestOutput.toString()
                 });
+        Map<String, String> firstHashes = treeHashes(output);
+        FoundrySourceGenerator.main(
+                new String[] {
+                    acceptedDirectory.toString(), output.toString(), manifestOutput.toString()
+                });
 
         assertEquals(
                 Files.readString(acceptedDirectory.resolve("compatibility-manifest.json")),
                 Files.readString(manifestOutput));
+        assertEquals(firstHashes, treeHashes(output));
 
         ApiInputs inputs = ApiInputs.load(acceptedDirectory);
         FoundryApi api = FoundryApiParser.parse(inputs);
@@ -409,14 +485,27 @@ class FoundrySourceGeneratorTest {
 
     private static int compile(Path sourceRoot, Path output) throws IOException {
         Files.createDirectories(output);
-        List<String> sources;
+        Path runtimeStubs =
+                writeRuntimeStubs(output.resolveSibling(output.getFileName() + "-stubs"));
+        List<String> generatedSources;
         try (var files = Files.walk(sourceRoot)) {
-            sources =
+            generatedSources =
                     files.filter(path -> path.toString().endsWith(".java"))
                             .map(Path::toString)
                             .sorted()
                             .toList();
         }
+        List<String> stubSources;
+        try (var files = Files.walk(runtimeStubs)) {
+            stubSources =
+                    files.filter(path -> path.toString().endsWith(".java"))
+                            .map(Path::toString)
+                            .sorted()
+                            .toList();
+        }
+        List<String> sources =
+                java.util.stream.Stream.concat(stubSources.stream(), generatedSources.stream())
+                        .toList();
         var compiler = ToolProvider.getSystemJavaCompiler();
         assertNotNull(compiler, "Tests must run under the supported JDK, not a JRE.");
         List<String> arguments =
@@ -426,6 +515,96 @@ class FoundrySourceGeneratorTest {
                                 sources.stream())
                         .toList();
         return compiler.run(null, null, null, arguments.toArray(String[]::new));
+    }
+
+    private static Path writeRuntimeStubs(Path root) throws IOException {
+        Path runtime = root.resolve("games/cafecito/foundry/runtime");
+        Path types = root.resolve("games/cafecito/foundry/types");
+        Files.createDirectories(runtime);
+        Files.createDirectories(types);
+        Files.writeString(
+                types.resolve("Variant.java"),
+                "package games.cafecito.foundry.types; public final class Variant {}\n");
+        Files.writeString(
+                runtime.resolve("FoundryCallError.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public enum FoundryCallError { OK, UNKNOWN }
+                """);
+        Files.writeString(
+                runtime.resolve("ObjectOwnership.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public enum ObjectOwnership { BORROWED, REFERENCE_COUNTED }
+                """);
+        Files.writeString(
+                runtime.resolve("ObjectLease.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public final class ObjectLease {}
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryObject.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public class FoundryObject {
+                    protected FoundryObject(FoundryBindingContext context, ObjectLease lease) {}
+                    protected final games.cafecito.foundry.types.Variant call(
+                            String identity,
+                            games.cafecito.foundry.types.Variant... arguments) {
+                        return null;
+                    }
+                }
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryEngine.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public interface FoundryEngine {
+                    CallResult call(
+                            long contextHandle,
+                            long objectHandle,
+                            String methodIdentity,
+                            java.util.List<games.cafecito.foundry.types.Variant> arguments);
+                    long singleton(long contextHandle, String name);
+                    record CallResult(
+                            games.cafecito.foundry.types.Variant value,
+                            FoundryCallError error) {}
+                }
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryBindingContext.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public final class FoundryBindingContext {
+                    private final long contextHandle;
+                    private final FoundryEngine engine;
+                    public FoundryBindingContext(long contextHandle, FoundryEngine engine) {
+                        this.contextHandle = contextHandle;
+                        this.engine = engine;
+                    }
+                    public long contextHandle() { return contextHandle; }
+                    public FoundryEngine engine() { return engine; }
+                    public boolean isAlive() { return true; }
+                    public games.cafecito.foundry.types.Variant call(
+                            long objectHandle,
+                            String methodIdentity,
+                            java.util.List<games.cafecito.foundry.types.Variant> arguments) {
+                        return null;
+                    }
+                    public <T extends FoundryObject> T bind(
+                            long objectHandle,
+                            ObjectOwnership ownership,
+                            Class<T> wrapperClass,
+                            ObjectFactory<T> factory) {
+                        return factory.create(this, new ObjectLease());
+                    }
+                    public interface ObjectFactory<T extends FoundryObject> {
+                        T create(FoundryBindingContext context, ObjectLease lease);
+                    }
+                }
+                """);
+        return root;
     }
 
     private static String scalarSource(String generatedSources, String identity) {
@@ -438,6 +617,18 @@ class FoundrySourceGeneratorTest {
         var match = line.matcher(generatedSources);
         assertTrue(match.find(), identity);
         return new String(Base64.getDecoder().decode(match.group(1)), StandardCharsets.UTF_8);
+    }
+
+    private static Set<String> publicIdentityMarkers(GeneratedTree generated) {
+        Pattern marker = Pattern.compile("(?m)^// public-identity-base64 ([A-Za-z0-9+/=]+)$");
+        return generated.sources().values().stream()
+                .flatMap(source -> marker.matcher(source).results())
+                .map(
+                        result ->
+                                new String(
+                                        Base64.getDecoder().decode(result.group(1)),
+                                        StandardCharsets.UTF_8))
+                .collect(Collectors.toSet());
     }
 
     private static String base64(String value) {
