@@ -80,7 +80,7 @@ class RepositoryContractTest {
         assertEquals(MODULES.size() - 1, HOST_NEUTRAL_MODULES.size());
         assertTrue(rootBuild.contains("val requiredHostNeutralProjects ="));
         for (String module : HOST_NEUTRAL_MODULES) {
-            assertFalse(readTree(module).contains("android."), module);
+            assertFalse(containsAndroidSourceDeclaration(module), module);
             assertTrue(rootBuild.contains("\":%s\" to".formatted(module)), module);
         }
         assertTrue(
@@ -90,6 +90,44 @@ class RepositoryContractTest {
         assertTrue(read("foundry-java-kotlin/build.gradle.kts").contains("foundry-java-runtime"));
         assertTrue(read("foundry-java-android/build.gradle.kts").contains("foundry-java-runtime"));
         assertFalse(readTree("foundry-java-android").contains("libfoundry_android.so"));
+    }
+
+    @Test
+    void androidSourceScanOnlyMatchesPackageAndImportDeclarations() {
+        assertFalse(
+                containsAndroidDeclaration(
+                        """
+                        // android.view.View is documentation, not a dependency.
+                        final class Example {
+                            String value = "import android.view.View;";
+                        }
+                        """));
+        assertFalse(
+                containsAndroidDeclaration(
+                        """
+                        /*
+                         * import android.view.View;
+                         */
+                        final class Example {}
+                        """));
+        assertFalse(
+                containsAndroidDeclaration(
+                        "val documentation = \"\"\"\nimport android.view.View;\n\"\"\""));
+        assertTrue(containsAndroidDeclaration("import android.view.View;"));
+        assertTrue(containsAndroidDeclaration("import static android.os.Build.VERSION;"));
+        assertTrue(containsAndroidDeclaration("package android.example;"));
+    }
+
+    @Test
+    void boundaryDependencyNormalizationPreservesFileIdentityAndMultiplicity() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+
+        assertTrue(rootBuild.contains("FileCollectionDependency"));
+        assertTrue(rootBuild.contains("stableBoundaryFileSignature"));
+        assertTrue(rootBuild.contains("gradle-api-files"));
+        assertTrue(rootBuild.contains("gradle-test-kit-files"));
+        assertTrue(rootBuild.contains("project-files"));
+        assertFalse(rootBuild.contains(".toSortedSet()"));
     }
 
     @Test
@@ -229,6 +267,28 @@ class RepositoryContractTest {
         return Files.readString(ROOT.resolve(relativePath));
     }
 
+    private static boolean containsAndroidSourceDeclaration(String relativePath)
+            throws IOException {
+        try (var paths = Files.walk(ROOT.resolve(relativePath))) {
+            Path sourceRoot = ROOT.resolve(relativePath).resolve("src");
+            return paths.filter(Files::isRegularFile)
+                    .filter(path -> path.startsWith(sourceRoot))
+                    .filter(
+                            path ->
+                                    path.getFileName().toString().endsWith(".java")
+                                            || path.getFileName().toString().endsWith(".kt"))
+                    .map(
+                            path -> {
+                                try {
+                                    return Files.readString(path);
+                                } catch (IOException exception) {
+                                    throw new IllegalStateException(exception);
+                                }
+                            })
+                    .anyMatch(RepositoryContractTest::containsAndroidDeclaration);
+        }
+    }
+
     private static String readTree(String relativePath) throws IOException {
         try (var paths = Files.walk(ROOT.resolve(relativePath))) {
             Path sourceRoot = ROOT.resolve(relativePath).resolve("src");
@@ -244,5 +304,84 @@ class RepositoryContractTest {
                             })
                     .reduce("", String::concat);
         }
+    }
+
+    private static boolean containsAndroidDeclaration(String source) {
+        return Pattern.compile(
+                        "(?m)^\\s*(?:package|import)(?:\\s+static)?"
+                                + "\\s+android(?:\\.|\\s*(?:;|$))")
+                .matcher(withoutCommentsAndLiterals(source))
+                .find();
+    }
+
+    private static String withoutCommentsAndLiterals(String source) {
+        StringBuilder sanitized = new StringBuilder(source.length());
+        boolean inBlockComment = false;
+        boolean inLineComment = false;
+        boolean inString = false;
+        boolean inCharacter = false;
+        boolean inTripleQuotedString = false;
+        boolean escaped = false;
+
+        for (int index = 0; index < source.length(); index++) {
+            char current = source.charAt(index);
+            char next = index + 1 < source.length() ? source.charAt(index + 1) : '\0';
+
+            if (inLineComment) {
+                if (current == '\n') {
+                    inLineComment = false;
+                    sanitized.append('\n');
+                } else {
+                    sanitized.append(' ');
+                }
+            } else if (inBlockComment) {
+                if (current == '*' && next == '/') {
+                    sanitized.append("  ");
+                    index++;
+                    inBlockComment = false;
+                } else {
+                    sanitized.append(current == '\n' ? '\n' : ' ');
+                }
+            } else if (inTripleQuotedString) {
+                if (source.startsWith("\"\"\"", index)) {
+                    sanitized.append("   ");
+                    index += 2;
+                    inTripleQuotedString = false;
+                } else {
+                    sanitized.append(current == '\n' ? '\n' : ' ');
+                }
+            } else if (inString || inCharacter) {
+                sanitized.append(current == '\n' ? '\n' : ' ');
+                if (escaped) {
+                    escaped = false;
+                } else if (current == '\\') {
+                    escaped = true;
+                } else if ((inString && current == '"') || (inCharacter && current == '\'')) {
+                    inString = false;
+                    inCharacter = false;
+                }
+            } else if (current == '/' && next == '/') {
+                sanitized.append("  ");
+                index++;
+                inLineComment = true;
+            } else if (current == '/' && next == '*') {
+                sanitized.append("  ");
+                index++;
+                inBlockComment = true;
+            } else if (source.startsWith("\"\"\"", index)) {
+                sanitized.append("   ");
+                index += 2;
+                inTripleQuotedString = true;
+            } else if (current == '"') {
+                sanitized.append(' ');
+                inString = true;
+            } else if (current == '\'') {
+                sanitized.append(' ');
+                inCharacter = true;
+            } else {
+                sanitized.append(current);
+            }
+        }
+        return sanitized.toString();
     }
 }

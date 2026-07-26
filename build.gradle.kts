@@ -2,6 +2,7 @@ import com.android.build.api.dsl.LibraryExtension
 import com.diffplug.gradle.spotless.SpotlessExtension
 import org.gradle.api.DefaultTask
 import org.gradle.api.JavaVersion
+import org.gradle.api.artifacts.FileCollectionDependency
 import org.gradle.api.artifacts.ProjectDependency
 import org.gradle.api.file.ConfigurableFileCollection
 import org.gradle.api.file.DirectoryProperty
@@ -27,6 +28,8 @@ import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugin.devel.GradlePluginDevelopmentExtension
 import org.w3c.dom.Element
+import java.io.File
+import java.security.MessageDigest
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
@@ -39,6 +42,42 @@ abstract class ResolveAndLockDependencies : DefaultTask() {
     fun resolveDependencies() {
         logger.lifecycle("Resolved ${dependencyFiles.files.size} dependency artifacts for $path.")
     }
+}
+
+fun stableBoundaryFileSignature(
+    dependency: FileCollectionDependency,
+    projectRoot: File,
+): String {
+    val normalizedRoot = projectRoot.toPath().toAbsolutePath().normalize()
+    val fileIdentities =
+        dependency.files.files
+            .map { dependencyFile ->
+                val normalizedFile = dependencyFile.toPath().toAbsolutePath().normalize()
+                if (normalizedFile.startsWith(normalizedRoot)) {
+                    val relativePath =
+                        normalizedRoot
+                            .relativize(normalizedFile)
+                            .toString()
+                            .replace(File.separatorChar, '/')
+                    "project:$relativePath"
+                } else {
+                    "external:${dependencyFile.name}"
+                }
+            }.sorted()
+    val semanticRole =
+        when {
+            fileIdentities.any { it.contains("gradle-test-kit-") } -> "gradle-test-kit-files"
+            fileIdentities.any { it.contains("gradle-api-") || it.contains("gradle-core-") } ->
+                "gradle-api-files"
+            fileIdentities.all { it.startsWith("project:") } -> "project-files"
+            else -> "external-files"
+        }
+    val digest =
+        MessageDigest
+            .getInstance("SHA-256")
+            .digest(fileIdentities.joinToString("\n").toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    return "$semanticRole(${fileIdentities.size}|$digest)"
 }
 
 abstract class VerifyRepositoryModel : DefaultTask() {
@@ -543,10 +582,16 @@ val androidMainLockConfigurations =
         "releaseCompileClasspath",
         "releaseRuntimeClasspath",
     )
+val requiredGradleApiFileSignature =
+    "gradle-api-files(18|04d09c0616d12776f93ed6e14d27633c98ab8844f95ef95f43e9a5dc570a64bd)"
+val requiredGradleTestKitFileSignature =
+    "gradle-test-kit-files(19|ea2519b620d8fc8798f0b7cc8ff40ec19eeef16e46f896480dd29b72df142216)"
+val requiredGradlePluginRuntimeFileSignature =
+    "project-files(1|2158e07cb4daf70f241c6184b39c6f779036ad91f13f5705f433d80a761c15a4)"
 val requiredBoundaryDependencies =
     mapOf(
         ":foundry-java-api-model" to
-            setOf(
+            listOf(
                 "api=project(:foundry-java-annotations)",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
@@ -554,14 +599,14 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-annotations" to
-            setOf(
+            listOf(
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-generator" to
-            setOf(
+            listOf(
                 "implementation=project(:foundry-java-api-model)",
                 "implementation=project(:foundry-java-annotations)",
                 "testImplementation=org.junit:junit-bom",
@@ -570,17 +615,17 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-gradle-plugin" to
-            setOf(
-                "api=null:unspecified",
-                "testImplementation=null:unspecified",
+            listOf(
+                "api=$requiredGradleApiFileSignature",
+                "testImplementation=$requiredGradleTestKitFileSignature",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
-                "testRuntimeOnly=null:unspecified",
+                "testRuntimeOnly=$requiredGradlePluginRuntimeFileSignature",
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-kotlin" to
-            setOf(
+            listOf(
                 "api=project(:foundry-java-runtime)",
                 "kotlinBuildToolsApiClasspath=org.jetbrains.kotlin:kotlin-build-tools-impl",
                 "kotlinCompilerPluginClasspathMain=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
@@ -591,7 +636,7 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-processor" to
-            setOf(
+            listOf(
                 "implementation=project(:foundry-java-annotations)",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
@@ -599,7 +644,7 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-test" to
-            setOf(
+            listOf(
                 "api=project(:foundry-java-runtime)",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
@@ -607,7 +652,7 @@ val requiredBoundaryDependencies =
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),
         ":foundry-java-runtime" to
-            setOf(
+            listOf(
                 "api=project(:foundry-java-api-model)",
                 "implementation=project(:foundry-java-annotations)",
                 "testImplementation=org.junit:junit-bom",
@@ -1004,14 +1049,15 @@ gradle.projectsEvaluated {
                     .flatMap { configuration ->
                         configuration.dependencies.map { dependency ->
                             val coordinate =
-                                if (dependency is ProjectDependency) {
-                                    "project(:${dependency.name})"
-                                } else {
-                                    "${dependency.group}:${dependency.name}"
+                                when (dependency) {
+                                    is ProjectDependency -> "project(:${dependency.name})"
+                                    is FileCollectionDependency ->
+                                        stableBoundaryFileSignature(dependency, rootProject.projectDir)
+                                    else -> "${dependency.group}:${dependency.name}"
                                 }
                             "${configuration.name}=$coordinate"
                         }
-                    }.toSortedSet()
+                    }.sorted()
                     .joinToString(",")
             },
         )
