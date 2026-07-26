@@ -54,25 +54,34 @@ The production generator consumes this verified manifest and requires its API ha
 version, bridge-contract version, identity set, and classifications to match the accepted inputs;
 it never synthesizes replacement classifications.
 
-For this workstream, all 57,904 entries are `supported` with reason
-`WS5_MODEL_AND_GENERATOR_REPRESENTABLE`. Here, `supported` means the WS5 model can represent the
-entity without loss and the WS5 generator emits it deterministically. It does not claim that the
-runtime-callable wrappers or JNI bridge scheduled for later workstreams are already implemented.
+All 57,904 entries are `supported` with the stable compatibility reason
+`WS5_MODEL_AND_GENERATOR_REPRESENTABLE`. The later runtime-generation pass consumes that exhaustive
+model to emit the public Java bindings described below. Native address translation and Android host
+integration remain bridge responsibilities.
 
 ## Deterministic generation
 
-Generation groups every parsed identity under exactly one per-root Java descriptor and emits
-1,298 descriptors plus provenance and registration catalogs. Coverage is accepted only when the
-parsed identity set, generated identity set, and manifest identity set are exactly equal. Generated
-files include the same standard producer commit/version and input/manifest hash header; dynamic
-comment values, including entity identities and provenance, use RFC 4648 base64 so Java Unicode
+Generation groups every parsed identity under exactly one public API root. It emits 1,188 Java
+sources representing 1,298 accepted roots, plus provenance, public-root inventory, object
+registration, and strongly typed ABI pointer helpers. Coverage is accepted only when the parsed
+identity set, generated identity set, and manifest identity set are exactly equal. Generated files
+include the same standard producer commit/version and input/manifest hash header; dynamic comment
+values, including entity identities and provenance, use RFC 4648 base64 so Java Unicode
 preprocessing cannot turn input text into declarations. They contain no timestamp or absolute path.
-The public registration catalog maps each root identity to its generated descriptor class in
-deterministic root order.
+No hash-suffixed descriptor classes are published in the production JAR or Javadoc.
+
+The generated surface uses canonical engine-class wrappers for singleton results, derives object
+ownership and construction from `is_refcounted` and `is_instantiable`, exposes typed signals, uses
+the runtime value types as the single built-in representation, provides query APIs for size/member
+layout tables, and provides usable context-bound wrappers for all 14 native structures. Opaque
+pointer families use distinct generated marker types instead of one interchangeable raw handle.
+The binary API gate inventories runtime/types in detail and hashes the complete sorted public
+`javap` output for generated bindings, so generated public API drift cannot bypass compatibility
+review.
 
 Tests generate into two independent clean directories and byte-compare every relative path and
 file hash. They repeat from canonical reordered input, regenerate the complete accepted API, verify
-the checked-in manifest byte-for-byte, and compile all 1,300 generated Java sources with the
+the checked-in manifest byte-for-byte, and compile all 1,188 generated Java sources with the
 supported JDK 17 compiler.
 
 `foundry-java-generator` publishes `foundry-java-api-model` as an API dependency. The repository

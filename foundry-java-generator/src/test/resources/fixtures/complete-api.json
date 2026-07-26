@@ -234,7 +234,7 @@
   "singletons": [
     {
       "name": "Engine",
-      "type": "Engine"
+      "type": "Object"
     }
   ],
   "native_structures": [
