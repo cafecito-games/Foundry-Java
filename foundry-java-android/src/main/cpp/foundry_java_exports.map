@@ -1,0 +1,14 @@
+{
+  global:
+    JNI_OnLoad;
+    JNI_OnUnload;
+    foundry_java_library_init;
+    Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1;
+    Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeCreateContextV1;
+    Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeInvokeCallbackV1;
+    Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeInvokeCallbackOnThreadV1;
+    Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownContextV1;
+    Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownBridgeV1;
+  local:
+    *;
+};

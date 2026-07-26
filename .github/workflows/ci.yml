@@ -19,11 +19,23 @@ jobs:
           java-version: '17'
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
         with:
-          packages: 'tools platform-tools platforms;android-36 build-tools;35.0.0'
+          packages: >-
+            tools platform-tools platforms;android-36 build-tools;35.0.0
+            ndk;29.0.14206865 cmake;3.22.1
       - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
       - name: Prove configuration cache reuse from clean outputs
         shell: bash
         run: bash gradle/verify-configuration-cache-reuse.sh
+      - name: Build, test, and inspect the native bridge
+        run: |
+          ./gradlew --no-daemon \
+            :foundry-java-android:assembleDebug \
+            :foundry-java-android:assembleDebugAndroidTest \
+            :foundry-java-android:bundleReleaseAar \
+            :foundry-java-android:nativeHostTest \
+            :foundry-java-android:nativeSanitizerTest
+          bash gradle/verify-native-bridge.sh \
+            foundry-java-android/build/outputs/aar/foundry-java-android-release.aar
       - run: ./gradlew --write-locks resolveAndLockAll
       - name: Verify dependency locks are unchanged
         shell: bash

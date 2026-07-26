@@ -174,12 +174,15 @@ class RepositoryContractTest {
                         .matcher(androidBuild)
                         .find());
         assertTrue(
-                workflow.contains(
-                        "packages: 'tools platform-tools platforms;android-"
-                                + compileSdkMatcher.group(1)
-                                + " build-tools;"
-                                + buildToolsMatcher.group(1)
-                                + "'"));
+                Pattern.compile(
+                                "packages:\\s*>-\\s*"
+                                        + "tools platform-tools platforms;android-"
+                                        + compileSdkMatcher.group(1)
+                                        + " build-tools;"
+                                        + Pattern.quote(buildToolsMatcher.group(1))
+                                        + "\\s+ndk;29\\.0\\.14206865 cmake;3\\.22\\.1")
+                        .matcher(workflow)
+                        .find());
     }
 
     @Test
@@ -289,7 +292,13 @@ class RepositoryContractTest {
     void androidArtifactPolicyUsesAnExactBootstrapClassAllowlist() throws IOException {
         String rootBuild = read("build.gradle.kts");
 
-        assertTrue(rootBuild.contains("allowedBootstrapAndroidClasses = emptySet<String>()"));
+        assertTrue(
+                rootBuild.contains(
+                        "allowedBootstrapAndroidClasses =\n"
+                                + "    setOf(\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer.class\",\n"
+                                + "    )"));
         assertFalse(rootBuild.contains("substringAfterLast('/').contains(\"Host\")"));
         assertTrue(rootBuild.contains("libfoundry_android.so"));
     }

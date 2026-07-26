@@ -211,6 +211,9 @@ abstract class VerifyAndroidAar : DefaultTask() {
     @get:Input
     abstract val allowedClasses: SetProperty<String>
 
+    @get:Input
+    abstract val expectedNativeLibraries: SetProperty<String>
+
     @TaskAction
     fun verifyAar() {
         val aar = aarFile.get().asFile
@@ -221,6 +224,17 @@ abstract class VerifyAndroidAar : DefaultTask() {
                 },
             ) {
                 "Release AAR must not package libfoundry_android.so."
+            }
+            val actualNativeLibraries =
+                zip
+                    .entries()
+                    .asSequence()
+                    .map { it.name }
+                    .filter { it.endsWith(".so") }
+                    .toSet()
+            check(actualNativeLibraries == expectedNativeLibraries.get()) {
+                "Release AAR native payload differs from the four-ABI bridge contract. " +
+                    "Expected ${expectedNativeLibraries.get()}, found $actualNativeLibraries."
             }
             val classesJar = zip.getEntry("classes.jar")
             check(classesJar != null) { "Release AAR must contain classes.jar." }
@@ -831,7 +845,17 @@ val requiredPublicationArtifacts =
         "$testPublicationDirectory|foundry-java-test|jar||" +
             "foundry-java-test-$requiredPublicationVersion.jar",
     )
-val allowedBootstrapAndroidClasses = emptySet<String>()
+val allowedBootstrapAndroidClasses =
+    setOf(
+        "games/cafecito/foundry/java/FoundryJavaInitializer.class",
+    )
+val requiredAndroidNativeLibraries =
+    setOf(
+        "jni/armeabi-v7a/libfoundry_java.so",
+        "jni/arm64-v8a/libfoundry_java.so",
+        "jni/x86/libfoundry_java.so",
+        "jni/x86_64/libfoundry_java.so",
+    )
 
 val resolveLockTasks =
     allprojects.map { currentProject ->
@@ -913,6 +937,7 @@ val verifyAndroidAar =
                 .file("outputs/aar/foundry-java-android-release.aar"),
         )
         allowedClasses.set(allowedBootstrapAndroidClasses)
+        expectedNativeLibraries.set(requiredAndroidNativeLibraries)
     }
 
 val verifyPublications =
