@@ -12,6 +12,10 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CancellationException
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -182,6 +186,140 @@ class SignalAwaitTest {
             assertEquals(listOf(Variant.of("first")), result.await())
         }
 
+    @Test
+    fun `terminal state self closes registrations published afterward`() {
+        val signalCloseCount = AtomicInteger()
+        val invalidationCloseCount = AtomicInteger()
+        val actions = AtomicInteger()
+        val registrations = newAwaitRegistrations()
+
+        registrations.tryTerminate { actions.incrementAndGet() }
+        registrations.tryTerminate { actions.incrementAndGet() }
+        registrations.publishConnection(countingCloseable(signalCloseCount))
+        registrations.publishInvalidation(countingCloseable(invalidationCloseCount))
+
+        assertEquals(1, actions.get())
+        assertEquals(1, signalCloseCount.get())
+        assertEquals(1, invalidationCloseCount.get())
+    }
+
+    @Test
+    fun `signal and cancellation race to one terminal outcome`() =
+        runTest {
+            val fixture = liveOwner()
+            val decodes = AtomicInteger()
+            val signal =
+                FoundryTypedSignal.Of1(
+                    FoundrySignal(),
+                    countingCodec(VariantCodec.STRING, decodes),
+                )
+            val result =
+                async(start = CoroutineStart.UNDISPATCHED) {
+                    signal.await(fixture.owner)
+                }
+            val barrier = CyclicBarrier(3)
+            val executor = Executors.newFixedThreadPool(2)
+            try {
+                val emit = executor.submit { barrierRace(barrier) { signal.emit("winner") } }
+                val cancel = executor.submit { barrierRace(barrier) { result.cancel() } }
+                barrier.await(5, TimeUnit.SECONDS)
+                emit.get(5, TimeUnit.SECONDS)
+                cancel.get(5, TimeUnit.SECONDS)
+
+                val outcome = runCatching { result.await() }
+                assertTrue(
+                    outcome.getOrNull() == "winner" ||
+                        outcome.exceptionOrNull() is CancellationException,
+                )
+                val terminalDecodes = decodes.get()
+                signal.emit("late")
+                assertEquals(terminalDecodes, decodes.get())
+            } finally {
+                executor.shutdownNow()
+            }
+        }
+
+    @Test
+    fun `signal and invalidation race to one terminal outcome`() =
+        runTest {
+            supervisorScope {
+                val fixture = liveOwner()
+                val decodes = AtomicInteger()
+                val signal =
+                    FoundryTypedSignal.Of1(
+                        FoundrySignal(),
+                        countingCodec(VariantCodec.STRING, decodes),
+                    )
+                val result =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        signal.await(fixture.owner)
+                    }
+                val barrier = CyclicBarrier(3)
+                val executor = Executors.newFixedThreadPool(2)
+                try {
+                    val emit = executor.submit { barrierRace(barrier) { signal.emit("winner") } }
+                    val invalidate =
+                        executor.submit {
+                            barrierRace(barrier) { fixture.context.invalidateObject(7) }
+                        }
+                    barrier.await(5, TimeUnit.SECONDS)
+                    emit.get(5, TimeUnit.SECONDS)
+                    invalidate.get(5, TimeUnit.SECONDS)
+
+                    val outcome = runCatching { result.await() }
+                    assertTrue(
+                        outcome.getOrNull() == "winner" ||
+                            outcome.exceptionOrNull() is FoundryObjectDisposedException,
+                    )
+                    val terminalDecodes = decodes.get()
+                    signal.emit("late")
+                    assertEquals(terminalDecodes, decodes.get())
+                } finally {
+                    executor.shutdownNow()
+                }
+            }
+        }
+
+    @Test
+    fun `cancellation and invalidation race then disconnect before emission`() =
+        runTest {
+            supervisorScope {
+                val fixture = liveOwner()
+                val decodes = AtomicInteger()
+                val signal =
+                    FoundryTypedSignal.Of1(
+                        FoundrySignal(),
+                        countingCodec(VariantCodec.STRING, decodes),
+                    )
+                val result =
+                    async(start = CoroutineStart.UNDISPATCHED) {
+                        signal.await(fixture.owner)
+                    }
+                val barrier = CyclicBarrier(3)
+                val executor = Executors.newFixedThreadPool(2)
+                try {
+                    val cancel = executor.submit { barrierRace(barrier) { result.cancel() } }
+                    val invalidate =
+                        executor.submit {
+                            barrierRace(barrier) { fixture.context.invalidateObject(7) }
+                        }
+                    barrier.await(5, TimeUnit.SECONDS)
+                    cancel.get(5, TimeUnit.SECONDS)
+                    invalidate.get(5, TimeUnit.SECONDS)
+
+                    val failure = runCatching { result.await() }.exceptionOrNull()
+                    assertTrue(
+                        failure is CancellationException ||
+                            failure is FoundryObjectDisposedException,
+                    )
+                    signal.emit("late")
+                    assertEquals(0, decodes.get())
+                } finally {
+                    executor.shutdownNow()
+                }
+            }
+        }
+
     private fun liveOwner(): OwnerFixture {
         val context = testContext()
         val owner =
@@ -207,6 +345,53 @@ class SignalAwaitTest {
 
             override fun acceptsNil(): Boolean = delegate.acceptsNil()
         }
+
+    private fun newAwaitRegistrations(): AwaitRegistrationsProbe {
+        val type = Class.forName("games.cafecito.foundry.kotlin.AwaitRegistrations")
+        val instance = type.getDeclaredConstructor().apply { isAccessible = true }.newInstance()
+        return AwaitRegistrationsProbe(type, instance)
+    }
+
+    private fun countingCloseable(closeCount: AtomicInteger): AutoCloseable =
+        AutoCloseable { closeCount.incrementAndGet() }
+
+    private fun barrierRace(
+        barrier: CyclicBarrier,
+        action: () -> Unit,
+    ) {
+        barrier.await(5, TimeUnit.SECONDS)
+        action()
+    }
+
+    private class AwaitRegistrationsProbe(
+        private val type: Class<*>,
+        private val instance: Any,
+    ) {
+        fun tryTerminate(action: () -> Unit) {
+            type
+                .getDeclaredMethod("tryTerminate", kotlin.jvm.functions.Function0::class.java)
+                .apply { isAccessible = true }
+                .invoke(instance, action)
+        }
+
+        fun publishConnection(value: AutoCloseable) {
+            publish("publishConnection", value)
+        }
+
+        fun publishInvalidation(value: AutoCloseable) {
+            publish("publishInvalidation", value)
+        }
+
+        private fun publish(
+            method: String,
+            value: AutoCloseable,
+        ) {
+            type
+                .getDeclaredMethod(method, AutoCloseable::class.java)
+                .apply { isAccessible = true }
+                .invoke(instance, value)
+        }
+    }
 
     private data class OwnerFixture(
         val context: games.cafecito.foundry.runtime.FoundryBindingContext,
