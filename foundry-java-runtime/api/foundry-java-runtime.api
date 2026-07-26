@@ -6,6 +6,7 @@ games.cafecito.foundry.runtime.CallbackRegistry|public long register(games.cafec
 games.cafecito.foundry.runtime.FoundryBindingContext$ObjectFactory|public abstract T create(games.cafecito.foundry.runtime.FoundryBindingContext, games.cafecito.foundry.runtime.ObjectLease);
 games.cafecito.foundry.runtime.FoundryBindingContext$ObjectFactory|public interface games.cafecito.foundry.runtime.FoundryBindingContext$ObjectFactory<T extends games.cafecito.foundry.runtime.FoundryObject> {
 games.cafecito.foundry.runtime.FoundryBindingContext|public <T extends games.cafecito.foundry.runtime.FoundryObject> T bind(long, games.cafecito.foundry.runtime.ObjectOwnership, java.lang.Class<T>, games.cafecito.foundry.runtime.FoundryBindingContext$ObjectFactory<T>);
+games.cafecito.foundry.runtime.FoundryBindingContext|public <T extends games.cafecito.foundry.runtime.FoundryObject> void registerObjectType(java.lang.String, java.lang.Class<T>, games.cafecito.foundry.runtime.FoundryBindingContext$ObjectFactory<T>);
 games.cafecito.foundry.runtime.FoundryBindingContext|public boolean isAlive();
 games.cafecito.foundry.runtime.FoundryBindingContext|public final class games.cafecito.foundry.runtime.FoundryBindingContext implements java.lang.AutoCloseable {
 games.cafecito.foundry.runtime.FoundryBindingContext|public games.cafecito.foundry.runtime.CallbackRegistry callbackRegistry();
@@ -43,6 +44,10 @@ games.cafecito.foundry.runtime.FoundryCallable|public int arity();
 games.cafecito.foundry.runtime.FoundryCallable|public static <T, R> games.cafecito.foundry.runtime.FoundryCallable unary(games.cafecito.foundry.types.VariantCodec<T>, games.cafecito.foundry.types.VariantCodec<R>, java.util.function.Function<T, R>);
 games.cafecito.foundry.runtime.FoundryCallable|public static games.cafecito.foundry.runtime.FoundryCallable fixed(int, java.util.function.Function<java.util.List<games.cafecito.foundry.types.Variant>, games.cafecito.foundry.types.Variant>);
 games.cafecito.foundry.runtime.FoundryCallable|public static games.cafecito.foundry.runtime.FoundryCallable variadic(java.util.function.Function<java.util.List<games.cafecito.foundry.types.Variant>, games.cafecito.foundry.types.Variant>);
+games.cafecito.foundry.runtime.FoundryConstant|public T get(games.cafecito.foundry.runtime.FoundryBindingContext);
+games.cafecito.foundry.runtime.FoundryConstant|public final class games.cafecito.foundry.runtime.FoundryConstant<T> {
+games.cafecito.foundry.runtime.FoundryConstant|public games.cafecito.foundry.runtime.FoundryConstant(java.lang.String, java.util.function.Function<games.cafecito.foundry.types.Variant, T>);
+games.cafecito.foundry.runtime.FoundryConstant|public java.lang.String sourceIdentity();
 games.cafecito.foundry.runtime.FoundryEngine$CallResult|public final boolean equals(java.lang.Object);
 games.cafecito.foundry.runtime.FoundryEngine$CallResult|public final class games.cafecito.foundry.runtime.FoundryEngine$CallResult extends java.lang.Record {
 games.cafecito.foundry.runtime.FoundryEngine$CallResult|public final int hashCode();
@@ -56,6 +61,7 @@ games.cafecito.foundry.runtime.FoundryEngine$CallResult|public static games.cafe
 games.cafecito.foundry.runtime.FoundryEngine|public abstract boolean isObjectValid(long, long);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract games.cafecito.foundry.runtime.FoundryEngine$CallResult call(long, long, java.lang.String, java.util.List<games.cafecito.foundry.types.Variant>);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract games.cafecito.foundry.types.Variant decodeVariant(long, long);
+games.cafecito.foundry.runtime.FoundryEngine|public abstract java.lang.String objectType(long, long);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract long encodeVariant(long, games.cafecito.foundry.types.Variant);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract long singleton(long, java.lang.String);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract void release(long, long);
@@ -70,6 +76,15 @@ games.cafecito.foundry.runtime.FoundryInitializationLevel|public static final ga
 games.cafecito.foundry.runtime.FoundryInitializationLevel|public static final games.cafecito.foundry.runtime.FoundryInitializationLevel SERVERS;
 games.cafecito.foundry.runtime.FoundryInitializationLevel|public static games.cafecito.foundry.runtime.FoundryInitializationLevel valueOf(java.lang.String);
 games.cafecito.foundry.runtime.FoundryInitializationLevel|public static games.cafecito.foundry.runtime.FoundryInitializationLevel[] values();
+games.cafecito.foundry.runtime.FoundryNativeHandle|public boolean isNull();
+games.cafecito.foundry.runtime.FoundryNativeHandle|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.runtime.FoundryNativeHandle|public final class games.cafecito.foundry.runtime.FoundryNativeHandle extends java.lang.Record {
+games.cafecito.foundry.runtime.FoundryNativeHandle|public final int hashCode();
+games.cafecito.foundry.runtime.FoundryNativeHandle|public final java.lang.String toString();
+games.cafecito.foundry.runtime.FoundryNativeHandle|public games.cafecito.foundry.runtime.FoundryNativeHandle(java.lang.String, long);
+games.cafecito.foundry.runtime.FoundryNativeHandle|public java.lang.String nativeType();
+games.cafecito.foundry.runtime.FoundryNativeHandle|public long bridgeHandle();
+games.cafecito.foundry.runtime.FoundryNativeHandle|public static games.cafecito.foundry.runtime.FoundryNativeHandle nullHandle(java.lang.String);
 games.cafecito.foundry.runtime.FoundryObjectDisposedException|public final class games.cafecito.foundry.runtime.FoundryObjectDisposedException extends java.lang.IllegalStateException {
 games.cafecito.foundry.runtime.FoundryObject|public class games.cafecito.foundry.runtime.FoundryObject implements java.lang.AutoCloseable {
 games.cafecito.foundry.runtime.FoundryObject|public final boolean isAlive();
@@ -109,6 +124,21 @@ games.cafecito.foundry.runtime.ObjectOwnership|public static final games.cafecit
 games.cafecito.foundry.runtime.ObjectOwnership|public static final games.cafecito.foundry.runtime.ObjectOwnership REFERENCE_COUNTED;
 games.cafecito.foundry.runtime.ObjectOwnership|public static games.cafecito.foundry.runtime.ObjectOwnership valueOf(java.lang.String);
 games.cafecito.foundry.runtime.ObjectOwnership|public static games.cafecito.foundry.runtime.ObjectOwnership[] values();
+games.cafecito.foundry.types.Aabb|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Aabb|public final class games.cafecito.foundry.types.Aabb extends java.lang.Record {
+games.cafecito.foundry.types.Aabb|public final int hashCode();
+games.cafecito.foundry.types.Aabb|public final java.lang.String toString();
+games.cafecito.foundry.types.Aabb|public games.cafecito.foundry.types.Aabb(games.cafecito.foundry.types.Vector3, games.cafecito.foundry.types.Vector3);
+games.cafecito.foundry.types.Aabb|public games.cafecito.foundry.types.Vector3 position();
+games.cafecito.foundry.types.Aabb|public games.cafecito.foundry.types.Vector3 size();
+games.cafecito.foundry.types.Basis|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Basis|public final class games.cafecito.foundry.types.Basis extends java.lang.Record {
+games.cafecito.foundry.types.Basis|public final int hashCode();
+games.cafecito.foundry.types.Basis|public final java.lang.String toString();
+games.cafecito.foundry.types.Basis|public games.cafecito.foundry.types.Basis(games.cafecito.foundry.types.Vector3, games.cafecito.foundry.types.Vector3, games.cafecito.foundry.types.Vector3);
+games.cafecito.foundry.types.Basis|public games.cafecito.foundry.types.Vector3 x();
+games.cafecito.foundry.types.Basis|public games.cafecito.foundry.types.Vector3 y();
+games.cafecito.foundry.types.Basis|public games.cafecito.foundry.types.Vector3 z();
 games.cafecito.foundry.types.Color|public double alpha();
 games.cafecito.foundry.types.Color|public double blue();
 games.cafecito.foundry.types.Color|public double green();
@@ -263,6 +293,45 @@ games.cafecito.foundry.types.PackedVector4Array|public int size();
 games.cafecito.foundry.types.PackedVector4Array|public java.lang.Object get(int);
 games.cafecito.foundry.types.PackedVector4Array|public void set(int, games.cafecito.foundry.types.Vector4);
 games.cafecito.foundry.types.PackedVector4Array|public void set(int, java.lang.Object);
+games.cafecito.foundry.types.Plane|public double d();
+games.cafecito.foundry.types.Plane|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Plane|public final class games.cafecito.foundry.types.Plane extends java.lang.Record {
+games.cafecito.foundry.types.Plane|public final int hashCode();
+games.cafecito.foundry.types.Plane|public final java.lang.String toString();
+games.cafecito.foundry.types.Plane|public games.cafecito.foundry.types.Plane(games.cafecito.foundry.types.Vector3, double);
+games.cafecito.foundry.types.Plane|public games.cafecito.foundry.types.Vector3 normal();
+games.cafecito.foundry.types.Projection|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Projection|public final class games.cafecito.foundry.types.Projection extends java.lang.Record {
+games.cafecito.foundry.types.Projection|public final int hashCode();
+games.cafecito.foundry.types.Projection|public final java.lang.String toString();
+games.cafecito.foundry.types.Projection|public games.cafecito.foundry.types.Projection(games.cafecito.foundry.types.Vector4, games.cafecito.foundry.types.Vector4, games.cafecito.foundry.types.Vector4, games.cafecito.foundry.types.Vector4);
+games.cafecito.foundry.types.Projection|public games.cafecito.foundry.types.Vector4 w();
+games.cafecito.foundry.types.Projection|public games.cafecito.foundry.types.Vector4 x();
+games.cafecito.foundry.types.Projection|public games.cafecito.foundry.types.Vector4 y();
+games.cafecito.foundry.types.Projection|public games.cafecito.foundry.types.Vector4 z();
+games.cafecito.foundry.types.Quaternion|public double w();
+games.cafecito.foundry.types.Quaternion|public double x();
+games.cafecito.foundry.types.Quaternion|public double y();
+games.cafecito.foundry.types.Quaternion|public double z();
+games.cafecito.foundry.types.Quaternion|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Quaternion|public final class games.cafecito.foundry.types.Quaternion extends java.lang.Record {
+games.cafecito.foundry.types.Quaternion|public final int hashCode();
+games.cafecito.foundry.types.Quaternion|public final java.lang.String toString();
+games.cafecito.foundry.types.Quaternion|public games.cafecito.foundry.types.Quaternion(double, double, double, double);
+games.cafecito.foundry.types.Rect2i|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Rect2i|public final class games.cafecito.foundry.types.Rect2i extends java.lang.Record {
+games.cafecito.foundry.types.Rect2i|public final int hashCode();
+games.cafecito.foundry.types.Rect2i|public final java.lang.String toString();
+games.cafecito.foundry.types.Rect2i|public games.cafecito.foundry.types.Rect2i(games.cafecito.foundry.types.Vector2i, games.cafecito.foundry.types.Vector2i);
+games.cafecito.foundry.types.Rect2i|public games.cafecito.foundry.types.Vector2i position();
+games.cafecito.foundry.types.Rect2i|public games.cafecito.foundry.types.Vector2i size();
+games.cafecito.foundry.types.Rect2|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Rect2|public final class games.cafecito.foundry.types.Rect2 extends java.lang.Record {
+games.cafecito.foundry.types.Rect2|public final int hashCode();
+games.cafecito.foundry.types.Rect2|public final java.lang.String toString();
+games.cafecito.foundry.types.Rect2|public games.cafecito.foundry.types.Rect2(games.cafecito.foundry.types.Vector2, games.cafecito.foundry.types.Vector2);
+games.cafecito.foundry.types.Rect2|public games.cafecito.foundry.types.Vector2 position();
+games.cafecito.foundry.types.Rect2|public games.cafecito.foundry.types.Vector2 size();
 games.cafecito.foundry.types.Rid|public final boolean equals(java.lang.Object);
 games.cafecito.foundry.types.Rid|public final class games.cafecito.foundry.types.Rid extends java.lang.Record {
 games.cafecito.foundry.types.Rid|public final int hashCode();
@@ -275,23 +344,67 @@ games.cafecito.foundry.types.StringName|public final int hashCode();
 games.cafecito.foundry.types.StringName|public games.cafecito.foundry.types.StringName(java.lang.String);
 games.cafecito.foundry.types.StringName|public java.lang.String toString();
 games.cafecito.foundry.types.StringName|public java.lang.String value();
+games.cafecito.foundry.types.Transform2D|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Transform2D|public final class games.cafecito.foundry.types.Transform2D extends java.lang.Record {
+games.cafecito.foundry.types.Transform2D|public final int hashCode();
+games.cafecito.foundry.types.Transform2D|public final java.lang.String toString();
+games.cafecito.foundry.types.Transform2D|public games.cafecito.foundry.types.Transform2D(games.cafecito.foundry.types.Vector2, games.cafecito.foundry.types.Vector2, games.cafecito.foundry.types.Vector2);
+games.cafecito.foundry.types.Transform2D|public games.cafecito.foundry.types.Vector2 origin();
+games.cafecito.foundry.types.Transform2D|public games.cafecito.foundry.types.Vector2 x();
+games.cafecito.foundry.types.Transform2D|public games.cafecito.foundry.types.Vector2 y();
+games.cafecito.foundry.types.Transform3D|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Transform3D|public final class games.cafecito.foundry.types.Transform3D extends java.lang.Record {
+games.cafecito.foundry.types.Transform3D|public final int hashCode();
+games.cafecito.foundry.types.Transform3D|public final java.lang.String toString();
+games.cafecito.foundry.types.Transform3D|public games.cafecito.foundry.types.Basis basis();
+games.cafecito.foundry.types.Transform3D|public games.cafecito.foundry.types.Transform3D(games.cafecito.foundry.types.Basis, games.cafecito.foundry.types.Vector3);
+games.cafecito.foundry.types.Transform3D|public games.cafecito.foundry.types.Vector3 origin();
 games.cafecito.foundry.types.VariantCodec|public abstract T decode(games.cafecito.foundry.types.Variant);
 games.cafecito.foundry.types.VariantCodec|public abstract games.cafecito.foundry.types.Variant encode(T);
 games.cafecito.foundry.types.VariantCodec|public default boolean acceptsNil();
 games.cafecito.foundry.types.VariantCodec|public interface games.cafecito.foundry.types.VariantCodec<T> {
 games.cafecito.foundry.types.VariantCodec|public static <T> games.cafecito.foundry.types.VariantCodec<T> nullable(games.cafecito.foundry.types.VariantCodec<T>);
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.runtime.FoundryCallable> CALLABLE;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.runtime.FoundryObject> OBJECT;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.runtime.FoundrySignal> SIGNAL;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Aabb> AABB;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Basis> BASIS;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Color> COLOR;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.FoundryArray<?>> ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.FoundryDictionary<?, ?>> DICTIONARY;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.NodePath> NODE_PATH;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedByteArray> PACKED_BYTE_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedColorArray> PACKED_COLOR_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedFloat32Array> PACKED_FLOAT32_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedFloat64Array> PACKED_FLOAT64_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedInt32Array> PACKED_INT32_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedInt64Array> PACKED_INT64_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedStringArray> PACKED_STRING_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedVector2Array> PACKED_VECTOR2_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedVector3Array> PACKED_VECTOR3_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.PackedVector4Array> PACKED_VECTOR4_ARRAY;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Plane> PLANE;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Projection> PROJECTION;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Quaternion> QUATERNION;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Rect2> RECT2;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Rect2i> RECT2I;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Rid> RID;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.StringName> STRING_NAME;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Transform2D> TRANSFORM2D;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Transform3D> TRANSFORM3D;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Variant> VARIANT;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Vector2> VECTOR2;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Vector2i> VECTOR2I;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Vector3> VECTOR3;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Vector3i> VECTOR3I;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Vector4> VECTOR4;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<games.cafecito.foundry.types.Vector4i> VECTOR4I;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<java.lang.Boolean> BOOLEAN;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<java.lang.Double> FLOAT;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<java.lang.Long> INTEGER;
+games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<java.lang.Object> NIL;
 games.cafecito.foundry.types.VariantCodec|public static final games.cafecito.foundry.types.VariantCodec<java.lang.String> STRING;
+games.cafecito.foundry.types.VariantCodec|public static games.cafecito.foundry.types.VariantCodec<java.lang.Object> forType(games.cafecito.foundry.types.VariantType);
 games.cafecito.foundry.types.VariantConversionException|public final class games.cafecito.foundry.types.VariantConversionException extends java.lang.IllegalStateException {
 games.cafecito.foundry.types.VariantConversionException|public games.cafecito.foundry.types.VariantConversionException(games.cafecito.foundry.types.VariantType, games.cafecito.foundry.types.VariantType);
 games.cafecito.foundry.types.VariantType|public final class games.cafecito.foundry.types.VariantType extends java.lang.Enum<games.cafecito.foundry.types.VariantType> {
@@ -342,22 +455,50 @@ games.cafecito.foundry.types.Variant|public boolean isNil();
 games.cafecito.foundry.types.Variant|public double asDouble();
 games.cafecito.foundry.types.Variant|public final class games.cafecito.foundry.types.Variant {
 games.cafecito.foundry.types.Variant|public float asFloat();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.runtime.FoundryCallable asCallable();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.runtime.FoundryObject asObject();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.runtime.FoundrySignal asSignal();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Aabb asAabb();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Basis asBasis();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Color asColor();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.NodePath asNodePath();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Plane asPlane();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Projection asProjection();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Quaternion asQuaternion();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Rect2 asRect2();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Rect2i asRect2i();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Rid asRid();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.StringName asStringName();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Transform2D asTransform2D();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Transform3D asTransform3D();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Variant copy();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Variant copy(boolean);
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.VariantType type();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Vector2 asVector2();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Vector2i asVector2i();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Vector3 asVector3();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Vector3i asVector3i();
 games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Vector4 asVector4();
+games.cafecito.foundry.types.Variant|public games.cafecito.foundry.types.Vector4i asVector4i();
 games.cafecito.foundry.types.Variant|public int asInt();
 games.cafecito.foundry.types.Variant|public int hashCode();
+games.cafecito.foundry.types.Variant|public java.lang.Object as(games.cafecito.foundry.types.VariantType);
 games.cafecito.foundry.types.Variant|public java.lang.Object value();
 games.cafecito.foundry.types.Variant|public java.lang.String asString();
 games.cafecito.foundry.types.Variant|public java.lang.String toString();
 games.cafecito.foundry.types.Variant|public long asLong();
 games.cafecito.foundry.types.Variant|public static games.cafecito.foundry.types.Variant nil();
 games.cafecito.foundry.types.Variant|public static games.cafecito.foundry.types.Variant of(java.lang.Object);
+games.cafecito.foundry.types.Variant|public static games.cafecito.foundry.types.Variant ofCallable(games.cafecito.foundry.runtime.FoundryCallable);
+games.cafecito.foundry.types.Variant|public static games.cafecito.foundry.types.Variant ofObject(games.cafecito.foundry.runtime.FoundryObject);
+games.cafecito.foundry.types.Variant|public static games.cafecito.foundry.types.Variant ofSignal(games.cafecito.foundry.runtime.FoundrySignal);
+games.cafecito.foundry.types.Vector2i|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Vector2i|public final class games.cafecito.foundry.types.Vector2i extends java.lang.Record {
+games.cafecito.foundry.types.Vector2i|public final int hashCode();
+games.cafecito.foundry.types.Vector2i|public final java.lang.String toString();
+games.cafecito.foundry.types.Vector2i|public games.cafecito.foundry.types.Vector2i(int, int);
+games.cafecito.foundry.types.Vector2i|public int x();
+games.cafecito.foundry.types.Vector2i|public int y();
 games.cafecito.foundry.types.Vector2|public double x();
 games.cafecito.foundry.types.Vector2|public double y();
 games.cafecito.foundry.types.Vector2|public final boolean equals(java.lang.Object);
@@ -365,6 +506,14 @@ games.cafecito.foundry.types.Vector2|public final class games.cafecito.foundry.t
 games.cafecito.foundry.types.Vector2|public final int hashCode();
 games.cafecito.foundry.types.Vector2|public final java.lang.String toString();
 games.cafecito.foundry.types.Vector2|public games.cafecito.foundry.types.Vector2(double, double);
+games.cafecito.foundry.types.Vector3i|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Vector3i|public final class games.cafecito.foundry.types.Vector3i extends java.lang.Record {
+games.cafecito.foundry.types.Vector3i|public final int hashCode();
+games.cafecito.foundry.types.Vector3i|public final java.lang.String toString();
+games.cafecito.foundry.types.Vector3i|public games.cafecito.foundry.types.Vector3i(int, int, int);
+games.cafecito.foundry.types.Vector3i|public int x();
+games.cafecito.foundry.types.Vector3i|public int y();
+games.cafecito.foundry.types.Vector3i|public int z();
 games.cafecito.foundry.types.Vector3|public double x();
 games.cafecito.foundry.types.Vector3|public double y();
 games.cafecito.foundry.types.Vector3|public double z();
@@ -373,6 +522,15 @@ games.cafecito.foundry.types.Vector3|public final class games.cafecito.foundry.t
 games.cafecito.foundry.types.Vector3|public final int hashCode();
 games.cafecito.foundry.types.Vector3|public final java.lang.String toString();
 games.cafecito.foundry.types.Vector3|public games.cafecito.foundry.types.Vector3(double, double, double);
+games.cafecito.foundry.types.Vector4i|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.types.Vector4i|public final class games.cafecito.foundry.types.Vector4i extends java.lang.Record {
+games.cafecito.foundry.types.Vector4i|public final int hashCode();
+games.cafecito.foundry.types.Vector4i|public final java.lang.String toString();
+games.cafecito.foundry.types.Vector4i|public games.cafecito.foundry.types.Vector4i(int, int, int, int);
+games.cafecito.foundry.types.Vector4i|public int w();
+games.cafecito.foundry.types.Vector4i|public int x();
+games.cafecito.foundry.types.Vector4i|public int y();
+games.cafecito.foundry.types.Vector4i|public int z();
 games.cafecito.foundry.types.Vector4|public double w();
 games.cafecito.foundry.types.Vector4|public double x();
 games.cafecito.foundry.types.Vector4|public double y();

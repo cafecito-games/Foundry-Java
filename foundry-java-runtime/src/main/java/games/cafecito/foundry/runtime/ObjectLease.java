@@ -13,11 +13,12 @@ import java.util.function.BooleanSupplier;
 public final class ObjectLease implements Runnable {
     private final long contextHandle;
     private final long objectHandle;
-    private final ObjectOwnership ownership;
     private final FoundryEngine engine;
     private final BooleanSupplier contextAlive;
     private final AtomicBoolean alive = new AtomicBoolean(true);
-    private final AtomicBoolean released = new AtomicBoolean();
+    private final Object stateLock = new Object();
+    private boolean retained;
+    private boolean released;
 
     ObjectLease(
             long contextHandle,
@@ -27,11 +28,12 @@ public final class ObjectLease implements Runnable {
             BooleanSupplier contextAlive) {
         this.contextHandle = contextHandle;
         this.objectHandle = objectHandle;
-        this.ownership = Objects.requireNonNull(ownership, "ownership");
+        Objects.requireNonNull(ownership, "ownership");
         this.engine = Objects.requireNonNull(engine, "engine");
         this.contextAlive = Objects.requireNonNull(contextAlive, "contextAlive");
         if (ownership == ObjectOwnership.REFERENCE_COUNTED) {
             engine.retain(contextHandle, objectHandle);
+            retained = true;
         }
     }
 
@@ -44,7 +46,9 @@ public final class ObjectLease implements Runnable {
     }
 
     public ObjectOwnership ownership() {
-        return ownership;
+        synchronized (stateLock) {
+            return retained ? ObjectOwnership.REFERENCE_COUNTED : ObjectOwnership.BORROWED;
+        }
     }
 
     public boolean isAlive() {
@@ -65,13 +69,34 @@ public final class ObjectLease implements Runnable {
     }
 
     void invalidate() {
-        alive.set(false);
+        synchronized (stateLock) {
+            alive.set(false);
+        }
+    }
+
+    void upgrade(ObjectOwnership requestedOwnership) {
+        Objects.requireNonNull(requestedOwnership, "requestedOwnership");
+        synchronized (stateLock) {
+            if (requestedOwnership != ObjectOwnership.REFERENCE_COUNTED
+                    || retained
+                    || released
+                    || !alive.get()) {
+                return;
+            }
+            engine.retain(contextHandle, objectHandle);
+            retained = true;
+        }
     }
 
     @Override
     public void run() {
-        alive.set(false);
-        if (ownership == ObjectOwnership.REFERENCE_COUNTED && released.compareAndSet(false, true)) {
+        boolean shouldRelease;
+        synchronized (stateLock) {
+            alive.set(false);
+            shouldRelease = retained && !released;
+            released = released || shouldRelease;
+        }
+        if (shouldRelease) {
             try {
                 engine.release(contextHandle, objectHandle);
             } catch (Throwable failure) {

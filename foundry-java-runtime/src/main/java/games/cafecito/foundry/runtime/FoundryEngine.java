@@ -14,6 +14,13 @@ public interface FoundryEngine {
 
     boolean isObjectValid(long contextHandle, long objectHandle);
 
+    /**
+     * Returns the most-derived registered Foundry class name for an object handle.
+     *
+     * <p>The host bridge must return an empty string only when type information is unavailable.
+     */
+    String objectType(long contextHandle, long objectHandle);
+
     void retain(long contextHandle, long objectHandle);
 
     void release(long contextHandle, long objectHandle);

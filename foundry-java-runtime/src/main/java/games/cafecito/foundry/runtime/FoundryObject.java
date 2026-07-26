@@ -66,4 +66,8 @@ public class FoundryObject implements AutoCloseable {
     final void invalidate() {
         lease.invalidate();
     }
+
+    final ObjectLease lease() {
+        return lease;
+    }
 }

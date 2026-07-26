@@ -34,6 +34,7 @@ class RuntimeInterfaceTest {
                         "decodeVariant(long,long):Variant",
                         "encodeVariant(long,Variant):long",
                         "isObjectValid(long,long):boolean",
+                        "objectType(long,long):String",
                         "release(long,long):void",
                         "reportCallbackException(long,long,Throwable):void",
                         "retain(long,long):void",

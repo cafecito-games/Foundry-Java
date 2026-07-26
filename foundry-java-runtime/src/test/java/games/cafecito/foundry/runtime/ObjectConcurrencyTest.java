@@ -44,6 +44,84 @@ class ObjectConcurrencyTest {
         }
     }
 
+    @Test
+    void concurrentBorrowedToReferenceCountedUpgradesRetainOnlyOnce() throws Exception {
+        ObjectLifecycleTest.CountingEngine engine = new ObjectLifecycleTest.CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+        ObjectLifecycleTest.TestObject borrowed =
+                context.bind(
+                        7,
+                        ObjectOwnership.BORROWED,
+                        ObjectLifecycleTest.TestObject.class,
+                        ObjectLifecycleTest.TestObject::new);
+        ExecutorService executor = Executors.newFixedThreadPool(8);
+        try {
+            List<Future<ObjectLifecycleTest.TestObject>> futures = new ArrayList<>();
+            for (int index = 0; index < 64; index++) {
+                futures.add(
+                        executor.submit(
+                                () ->
+                                        context.bind(
+                                                7,
+                                                ObjectOwnership.REFERENCE_COUNTED,
+                                                ObjectLifecycleTest.TestObject.class,
+                                                ObjectLifecycleTest.TestObject::new)));
+            }
+            for (Future<ObjectLifecycleTest.TestObject> future : futures) {
+                assertSame(borrowed, future.get());
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals(1, engine.retains.get());
+        borrowed.close();
+        assertEquals(1, engine.releases.get());
+    }
+
+    @RepeatedTest(25)
+    void ownershipUpgradeRacingCloseNeverLeaksARetain() throws Exception {
+        ObjectLifecycleTest.CountingEngine engine = new ObjectLifecycleTest.CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+        ObjectLifecycleTest.TestObject borrowed =
+                context.bind(
+                        7,
+                        ObjectOwnership.BORROWED,
+                        ObjectLifecycleTest.TestObject.class,
+                        ObjectLifecycleTest.TestObject::new);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> upgrade =
+                    executor.submit(
+                            () -> {
+                                await(start);
+                                try {
+                                    context.bind(
+                                            7,
+                                            ObjectOwnership.REFERENCE_COUNTED,
+                                            ObjectLifecycleTest.TestObject.class,
+                                            ObjectLifecycleTest.TestObject::new);
+                                } catch (FoundryObjectDisposedException expected) {
+                                    // Close won the linearized transition.
+                                }
+                            });
+            Future<?> close =
+                    executor.submit(
+                            () -> {
+                                await(start);
+                                borrowed.close();
+                            });
+            start.countDown();
+            upgrade.get(10, TimeUnit.SECONDS);
+            close.get(10, TimeUnit.SECONDS);
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals(engine.retains.get(), engine.releases.get());
+    }
+
     @RepeatedTest(25)
     void closeInvalidateAndShutdownCannotDoubleReleaseOrRepublish() throws Exception {
         ObjectLifecycleTest.CountingEngine engine = new ObjectLifecycleTest.CountingEngine();

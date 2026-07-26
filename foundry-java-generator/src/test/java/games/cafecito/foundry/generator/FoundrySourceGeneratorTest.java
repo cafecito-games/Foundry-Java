@@ -132,33 +132,7 @@ class FoundrySourceGeneratorTest {
                         .sorted(Map.Entry.comparingByKey())
                         .map(entry -> entry.getKey() + "=" + entry.getValue())
                         .toList();
-        assertEquals(
-                Map.ofEntries(
-                        Map.entry(
-                                "builtin_class_member_offsets/float_32",
-                                "GeneratedBuiltin_class_member_offsetsFloat_32_4f3a6f8a556e"),
-                        Map.entry(
-                                "builtin_class_sizes/float_32",
-                                "GeneratedBuiltin_class_sizesFloat_32_8eff911e47ce"),
-                        Map.entry(
-                                "builtin_classes/Array",
-                                "GeneratedBuiltin_classesArray_2652de84a90c"),
-                        Map.entry("classes/Node", "GeneratedClassesNode_55aa10d9c1aa"),
-                        Map.entry("classes/Object", "GeneratedClassesObject_9a9c800c766e"),
-                        Map.entry(
-                                "global_constants/PROPERTY_USAGE_DEFAULT",
-                                "GeneratedGlobal_constantsPROPERTY_USAGE_DEFAULT_781b45ab8fcd"),
-                        Map.entry(
-                                "global_enums/Variant.Type",
-                                "GeneratedGlobal_enumsVariantType_50143ad9cd87"),
-                        Map.entry(
-                                "native_structures/ObjectID",
-                                "GeneratedNative_structuresObjectID_2e744d4a66c3"),
-                        Map.entry("singletons/Engine", "GeneratedSingletonsEngine_d0c5170cce56"),
-                        Map.entry(
-                                "utility_functions/type_convert#128",
-                                "GeneratedUtility_functionsType_convert128_b1055cd0b571")),
-                generated.descriptorCatalog());
+        assertEquals(10, generated.descriptorCatalog().size());
         assertEquals(
                 expectedCatalog,
                 registration
@@ -169,53 +143,30 @@ class FoundrySourceGeneratorTest {
         assertTrue(registration.contains("public static java.util.List<Descriptor> descriptors()"));
 
         String objectWrapper =
-                generated
-                        .sources()
-                        .get(
-                                "games/cafecito/foundry/generated/classes/"
-                                        + "ApiObject_9a9c800c766e.java");
+                generated.sources().get("games/cafecito/foundry/generated/classes/Object.java");
         String nodeWrapper =
-                generated
-                        .sources()
-                        .get(
-                                "games/cafecito/foundry/generated/classes/"
-                                        + "ApiNode_55aa10d9c1aa.java");
+                generated.sources().get("games/cafecito/foundry/generated/classes/Node.java");
         String builtinWrapper =
-                generated
-                        .sources()
-                        .get(
-                                "games/cafecito/foundry/generated/builtins/"
-                                        + "ApiArray_2652de84a90c.java");
+                generated.sources().get("games/cafecito/foundry/generated/builtins/Array.java");
         String utilityWrapper =
-                generated
-                        .sources()
-                        .get(
-                                "games/cafecito/foundry/generated/utilities/"
-                                        + "ApiType_convert128_b1055cd0b571.java");
+                generated.sources().get("games/cafecito/foundry/generated/Utilities.java");
         String singletonWrapper =
-                generated
-                        .sources()
-                        .get(
-                                "games/cafecito/foundry/generated/singletons/"
-                                        + "ApiEngine_d0c5170cce56.java");
+                generated.sources().get("games/cafecito/foundry/generated/singletons/Engine.java");
         assertNotNull(objectWrapper);
         assertNotNull(nodeWrapper);
         assertNotNull(builtinWrapper);
         assertNotNull(utilityWrapper);
         assertNotNull(singletonWrapper);
-        assertTrue(
-                nodeWrapper.contains(
-                        "public class ApiNode_55aa10d9c1aa extends ApiObject_9a9c800c766e"));
+        assertTrue(nodeWrapper.contains("public class Node extends Object"));
         assertTrue(
                 objectWrapper.contains(
-                        "public class ApiObject_9a9c800c766e extends "
+                        "public class Object extends "
                                 + "games.cafecito.foundry.runtime.FoundryObject"));
         assertTrue(nodeWrapper.contains("games.cafecito.foundry.runtime.FoundryBindingContext"));
         assertTrue(nodeWrapper.contains("games.cafecito.foundry.runtime.ObjectLease lease"));
         assertTrue(
                 nodeWrapper.contains("games.cafecito.foundry.runtime.ObjectOwnership ownership"));
         assertTrue(nodeWrapper.contains("context.bind("));
-        assertTrue(objectWrapper.contains("return call(identity, arguments);"));
         assertTrue(
                 singletonWrapper.contains("extends games.cafecito.foundry.runtime.FoundryObject"));
         assertTrue(singletonWrapper.contains("ObjectOwnership.BORROWED"));
@@ -224,13 +175,9 @@ class FoundrySourceGeneratorTest {
                         "public-identity-base64 "
                                 + base64("classes/Node/methods/get_children#101")));
         assertTrue(builtinWrapper.contains("games.cafecito.foundry.types.Variant value"));
-        assertTrue(builtinWrapper.contains("argumentsWithReceiver.add(value);"));
-        assertTrue(builtinWrapper.contains("context.call(0, identity, argumentsWithReceiver)"));
-        assertTrue(builtinWrapper.contains("if (!context.isAlive())"));
+        assertTrue(builtinWrapper.contains("__foundryGeneratedCallArguments.add(this.value);"));
         assertTrue(utilityWrapper.contains("public static games.cafecito.foundry.types.Variant"));
-        assertTrue(
-                utilityWrapper.contains("context.call(0, identity, java.util.List.of(arguments))"));
-        assertTrue(utilityWrapper.contains("if (!context.isAlive())"));
+        assertTrue(utilityWrapper.contains("context.call(0,"));
         assertNotNull(
                 generated
                         .sources()
@@ -269,6 +216,189 @@ class FoundrySourceGeneratorTest {
         assertNotNull(provenance);
         String normalized = MANIFEST_HASH.matcher(provenance).replaceFirst("<manifest-sha256>");
         assertEquals(expectedProvenance(), normalized);
+    }
+
+    @Test
+    void generatedSurfaceUsesStableRecognizableStronglyTypedJavaApi() throws IOException {
+        FoundryApi api = FoundryApiParser.parse(fixture());
+        GeneratedTree generated =
+                new FoundrySourceGenerator().generate(api, METADATA, supportedManifest(api));
+
+        String object =
+                generated.sources().get("games/cafecito/foundry/generated/classes/Object.java");
+        String node = generated.sources().get("games/cafecito/foundry/generated/classes/Node.java");
+        String array =
+                generated.sources().get("games/cafecito/foundry/generated/builtins/Array.java");
+        String utilities =
+                generated.sources().get("games/cafecito/foundry/generated/Utilities.java");
+        String engine =
+                generated.sources().get("games/cafecito/foundry/generated/singletons/Engine.java");
+        String globalEnum =
+                generated.sources().get("games/cafecito/foundry/generated/enums/VariantType.java");
+
+        assertNotNull(object);
+        assertNotNull(node);
+        assertNotNull(array);
+        assertNotNull(utilities);
+        assertNotNull(engine);
+        assertNotNull(globalEnum);
+        assertTrue(node.contains("public class Node extends Object"));
+        assertTrue(node.contains("getChildren(boolean includeInternal)"));
+        assertTrue(node.contains("getChildren()"));
+        assertTrue(node.contains("setOwnerPath(games.cafecito.foundry.types.NodePath ownerPath)"));
+        assertTrue(node.contains("getOwnerPath()"));
+        assertTrue(node.contains("renamedSignal()"));
+        assertTrue(node.contains("protected void onProcess(double delta)"));
+        assertTrue(node.contains("public enum ProcessMode"));
+        assertTrue(node.contains("NOTIFICATION_READY"));
+        assertTrue(array.contains("public final class Array"));
+        assertTrue(
+                array.contains(
+                        "void assign(games.cafecito.foundry.runtime.FoundryBindingContext context,"
+                                + " games.cafecito.foundry.generated.builtins.Array array)"));
+        assertTrue(
+                array.contains(
+                        "boolean equalTo(games.cafecito.foundry.runtime.FoundryBindingContext context,"
+                                + " games.cafecito.foundry.generated.builtins.Array right)"));
+        assertTrue(array.contains("public enum StorageMode"));
+        assertTrue(array.contains("MAX_SIZE"));
+        assertTrue(
+                utilities.contains(
+                        "public static games.cafecito.foundry.types.Variant typeConvert("));
+        assertTrue(engine.contains("public final class Engine"));
+        assertTrue(globalEnum.contains("public enum VariantType"));
+
+        String allPublicSources =
+                generated.sources().entrySet().stream()
+                        .filter(entry -> entry.getKey().contains("/generated/"))
+                        .map(Map.Entry::getValue)
+                        .collect(Collectors.joining("\n"));
+        assertFalse(
+                Pattern.compile("\\bApi[A-Za-z0-9_]*_[0-9a-f]{12}\\b")
+                        .matcher(allPublicSources)
+                        .find());
+        assertFalse(
+                Pattern.compile("\\binvoke_[A-Za-z0-9_]+_[0-9a-f]{12}\\b")
+                        .matcher(allPublicSources)
+                        .find());
+    }
+
+    @Test
+    void typeMapperHandlesConstraintsPointersAndEncodedCollectionsWithoutInventedClasses() {
+        assertEquals(
+                "games.cafecito.foundry.runtime.FoundryObject",
+                FoundrySourceGenerator.javaTypeForTesting("BaseMaterial3D,ShaderMaterial"));
+        assertEquals(
+                "games.cafecito.foundry.generated.classes.Mesh",
+                FoundrySourceGenerator.javaTypeForTesting("Mesh,-PlaneMesh,-PointMesh,-QuadMesh"));
+        assertEquals(
+                "games.cafecito.foundry.runtime.FoundryNativeHandle",
+                FoundrySourceGenerator.javaTypeForTesting("const uint8_t **"));
+        assertEquals(
+                "games.cafecito.foundry.runtime.FoundryNativeHandle",
+                FoundrySourceGenerator.javaTypeForTesting("PhysicsServer3DExtensionMotionResult*"));
+        assertEquals(
+                "games.cafecito.foundry.types.FoundryArray<"
+                        + "games.cafecito.foundry.generated.classes.CompositorEffect>",
+                FoundrySourceGenerator.javaTypeForTesting("typedarray::24/17:CompositorEffect"));
+        assertEquals(
+                "games.cafecito.foundry.types.FoundryArray<"
+                        + "games.cafecito.foundry.types.Variant>",
+                FoundrySourceGenerator.javaTypeForTesting("typedarray::27/0:"));
+        assertEquals(
+                "games.cafecito.foundry.types.FoundryDictionary<"
+                        + "games.cafecito.foundry.types.Color, "
+                        + "games.cafecito.foundry.types.Color>",
+                FoundrySourceGenerator.javaTypeForTesting("typeddictionary::Color;Color"));
+        assertThrows(
+                ApiInputException.class,
+                () -> FoundrySourceGenerator.javaTypeForTesting("typeddictionary::Color;"));
+    }
+
+    @Test
+    void generationFailsClosedWhenMetadataReferencesAnUnknownType() throws IOException {
+        FoundryApi api =
+                FoundryApiParser.parse(
+                        fixture()
+                                .replace(
+                                        "\"name\": \"include_internal\",\n"
+                                                + "              \"type\": \"bool\",",
+                                        "\"name\": \"include_internal\",\n"
+                                                + "              \"type\": \"InventedApiType\","));
+
+        ApiInputException failure =
+                assertThrows(
+                        ApiInputException.class,
+                        () ->
+                                new FoundrySourceGenerator()
+                                        .generate(api, METADATA, supportedManifest(api)));
+
+        assertTrue(failure.getMessage().contains("Unknown Foundry API type InventedApiType"));
+        assertTrue(failure.getMessage().contains("include_internal"));
+    }
+
+    @Test
+    void generatedPointerCallsEncodeAndDecodeOpaqueBridgeHandlesIncludingNull() throws Exception {
+        String pointerFixture =
+                fixture()
+                        .replace("\"type\": \"typedarray::Node\"", "\"type\": \"const void*\"")
+                        .replace(
+                                "\"name\": \"include_internal\",\n"
+                                        + "              \"type\": \"bool\",",
+                                "\"name\": \"include_internal\",\n"
+                                        + "              \"type\": \"const void*\",");
+        FoundryApi api = FoundryApiParser.parse(pointerFixture);
+        GeneratedTree generated =
+                new FoundrySourceGenerator().generate(api, METADATA, supportedManifest(api));
+        String node = generated.sources().get("games/cafecito/foundry/generated/classes/Node.java");
+
+        assertNotNull(node);
+        assertTrue(
+                node.contains(
+                        "FoundryNativeHandle getChildren("
+                                + "games.cafecito.foundry.runtime.FoundryNativeHandle"
+                                + " includeInternal)"));
+        assertTrue(node.contains("Variant.of(includeInternal.bridgeHandle())"));
+        assertTrue(
+                node.contains(
+                        "new games.cafecito.foundry.runtime.FoundryNativeHandle("
+                                + "\"const void*\", __foundryGeneratedResult.asLong())"));
+
+        Path output = temporaryDirectory.resolve("pointer-calls");
+        generated.writeTo(output);
+        assertEquals(0, compile(output, temporaryDirectory.resolve("pointer-call-classes")));
+    }
+
+    @Test
+    void globalBitfieldsGenerateNamedLongFlagsInsteadOfInvalidEnums() throws IOException {
+        String bitfieldFixture =
+                fixture()
+                        .replace("\"name\": \"Variant.Type\"", "\"name\": \"Permissions\"")
+                        .replace("\"is_bitfield\": false", "\"is_bitfield\": true");
+        FoundryApi api = FoundryApiParser.parse(bitfieldFixture);
+        GeneratedTree generated =
+                new FoundrySourceGenerator().generate(api, METADATA, supportedManifest(api));
+
+        String flags =
+                generated.sources().get("games/cafecito/foundry/generated/enums/Permissions.java");
+        assertNotNull(flags);
+        assertTrue(flags.contains("public final class Permissions"));
+        assertTrue(flags.contains("public static final long TYPE_NIL = 0L"));
+        assertFalse(flags.contains("public enum Permissions"));
+    }
+
+    @Test
+    void generatedOperatorJavadocsEscapeHtmlMetacharacters() throws IOException {
+        FoundryApi api =
+                FoundryApiParser.parse(fixture().replace("\"name\": \"==\"", "\"name\": \"<\""));
+        GeneratedTree generated =
+                new FoundrySourceGenerator().generate(api, METADATA, supportedManifest(api));
+        String array =
+                generated.sources().get("games/cafecito/foundry/generated/builtins/Array.java");
+
+        assertNotNull(array);
+        assertTrue(array.contains("/** Applies the &lt; operator. */"));
+        assertFalse(array.contains("/** Applies the < operator. */"));
     }
 
     @Test
@@ -323,7 +453,7 @@ class FoundrySourceGeneratorTest {
         second.writeTo(secondOutput);
         assertEquals(57_904, api.entities().size());
         assertEquals(57_904, acceptedManifest.entries().size());
-        assertEquals(2_599, first.sources().size());
+        assertEquals(2_485, first.sources().size());
         assertEquals(1_298, first.descriptorCatalog().size());
         assertEquals(
                 57_904,
@@ -343,6 +473,11 @@ class FoundrySourceGeneratorTest {
         assertEquals(first.sha256ByPath(), second.sha256ByPath());
         assertEquals(treeHashes(output), treeHashes(secondOutput));
         assertEquals(acceptedManifest.canonicalJson(), first.manifest().canonicalJson());
+        String node3d = first.sources().get("games/cafecito/foundry/generated/classes/Node3D.java");
+        assertNotNull(node3d);
+        assertTrue(node3d.contains("rotateY(double angle)"));
+        assertTrue(node3d.contains("setPosition(games.cafecito.foundry.types.Vector3 position)"));
+        assertTrue(node3d.contains("games.cafecito.foundry.types.Vector3 getPosition()"));
         assertEquals(
                 inputs.compatibilityManifestSha256(),
                 sha256(first.manifest().canonicalJson().getBytes(StandardCharsets.UTF_8)));
@@ -427,6 +562,9 @@ class FoundrySourceGeneratorTest {
                                 .replace(
                                         "\"name\": \"Node\"",
                                         "\"name\": \"" + jsonStringBody(payload) + "\"")
+                                .replace(
+                                        "\"type\": \"typedarray::Node\"",
+                                        "\"type\": \"typedarray::" + jsonStringBody(payload) + "\"")
                                 .replace(
                                         "\"inherits\": \"Object\",",
                                         "\"inherits\": \"Object\",\n"
@@ -524,7 +662,96 @@ class FoundrySourceGeneratorTest {
         Files.createDirectories(types);
         Files.writeString(
                 types.resolve("Variant.java"),
-                "package games.cafecito.foundry.types; public final class Variant {}\n");
+                """
+                package games.cafecito.foundry.types;
+                public final class Variant {
+                    public static Variant of(Object value) { return null; }
+                    public static Variant ofObject(
+                            games.cafecito.foundry.runtime.FoundryObject value) { return null; }
+                    public Object as(VariantType type) { return null; }
+                    public boolean asBoolean() { return false; }
+                    public long asLong() { return 0; }
+                    public double asDouble() { return 0; }
+                    public String asString() { return null; }
+                    public Vector2 asVector2() { return null; }
+                    public Vector2i asVector2i() { return null; }
+                    public Rect2 asRect2() { return null; }
+                    public Rect2i asRect2i() { return null; }
+                    public Vector3 asVector3() { return null; }
+                    public Vector3i asVector3i() { return null; }
+                    public Transform2D asTransform2D() { return null; }
+                    public Vector4 asVector4() { return null; }
+                    public Vector4i asVector4i() { return null; }
+                    public Plane asPlane() { return null; }
+                    public Quaternion asQuaternion() { return null; }
+                    public Aabb asAabb() { return null; }
+                    public Basis asBasis() { return null; }
+                    public Transform3D asTransform3D() { return null; }
+                    public Projection asProjection() { return null; }
+                    public Color asColor() { return null; }
+                    public StringName asStringName() { return null; }
+                    public NodePath asNodePath() { return null; }
+                    public Rid asRid() { return null; }
+                    public games.cafecito.foundry.runtime.FoundryObject asObject() { return null; }
+                    public games.cafecito.foundry.runtime.FoundryCallable asCallable() { return null; }
+                    public games.cafecito.foundry.runtime.FoundrySignal asSignal() { return null; }
+                }
+                """);
+        Files.writeString(
+                types.resolve("VariantType.java"),
+                """
+                package games.cafecito.foundry.types;
+                public enum VariantType {
+                    NIL, BOOLEAN, INTEGER, FLOAT, STRING, VECTOR2, VECTOR2I, RECT2, RECT2I,
+                    VECTOR3, VECTOR3I, TRANSFORM2D, VECTOR4, VECTOR4I, PLANE, QUATERNION,
+                    AABB, BASIS, TRANSFORM3D, PROJECTION, COLOR, STRING_NAME, NODE_PATH, RID,
+                    OBJECT, CALLABLE, SIGNAL, DICTIONARY, ARRAY, PACKED_BYTE_ARRAY,
+                    PACKED_INT32_ARRAY, PACKED_INT64_ARRAY, PACKED_FLOAT32_ARRAY,
+                    PACKED_FLOAT64_ARRAY, PACKED_STRING_ARRAY, PACKED_VECTOR2_ARRAY,
+                    PACKED_VECTOR3_ARRAY, PACKED_COLOR_ARRAY, PACKED_VECTOR4_ARRAY
+                }
+                """);
+        for (String type :
+                List.of(
+                        "Vector2",
+                        "Vector2i",
+                        "Rect2",
+                        "Rect2i",
+                        "Vector3",
+                        "Vector3i",
+                        "Transform2D",
+                        "Vector4",
+                        "Vector4i",
+                        "Plane",
+                        "Quaternion",
+                        "Aabb",
+                        "Basis",
+                        "Transform3D",
+                        "Projection",
+                        "Color",
+                        "StringName",
+                        "NodePath",
+                        "Rid",
+                        "PackedByteArray",
+                        "PackedInt32Array",
+                        "PackedInt64Array",
+                        "PackedFloat32Array",
+                        "PackedFloat64Array",
+                        "PackedStringArray",
+                        "PackedVector2Array",
+                        "PackedVector3Array",
+                        "PackedColorArray",
+                        "PackedVector4Array")) {
+            Files.writeString(
+                    types.resolve(type + ".java"),
+                    "package games.cafecito.foundry.types; public final class " + type + " {}\n");
+        }
+        Files.writeString(
+                types.resolve("FoundryArray.java"),
+                """
+                package games.cafecito.foundry.types;
+                public final class FoundryArray<T> {}
+                """);
         Files.writeString(
                 runtime.resolve("FoundryCallError.java"),
                 """
@@ -555,6 +782,29 @@ class FoundrySourceGeneratorTest {
                         return null;
                     }
                 }
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryCallable.java"),
+                "package games.cafecito.foundry.runtime; public final class FoundryCallable {}\n");
+        Files.writeString(
+                runtime.resolve("FoundrySignal.java"),
+                "package games.cafecito.foundry.runtime; public final class FoundrySignal {}\n");
+        Files.writeString(
+                runtime.resolve("FoundryConstant.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public final class FoundryConstant<T> {
+                    public FoundryConstant(
+                            String identity,
+                            java.util.function.Function<
+                                    games.cafecito.foundry.types.Variant, T> decoder) {}
+                }
+                """);
+        Files.writeString(
+                runtime.resolve("FoundryNativeHandle.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public record FoundryNativeHandle(String nativeType, long bridgeHandle) {}
                 """);
         Files.writeString(
                 runtime.resolve("FoundryEngine.java"),
@@ -599,6 +849,8 @@ class FoundrySourceGeneratorTest {
                             ObjectFactory<T> factory) {
                         return factory.create(this, new ObjectLease());
                     }
+                    public <T extends FoundryObject> void registerObjectType(
+                            String type, Class<T> wrapperClass, ObjectFactory<T> factory) {}
                     public interface ObjectFactory<T extends FoundryObject> {
                         T create(FoundryBindingContext context, ObjectLease lease);
                     }

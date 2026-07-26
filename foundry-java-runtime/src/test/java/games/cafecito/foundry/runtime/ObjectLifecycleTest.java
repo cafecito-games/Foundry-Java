@@ -2,7 +2,6 @@ package games.cafecito.foundry.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class ObjectLifecycleTest {
     @Test
-    void returnsOneLiveWrapperPerContextHandleAndClass() {
+    void returnsOneCanonicalWrapperPerContextHandleAndRejectsClassMismatches() {
         CountingEngine engine = new CountingEngine();
         engine.valid(7);
         FoundryBindingContext context = new FoundryBindingContext(11, engine);
@@ -22,17 +21,78 @@ class ObjectLifecycleTest {
                 context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
         TestObject second =
                 context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
-        OtherObject otherType =
-                context.bind(7, ObjectOwnership.BORROWED, OtherObject.class, OtherObject::new);
         FoundryBindingContext secondContext = new FoundryBindingContext(12, engine);
         TestObject otherContext =
                 secondContext.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
 
         assertSame(first, second);
-        assertNotSame(first, otherType);
-        assertNotSame(first, otherContext);
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        context.bind(
+                                7, ObjectOwnership.BORROWED, OtherObject.class, OtherObject::new));
+        org.junit.jupiter.api.Assertions.assertNotSame(first, otherContext);
         assertEquals(7, first.objectHandle());
         assertEquals(11, first.context().contextHandle());
+    }
+
+    @Test
+    void cacheHitUpgradesBorrowedOwnershipExactlyOnceAndNeverDowngrades() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+
+        TestObject borrowed =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+        TestObject retained =
+                context.bind(
+                        7, ObjectOwnership.REFERENCE_COUNTED, TestObject.class, TestObject::new);
+        TestObject borrowedAgain =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+
+        assertSame(borrowed, retained);
+        assertSame(retained, borrowedAgain);
+        assertEquals(1, engine.retains.get());
+
+        borrowed.close();
+        retained.close();
+        assertEquals(1, engine.releases.get());
+    }
+
+    @Test
+    void referenceCountedFirstNeverRetainsAgainForBorrowedAliases() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+
+        TestObject retained =
+                context.bind(
+                        7, ObjectOwnership.REFERENCE_COUNTED, TestObject.class, TestObject::new);
+        TestObject borrowed =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+
+        assertSame(retained, borrowed);
+        assertEquals(1, engine.retains.get());
+        context.invalidateObject(7);
+        assertEquals(1, engine.releases.get());
+    }
+
+    @Test
+    void firstBaseRequestResolvesAndPublishesTheMostDerivedRegisteredWrapper() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        engine.nativeTypes.put(7L, "DerivedObject");
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+        context.registerObjectType("TestObject", TestObject.class, TestObject::new);
+        context.registerObjectType("DerivedObject", DerivedObject.class, DerivedObject::new);
+
+        TestObject throughBase =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+        DerivedObject throughDerived =
+                context.bind(7, ObjectOwnership.BORROWED, DerivedObject.class, DerivedObject::new);
+
+        assertTrue(throughBase instanceof DerivedObject);
+        assertSame(throughBase, throughDerived);
     }
 
     @Test
@@ -116,6 +176,12 @@ class ObjectLifecycleTest {
         }
     }
 
+    static final class DerivedObject extends TestObject {
+        DerivedObject(FoundryBindingContext context, ObjectLease lease) {
+            super(context, lease);
+        }
+    }
+
     static final class OtherObject extends FoundryObject {
         OtherObject(FoundryBindingContext context, ObjectLease lease) {
             super(context, lease);
@@ -124,6 +190,7 @@ class ObjectLifecycleTest {
 
     static final class CountingEngine extends NoOpEngine {
         final ConcurrentHashMap<Long, Boolean> valid = new ConcurrentHashMap<>();
+        final ConcurrentHashMap<Long, String> nativeTypes = new ConcurrentHashMap<>();
         final AtomicInteger retains = new AtomicInteger();
         final AtomicInteger releases = new AtomicInteger();
         volatile FoundryBindingContext observedContext;
@@ -136,6 +203,11 @@ class ObjectLifecycleTest {
         @Override
         public boolean isObjectValid(long contextHandle, long objectHandle) {
             return valid.getOrDefault(objectHandle, false);
+        }
+
+        @Override
+        public String objectType(long contextHandle, long objectHandle) {
+            return nativeTypes.getOrDefault(objectHandle, "");
         }
 
         @Override

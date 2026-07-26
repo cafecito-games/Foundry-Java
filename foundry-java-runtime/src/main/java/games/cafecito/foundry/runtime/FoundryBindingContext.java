@@ -16,7 +16,8 @@ public final class FoundryBindingContext implements AutoCloseable {
     private final FoundryEngine engine;
     private final CallbackRegistry callbackRegistry;
     private final Object lifecycleLock = new Object();
-    private final Map<ObjectKey, WeakReference<FoundryObject>> wrappers = new HashMap<>();
+    private final Map<Long, WeakReference<FoundryObject>> wrappers = new HashMap<>();
+    private final Map<String, WrapperRegistration<?>> wrapperRegistrations = new HashMap<>();
     private final Set<ObjectLease> leases = new HashSet<>();
     private final Set<Long> invalidatedObjects = new HashSet<>();
     private volatile boolean alive = true;
@@ -67,6 +68,25 @@ public final class FoundryBindingContext implements AutoCloseable {
         return alive;
     }
 
+    public <T extends FoundryObject> void registerObjectType(
+            String foundryType, Class<T> wrapperClass, ObjectFactory<T> factory) {
+        if (foundryType == null || foundryType.isBlank()) {
+            throw new IllegalArgumentException("Foundry object type must not be blank.");
+        }
+        Objects.requireNonNull(wrapperClass, "wrapperClass");
+        Objects.requireNonNull(factory, "factory");
+        synchronized (lifecycleLock) {
+            requireAlive(0);
+            WrapperRegistration<?> previous =
+                    wrapperRegistrations.putIfAbsent(
+                            foundryType, new WrapperRegistration<>(wrapperClass, factory));
+            if (previous != null && previous.wrapperClass() != wrapperClass) {
+                throw new IllegalStateException(
+                        "Foundry object type " + foundryType + " is already registered.");
+            }
+        }
+    }
+
     public <T extends FoundryObject> T bind(
             long objectHandle,
             ObjectOwnership ownership,
@@ -86,20 +106,34 @@ public final class FoundryBindingContext implements AutoCloseable {
             if (!engine.isObjectValid(contextHandle, objectHandle)) {
                 throw new FoundryObjectDisposedException(contextHandle, objectHandle);
             }
-            ObjectKey key = new ObjectKey(objectHandle, wrapperClass);
-            WeakReference<FoundryObject> reference = wrappers.get(key);
+            WeakReference<FoundryObject> reference = wrappers.get(objectHandle);
             FoundryObject cached = reference == null ? null : reference.get();
             if (cached != null && cached.isAlive()) {
+                if (!wrapperClass.isInstance(cached)) {
+                    throw incompatibleWrapper(objectHandle, wrapperClass, cached.getClass());
+                }
+                cached.lease().upgrade(ownership);
                 return wrapperClass.cast(cached);
             }
 
+            WrapperRegistration<?> resolved = resolveRegistration(objectHandle);
+            if (resolved != null && !wrapperClass.isAssignableFrom(resolved.wrapperClass())) {
+                throw incompatibleWrapper(objectHandle, wrapperClass, resolved.wrapperClass());
+            }
             ObjectLease lease =
                     new ObjectLease(contextHandle, objectHandle, ownership, engine, this::isAlive);
             try {
-                T wrapper = Objects.requireNonNull(factory.create(this, lease), "factory result");
-                wrappers.put(key, new WeakReference<>(wrapper));
+                FoundryObject wrapper =
+                        resolved == null
+                                ? Objects.requireNonNull(
+                                        factory.create(this, lease), "factory result")
+                                : resolved.create(this, lease);
+                if (!wrapperClass.isInstance(wrapper)) {
+                    throw incompatibleWrapper(objectHandle, wrapperClass, wrapper.getClass());
+                }
+                wrappers.put(objectHandle, new WeakReference<>(wrapper));
                 leases.add(lease);
-                return wrapper;
+                return wrapperClass.cast(wrapper);
             } catch (Throwable failure) {
                 lease.run();
                 throw failure;
@@ -113,21 +147,18 @@ public final class FoundryBindingContext implements AutoCloseable {
         }
         synchronized (lifecycleLock) {
             invalidatedObjects.add(objectHandle);
-            Iterator<Map.Entry<ObjectKey, WeakReference<FoundryObject>>> iterator =
-                    wrappers.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry<ObjectKey, WeakReference<FoundryObject>> entry = iterator.next();
-                if (entry.getKey().objectHandle == objectHandle) {
-                    FoundryObject wrapper = entry.getValue().get();
-                    if (wrapper != null) {
-                        wrapper.invalidate();
-                    }
-                    iterator.remove();
-                }
+            WeakReference<FoundryObject> reference = wrappers.remove(objectHandle);
+            FoundryObject wrapper = reference == null ? null : reference.get();
+            if (wrapper != null) {
+                wrapper.invalidate();
             }
-            for (ObjectLease lease : leases) {
+            Iterator<ObjectLease> iterator = leases.iterator();
+            while (iterator.hasNext()) {
+                ObjectLease lease = iterator.next();
                 if (lease.objectHandle() == objectHandle) {
                     lease.invalidate();
+                    lease.run();
+                    iterator.remove();
                 }
             }
         }
@@ -167,5 +198,33 @@ public final class FoundryBindingContext implements AutoCloseable {
         T create(FoundryBindingContext context, ObjectLease lease);
     }
 
-    private record ObjectKey(long objectHandle, Class<? extends FoundryObject> wrapperClass) {}
+    private WrapperRegistration<?> resolveRegistration(long objectHandle) {
+        String foundryType =
+                Objects.requireNonNull(
+                        engine.objectType(contextHandle, objectHandle), "Foundry object type");
+        return foundryType.isBlank() ? null : wrapperRegistrations.get(foundryType);
+    }
+
+    private IllegalArgumentException incompatibleWrapper(
+            long objectHandle,
+            Class<? extends FoundryObject> requested,
+            Class<? extends FoundryObject> actual) {
+        return new IllegalArgumentException(
+                "Foundry object "
+                        + objectHandle
+                        + " in context "
+                        + contextHandle
+                        + " is represented by "
+                        + actual.getName()
+                        + ", which is incompatible with requested "
+                        + requested.getName()
+                        + ".");
+    }
+
+    private record WrapperRegistration<T extends FoundryObject>(
+            Class<T> wrapperClass, ObjectFactory<T> factory) {
+        FoundryObject create(FoundryBindingContext context, ObjectLease lease) {
+            return Objects.requireNonNull(factory.create(context, lease), "factory result");
+        }
+    }
 }
