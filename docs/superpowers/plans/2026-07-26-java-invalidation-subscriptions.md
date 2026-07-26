@@ -230,7 +230,7 @@ Run:
 ```sh
 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
 PATH=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home/bin:$PATH \
-./gradlew --no-daemon :foundry-java-runtime:checkRuntimeApi
+./gradlew --no-daemon :foundry-java-runtime:verifyRuntimeApi
 ```
 
 Expected: the API comparison reports the new public type and methods.

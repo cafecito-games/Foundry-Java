@@ -79,6 +79,9 @@ games.cafecito.foundry.runtime.FoundryInitializationLevel|public static final ga
 games.cafecito.foundry.runtime.FoundryInitializationLevel|public static final games.cafecito.foundry.runtime.FoundryInitializationLevel SERVERS;
 games.cafecito.foundry.runtime.FoundryInitializationLevel|public static games.cafecito.foundry.runtime.FoundryInitializationLevel valueOf(java.lang.String);
 games.cafecito.foundry.runtime.FoundryInitializationLevel|public static games.cafecito.foundry.runtime.FoundryInitializationLevel[] values();
+games.cafecito.foundry.runtime.FoundryInvalidationSubscription|public boolean isActive();
+games.cafecito.foundry.runtime.FoundryInvalidationSubscription|public final class games.cafecito.foundry.runtime.FoundryInvalidationSubscription implements java.lang.AutoCloseable {
+games.cafecito.foundry.runtime.FoundryInvalidationSubscription|public void close();
 games.cafecito.foundry.runtime.FoundryNativeHandle|public <U> games.cafecito.foundry.runtime.FoundryNativeHandle<T> requireType(java.lang.Class<U>);
 games.cafecito.foundry.runtime.FoundryNativeHandle|public boolean isNull();
 games.cafecito.foundry.runtime.FoundryNativeHandle|public final boolean equals(java.lang.Object);
@@ -96,6 +99,7 @@ games.cafecito.foundry.runtime.FoundryObjectDisposedException|public final class
 games.cafecito.foundry.runtime.FoundryObject|public class games.cafecito.foundry.runtime.FoundryObject implements java.lang.AutoCloseable {
 games.cafecito.foundry.runtime.FoundryObject|public final boolean isAlive();
 games.cafecito.foundry.runtime.FoundryObject|public final games.cafecito.foundry.runtime.FoundryBindingContext context();
+games.cafecito.foundry.runtime.FoundryObject|public final games.cafecito.foundry.runtime.FoundryInvalidationSubscription onInvalidated(java.lang.Runnable);
 games.cafecito.foundry.runtime.FoundryObject|public final long objectHandle();
 games.cafecito.foundry.runtime.FoundryObject|public final void close();
 games.cafecito.foundry.runtime.FoundryRuntimeCallbacks|public boolean initialize(long, int);
@@ -158,6 +162,7 @@ games.cafecito.foundry.runtime.FoundryTypedSignal$Of5|public void emit(A, B, C, 
 games.cafecito.foundry.runtime.FoundryTypedSignal|public final class games.cafecito.foundry.runtime.FoundryTypedSignal {
 games.cafecito.foundry.runtime.ObjectLease|public boolean isAlive();
 games.cafecito.foundry.runtime.ObjectLease|public final class games.cafecito.foundry.runtime.ObjectLease implements java.lang.Runnable {
+games.cafecito.foundry.runtime.ObjectLease|public games.cafecito.foundry.runtime.FoundryInvalidationSubscription onInvalidated(java.lang.Runnable);
 games.cafecito.foundry.runtime.ObjectLease|public games.cafecito.foundry.runtime.ObjectOwnership ownership();
 games.cafecito.foundry.runtime.ObjectLease|public long contextHandle();
 games.cafecito.foundry.runtime.ObjectLease|public long objectHandle();

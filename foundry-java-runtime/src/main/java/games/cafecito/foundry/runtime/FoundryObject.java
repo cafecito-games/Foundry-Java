@@ -41,6 +41,16 @@ public class FoundryObject implements AutoCloseable {
         return lease.isAlive();
     }
 
+    /**
+     * Registers a listener for this wrapper's first invalidation.
+     *
+     * @param listener notification to run on the thread that detects invalidation
+     * @return a removable invalidation subscription
+     */
+    public final FoundryInvalidationSubscription onInvalidated(Runnable listener) {
+        return lease.onInvalidated(listener);
+    }
+
     protected final void requireAlive() {
         lease.requireAlive();
     }

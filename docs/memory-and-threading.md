@@ -36,6 +36,25 @@ idempotent lease, so each acquired retain has at most one matching release. Use 
 or call `close()` explicitly; the cleaner is a leak-safety fallback, not a prompt lifecycle
 mechanism.
 
+## Invalidation subscriptions
+
+`FoundryObject.onInvalidated` and `ObjectLease.onInvalidated` observe the lease's first invalidation
+without polling. They return a `FoundryInvalidationSubscription`, whose idempotent `close()` removes
+the listener if invalidation has not already selected it for delivery. If removal wins that race,
+the listener is not called. If the invalidation snapshot wins, delivery is committed exactly once
+and a later `close()` cannot retract it. `isActive()` is false after either transition.
+
+Listeners run synchronously in registration order on the thread that performs wrapper close,
+native invalidation, or context shutdown. Registration against an already-dead lease invokes the
+listener synchronously on the registering thread before returning an inactive subscription.
+Invalidation state becomes observable before delivery, and every listener runs after both the lease
+state lock and binding-context lifecycle lock have been released. Listeners may therefore reenter
+lifecycle APIs. Delivery completes before a retained native reference is released.
+
+Listener failures are isolated: every `Throwable` is reported through the engine's lifecycle
+failure channel with callback handle zero, but it cannot prevent later listeners, native release,
+or shutdown. A failure from that reporting hook is contained too.
+
 ## Values and collections
 
 `Variant` equality is Foundry-type-strict. Integer and floating-point values never compare equal
