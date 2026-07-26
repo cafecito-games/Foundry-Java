@@ -150,6 +150,21 @@ class NativeBridgeContractTest {
     }
 
     @Test
+    void bootstrapDoesNotHoldStateMutexAcrossJniWork() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        int bootstrapStart = jni.indexOf("FoundryJavaInitializer_nativeBootstrapV1(");
+        int bootstrapEnd = jni.indexOf("FoundryJavaInitializer_nativeCreateContextV1(");
+        String bootstrap = jni.substring(bootstrapStart, bootstrapEnd);
+
+        assertTrue(jni.contains("bootstrap_in_progress"));
+        assertTrue(bootstrap.contains("BootstrapReservation"));
+        assertFalse(bootstrap.contains("std::lock_guard lock(foundry_java::state.mutex)"));
+        assertEquals(2, occurrences(jni, "\"argument unmarshaling\""));
+        assertFalse(jni.contains("void release_class_loader()"));
+        assertTrue(jni.contains("class_loader = std::exchange(state.class_loader, nullptr)"));
+    }
+
+    @Test
     void noSourceOrBuildInputImportsTheAndroidHostRuntime() throws IOException {
         String tree =
                 readTree("foundry-java-android/src")
