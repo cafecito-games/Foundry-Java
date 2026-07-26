@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo/png/foundryjava-banner.png" alt="Foundry-Java" width="720">
+</p>
+
 # Foundry-Java
 
 Foundry-Java is the Android-only, Java-first extension surface for Foundry. Java 17 defines public,
