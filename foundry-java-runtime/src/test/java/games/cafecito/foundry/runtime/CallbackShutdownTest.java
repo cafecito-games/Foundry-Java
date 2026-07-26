@@ -15,6 +15,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -212,6 +213,34 @@ class CallbackShutdownTest {
         assertTrue(engine.reportedFailure instanceof IllegalStateException);
     }
 
+    @Test
+    void deinitializeNotifiesObjectInvalidationBeforeReleaseAndContainsLateRegistration() {
+        CallbackEngine engine = new CallbackEngine();
+        engine.valid = true;
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+        FoundryRuntimeCallbacks callbacks = new FoundryRuntimeCallbacks();
+        callbacks.register(context);
+        CallAndSignalTest.CallableObject object =
+                context.bind(
+                        7,
+                        ObjectOwnership.REFERENCE_COUNTED,
+                        CallAndSignalTest.CallableObject.class,
+                        CallAndSignalTest.CallableObject::new);
+        AtomicInteger notifications = new AtomicInteger();
+        engine.observedNotifications = notifications;
+        object.onInvalidated(notifications::incrementAndGet);
+
+        callbacks.deinitialize(11, FoundryInitializationLevel.CORE.code());
+
+        assertEquals(1, notifications.get());
+        assertEquals(1, engine.notificationsObservedAtRelease);
+        AtomicInteger lateNotifications = new AtomicInteger();
+        FoundryInvalidationSubscription late =
+                object.onInvalidated(lateNotifications::incrementAndGet);
+        assertEquals(1, lateNotifications.get());
+        assertFalse(late.isActive());
+    }
+
     private static void await(CountDownLatch latch) {
         try {
             latch.await();
@@ -230,6 +259,8 @@ class CallbackShutdownTest {
         volatile FoundryBindingContext context;
         volatile boolean releaseObservedCallbacksDisabled;
         volatile boolean throwOnRelease;
+        volatile AtomicInteger observedNotifications;
+        volatile int notificationsObservedAtRelease;
 
         @Override
         public Variant decodeVariant(long contextHandle, long variantHandle) {
@@ -257,6 +288,8 @@ class CallbackShutdownTest {
 
         @Override
         public void release(long contextHandle, long objectHandle) {
+            AtomicInteger notifications = observedNotifications;
+            notificationsObservedAtRelease = notifications == null ? 0 : notifications.get();
             FoundryBindingContext current = context;
             releaseObservedCallbacksDisabled =
                     current == null || !current.callbackRegistry().isEnabled();

@@ -6,6 +6,9 @@ lifecycle. Do not transfer ownership to native Foundry internals.
 
 The binding runtime's object, pointer, Variant, signal, invalidation, close, and concurrency
 contracts are specified in [Runtime memory and threading](memory-and-threading.md).
+Java callers can observe an object lease's first invalidation with `onInvalidated` and remove a
+pending listener by closing its `FoundryInvalidationSubscription`; callbacks are synchronous,
+exactly once, and delivered outside lifecycle locks.
 
 Native bridge contexts are opaque, nonzero, generation-bound handles. A callback acquires a lease on
 its context before it enters Java, so callbacks may safely reenter the bridge. Closing a context

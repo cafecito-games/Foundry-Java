@@ -2,6 +2,7 @@ package games.cafecito.foundry.runtime;
 
 import games.cafecito.foundry.types.Variant;
 import java.lang.ref.WeakReference;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -98,6 +99,9 @@ public final class FoundryBindingContext implements AutoCloseable {
         Objects.requireNonNull(ownership, "ownership");
         Objects.requireNonNull(wrapperClass, "wrapperClass");
         Objects.requireNonNull(factory, "factory");
+        T created = null;
+        ObjectLease.Transition failureTransition = null;
+        Throwable factoryFailure = null;
         synchronized (lifecycleLock) {
             requireAlive(objectHandle);
             if (invalidatedObjects.contains(objectHandle)) {
@@ -108,7 +112,7 @@ public final class FoundryBindingContext implements AutoCloseable {
             }
             WeakReference<FoundryObject> reference = wrappers.get(objectHandle);
             FoundryObject cached = reference == null ? null : reference.get();
-            if (cached != null && cached.isAlive()) {
+            if (cached != null && cached.lease().isMarkedAlive()) {
                 if (!wrapperClass.isInstance(cached)) {
                     throw incompatibleWrapper(objectHandle, wrapperClass, cached.getClass());
                 }
@@ -133,35 +137,37 @@ public final class FoundryBindingContext implements AutoCloseable {
                 }
                 wrappers.put(objectHandle, new WeakReference<>(wrapper));
                 leases.add(lease);
-                return wrapperClass.cast(wrapper);
+                created = wrapperClass.cast(wrapper);
             } catch (Throwable failure) {
-                lease.run();
-                throw failure;
+                failureTransition = lease.transitionToInvalid(true);
+                factoryFailure = failure;
             }
         }
+        if (failureTransition != null) {
+            failureTransition.run();
+            return rethrowUnchecked(factoryFailure);
+        }
+        return created;
     }
 
     public void invalidateObject(long objectHandle) {
         if (objectHandle == 0) {
             return;
         }
+        List<ObjectLease.Transition> transitions = new ArrayList<>();
         synchronized (lifecycleLock) {
             invalidatedObjects.add(objectHandle);
-            WeakReference<FoundryObject> reference = wrappers.remove(objectHandle);
-            FoundryObject wrapper = reference == null ? null : reference.get();
-            if (wrapper != null) {
-                wrapper.invalidate();
-            }
+            wrappers.remove(objectHandle);
             Iterator<ObjectLease> iterator = leases.iterator();
             while (iterator.hasNext()) {
                 ObjectLease lease = iterator.next();
                 if (lease.objectHandle() == objectHandle) {
-                    lease.invalidate();
-                    lease.run();
+                    transitions.add(lease.transitionToInvalid(true));
                     iterator.remove();
                 }
             }
         }
+        transitions.forEach(ObjectLease.Transition::run);
     }
 
     void releaseWrapper(ObjectLease lease) {
@@ -182,22 +188,19 @@ public final class FoundryBindingContext implements AutoCloseable {
         if (!callbackRegistry.disable()) {
             return;
         }
-        Set<ObjectLease> toClose;
+        List<ObjectLease.Transition> transitions = new ArrayList<>();
         synchronized (lifecycleLock) {
             if (!alive) {
                 return;
             }
             alive = false;
             wrappers.clear();
-            toClose = Set.copyOf(leases);
-            leases.clear();
-            for (ObjectLease lease : toClose) {
-                lease.invalidate();
+            for (ObjectLease lease : leases) {
+                transitions.add(lease.transitionToInvalid(true));
             }
+            leases.clear();
         }
-        for (ObjectLease lease : toClose) {
-            lease.run();
-        }
+        transitions.forEach(ObjectLease.Transition::run);
     }
 
     private void requireAlive(long objectHandle) {
@@ -232,6 +235,16 @@ public final class FoundryBindingContext implements AutoCloseable {
                         + ", which is incompatible with requested "
                         + requested.getName()
                         + ".");
+    }
+
+    private static <T> T rethrowUnchecked(Throwable failure) {
+        FoundryBindingContext.<RuntimeException>throwUnchecked(failure);
+        throw new AssertionError("unreachable");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> void throwUnchecked(Throwable failure) throws T {
+        throw (T) failure;
     }
 
     private record WrapperRegistration<T extends FoundryObject>(
