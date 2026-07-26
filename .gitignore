@@ -3,6 +3,7 @@
 .gradle/
 /build/
 /*/build/
+/foundry-java-android/.cxx/
 local.properties
 .idea/
 *.iml
