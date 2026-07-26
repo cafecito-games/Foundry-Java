@@ -1,5 +1,7 @@
 #include "foundry_java_runtime.h"
 
+#include "foundry_java_contract.h"
+
 #include <jni.h>
 
 #include <atomic>
@@ -15,10 +17,6 @@ namespace foundry_java {
 
 namespace {
 
-constexpr char API_SHA256[] = "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
-constexpr char GENERATOR_VERSION[] = "1";
-constexpr char RUNTIME_VERSION[] = "1";
-constexpr char BRIDGE_CONTRACT_VERSION[] = "1";
 constexpr char INITIALIZER_CLASS[] = "games/cafecito/foundry/java/FoundryJavaInitializer";
 
 class FoundryErrorSink final : public ErrorSink {
@@ -268,10 +266,10 @@ bool contract_matches(
 		jstring generator_version,
 		jstring runtime_version,
 		jstring bridge_version) {
-	return java_string(environment, api_sha256) == API_SHA256 &&
-			java_string(environment, generator_version) == GENERATOR_VERSION &&
-			java_string(environment, runtime_version) == RUNTIME_VERSION &&
-			java_string(environment, bridge_version) == BRIDGE_CONTRACT_VERSION;
+	return java_string(environment, api_sha256) == contract::API_SHA256 &&
+			java_string(environment, generator_version) == contract::GENERATOR_VERSION &&
+			java_string(environment, runtime_version) == contract::RUNTIME_VERSION &&
+			java_string(environment, bridge_version) == contract::BRIDGE_CONTRACT_VERSION;
 }
 
 std::shared_ptr<BridgeRuntime> live_runtime() {

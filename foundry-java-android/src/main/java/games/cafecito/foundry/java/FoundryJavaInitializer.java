@@ -50,7 +50,12 @@ public final class FoundryJavaInitializer {
         return nativeShutdownContextV1(context);
     }
 
-    /** Closes all remaining contexts and releases native global references. */
+    /**
+     * Closes all remaining contexts and releases native global references.
+     *
+     * <p>This is a process-lifetime teardown operation. The bridge cannot be initialized again
+     * until the native library is unloaded and loaded by a new process.
+     */
     public static void shutdownBridge() {
         nativeShutdownBridgeV1();
     }

@@ -15,6 +15,9 @@ interface when available, and returns the documented safe default. The Android i
 fixture exercises bootstrap, argument order, reentrant callbacks, native-thread attachment,
 exception containment, shutdown, and rejection of stale contexts.
 
+Bridge shutdown is a process-lifetime teardown operation. It releases the callback and class-loader
+global references; applications that need a fresh bridge must start a new process.
+
 The release AAR contains one `libfoundry_java.so` for each supported ABI. Its ELF dependencies and
 exports are checked during CI. It neither packages nor links `libfoundry_android.so` or `libjvm.so`;
 the application supplies the Foundry host independently.

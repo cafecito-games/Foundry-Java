@@ -26,6 +26,7 @@ thread_local std::vector<ContextHandle> active_contexts;
 class CallbackLease {
 public:
 	explicit CallbackLease(std::shared_ptr<Context> context) : context(std::move(context)) {
+		// This lock protects only lease acquisition and is released before any callback begins.
 		std::lock_guard lock(this->context->mutex);
 		if (this->context->accepting_callbacks) {
 			this->context->active_callbacks++;

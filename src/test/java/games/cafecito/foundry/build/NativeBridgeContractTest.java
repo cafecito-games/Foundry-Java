@@ -27,6 +27,7 @@ class NativeBridgeContractTest {
                     "foundry-java-android/src/main/cpp/CMakeLists.txt",
                     "foundry-java-android/src/main/cpp/foundry_java_entry.cpp",
                     "foundry-java-android/src/main/cpp/foundry_java_jni.cpp",
+                    "foundry-java-android/src/main/cpp/foundry_java_contract.h.in",
                     "foundry-java-android/src/main/cpp/foundry_java_runtime.h",
                     "foundry-java-android/src/main/cpp/foundry_java_handles.cpp",
                     "foundry-java-android/src/main/cpp/foundry_java_exports.map",
@@ -83,6 +84,10 @@ class NativeBridgeContractTest {
         assertTrue(verifier.contains("libfoundry_android.so"));
         assertTrue(workflow.contains("ndk;29.0.14206865"));
         assertTrue(workflow.contains("verify-native-bridge.sh"));
+        assertTrue(workflow.contains("system-images;android-36;default;x86_64"));
+        assertTrue(workflow.contains("sudo chmod 666 /dev/kvm"));
+        assertTrue(workflow.contains("sys.boot_completed"));
+        assertTrue(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
     }
 
     @Test
@@ -99,6 +104,28 @@ class NativeBridgeContractTest {
         assertTrue(initializer.contains("FoundryJavaInitializer.class.getClassLoader()"));
         assertTrue(initializer.contains("FoundryBridgeCallbacks callbacks"));
         assertTrue(initializer.contains("nativeBootstrapV1("));
+    }
+
+    @Test
+    void nativeContractIsGeneratedFromTheAuthoritativeJavaProvenance() throws IOException {
+        String cmake = read("foundry-java-android/src/main/cpp/CMakeLists.txt");
+        String normalizedCmake = cmake.replaceAll("\\s+", " ");
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        String contract = read("foundry-java-android/src/main/cpp/foundry_java_contract.h.in");
+
+        assertTrue(cmake.contains("/provenance.json"));
+        assertTrue(
+                cmake.contains(
+                        "foundry-java-runtime/src/main/java/games/cafecito/foundry/runtime/"
+                                + "FoundryRuntime.java"));
+        assertTrue(normalizedCmake.contains("string( JSON FOUNDRY_JAVA_API_SHA256"));
+        assertTrue(cmake.contains("configure_file("));
+        assertTrue(jni.contains("#include \"foundry_java_contract.h\""));
+        assertFalse(jni.contains("constexpr char API_SHA256[]"));
+        assertTrue(contract.contains("@FOUNDRY_JAVA_API_SHA256@"));
+        assertTrue(contract.contains("@FOUNDRY_JAVA_GENERATOR_VERSION@"));
+        assertTrue(contract.contains("@FOUNDRY_JAVA_RUNTIME_VERSION@"));
+        assertTrue(contract.contains("@FOUNDRY_JAVA_BRIDGE_CONTRACT_VERSION@"));
     }
 
     @Test

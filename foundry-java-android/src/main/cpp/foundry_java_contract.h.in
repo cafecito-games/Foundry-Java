@@ -1,0 +1,10 @@
+#pragma once
+
+namespace foundry_java::contract {
+
+inline constexpr char API_SHA256[] = "@FOUNDRY_JAVA_API_SHA256@";
+inline constexpr char GENERATOR_VERSION[] = "@FOUNDRY_JAVA_GENERATOR_VERSION@";
+inline constexpr char RUNTIME_VERSION[] = "@FOUNDRY_JAVA_RUNTIME_VERSION@";
+inline constexpr char BRIDGE_CONTRACT_VERSION[] = "@FOUNDRY_JAVA_BRIDGE_CONTRACT_VERSION@";
+
+} // namespace foundry_java::contract
