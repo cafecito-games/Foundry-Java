@@ -1,0 +1,773 @@
+package games.cafecito.foundry.processor;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import javax.annotation.processing.Messager;
+import javax.annotation.processing.ProcessingEnvironment;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.element.AnnotationMirror;
+import javax.lang.model.element.AnnotationValue;
+import javax.lang.model.element.Element;
+import javax.lang.model.element.ElementKind;
+import javax.lang.model.element.ExecutableElement;
+import javax.lang.model.element.Modifier;
+import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.DeclaredType;
+import javax.lang.model.type.ExecutableType;
+import javax.lang.model.type.TypeKind;
+import javax.lang.model.type.TypeMirror;
+import javax.lang.model.util.ElementFilter;
+import javax.lang.model.util.Elements;
+import javax.lang.model.util.Types;
+import javax.tools.Diagnostic;
+
+final class ExtensionValidator {
+    static final String CLASS = "games.cafecito.foundry.annotations.FoundryClass";
+    static final String METHOD = "games.cafecito.foundry.annotations.FoundryMethod";
+    static final String PROPERTY = "games.cafecito.foundry.annotations.FoundryProperty";
+    static final String SIGNAL = "games.cafecito.foundry.annotations.FoundrySignal";
+    static final String OVERRIDE = "games.cafecito.foundry.annotations.FoundryOverride";
+    static final String INITIALIZATION = "games.cafecito.foundry.annotations.FoundryInitialization";
+    static final String GENERATED = "games.cafecito.foundry.annotations.GeneratedByFoundry";
+    static final String VIRTUAL = "games.cafecito.foundry.annotations.FoundryVirtual";
+
+    private final Types types;
+    private final Elements elements;
+    private final Messager messager;
+    private int errorCount;
+
+    ExtensionValidator(ProcessingEnvironment processingEnvironment) {
+        types = processingEnvironment.getTypeUtils();
+        elements = processingEnvironment.getElementUtils();
+        messager = processingEnvironment.getMessager();
+    }
+
+    int errorCount() {
+        return errorCount;
+    }
+
+    Optional<ExtensionModel> validate(TypeElement extension) {
+        int errorsBefore = errorCount;
+        AnnotationMirror classAnnotation = annotation(extension, CLASS).orElseThrow();
+        if (extension.getKind() != ElementKind.CLASS) {
+            error(extension, "extension declaration must be a class");
+            return Optional.empty();
+        }
+        if (extension.getEnclosingElement().getKind() != ElementKind.PACKAGE) {
+            error(extension, "extension class must be top-level");
+        }
+        if (elements.getPackageOf(extension).isUnnamed()) {
+            error(extension, "extension class must be declared in a named package");
+        }
+        if (!extension.getModifiers().contains(Modifier.PUBLIC)) {
+            error(extension, "extension class must be public");
+        }
+        if (!extension.getModifiers().contains(Modifier.FINAL)) {
+            error(extension, "extension class must be final");
+        }
+        if (extension.getModifiers().contains(Modifier.ABSTRACT)) {
+            error(extension, "extension class cannot be abstract");
+        }
+
+        AnnotationValue baseValue = value(classAnnotation, "base");
+        TypeMirror base = (TypeMirror) baseValue.getValue();
+        Element baseElement = types.asElement(base);
+        if (!(baseElement instanceof TypeElement baseType)
+                || annotation(baseType, GENERATED).isEmpty()) {
+            error(
+                    extension,
+                    classAnnotation,
+                    baseValue,
+                    "extension base must be a generated Foundry engine class");
+        }
+        if (!types.isSameType(types.erasure(extension.getSuperclass()), types.erasure(base))) {
+            error(
+                    extension,
+                    classAnnotation,
+                    baseValue,
+                    "extension class must directly extend declared base " + base);
+        }
+        boolean bindingConstructor = validateConstructor(extension, base);
+
+        List<ExtensionModel.MethodModel> methods = new ArrayList<>();
+        List<ExtensionModel.MethodModel> overrides = new ArrayList<>();
+        List<ExtensionModel.PropertyModel> properties = new ArrayList<>();
+        List<ExtensionModel.SignalModel> signals = new ArrayList<>();
+        Map<String, Element> exportedNames = new LinkedHashMap<>();
+        Map<String, VariableElement> propertyAccessors = new LinkedHashMap<>();
+
+        for (Element member : extension.getEnclosedElements()) {
+            annotation(member, METHOD)
+                    .ifPresent(
+                            mirror -> {
+                                ExecutableElement method = (ExecutableElement) member;
+                                String exported =
+                                        exportedName(
+                                                method, mirror, method.getSimpleName().toString());
+                                validateCallable(method, "exported method");
+                                validateMethodTypes(method);
+                                checkDuplicate(exportedNames, exported, method);
+                                methods.add(methodModel(method, exported));
+                            });
+            annotation(member, OVERRIDE)
+                    .ifPresent(
+                            mirror -> {
+                                ExecutableElement method = (ExecutableElement) member;
+                                Optional<String> virtualIdentity =
+                                        baseVirtualIdentity(base, method);
+                                String requestedIdentity = stringValue(mirror, "name");
+                                String exported =
+                                        virtualIdentity.orElse(
+                                                requestedIdentity.isEmpty()
+                                                        ? method.getSimpleName().toString()
+                                                        : requestedIdentity);
+                                validateCallable(method, "Foundry override");
+                                validateMethodTypes(method);
+                                if (virtualIdentity.isEmpty()) {
+                                    error(
+                                            method,
+                                            "Foundry override "
+                                                    + exported
+                                                    + " does not match a generated Foundry virtual method on "
+                                                    + base);
+                                } else if (!requestedIdentity.isEmpty()
+                                        && !requestedIdentity.equals(virtualIdentity.get())) {
+                                    error(
+                                            method,
+                                            "Foundry override name "
+                                                    + requestedIdentity
+                                                    + " does not match generated Foundry virtual identity "
+                                                    + virtualIdentity.get());
+                                }
+                                checkDuplicate(exportedNames, exported, method);
+                                overrides.add(methodModel(method, exported));
+                            });
+            annotation(member, PROPERTY)
+                    .ifPresent(
+                            mirror -> {
+                                VariableElement field = (VariableElement) member;
+                                String exported =
+                                        exportedName(
+                                                field, mirror, field.getSimpleName().toString());
+                                validateSupported(field.asType(), field);
+                                validateProperty(extension, field, mirror, propertyAccessors);
+                                checkDuplicate(exportedNames, exported, field);
+                                properties.add(
+                                        new ExtensionModel.PropertyModel(
+                                                field.getSimpleName().toString(),
+                                                exported,
+                                                field.asType().toString(),
+                                                stringValue(mirror, "getter"),
+                                                stringValue(mirror, "setter")));
+                            });
+            annotation(member, SIGNAL)
+                    .ifPresent(
+                            mirror -> {
+                                String exported =
+                                        exportedName(
+                                                member, mirror, member.getSimpleName().toString());
+                                Optional<ResolvedMethod> signalMethod = validateSignal(member);
+                                checkDuplicate(exportedNames, exported, member);
+                                signals.add(
+                                        signalModel(
+                                                (TypeElement) member,
+                                                exported,
+                                                signalMethod.orElse(null)));
+                            });
+        }
+
+        String initializationLevel = "SCENE";
+        List<String> dependencies = List.of();
+        Optional<AnnotationMirror> initialization = annotation(extension, INITIALIZATION);
+        if (initialization.isPresent()) {
+            initializationLevel =
+                    value(initialization.get(), "value")
+                            .getValue()
+                            .toString()
+                            .substring(
+                                    value(initialization.get(), "value")
+                                                    .getValue()
+                                                    .toString()
+                                                    .lastIndexOf('.')
+                                            + 1);
+            dependencies = initializationDependencies(extension, initialization.get());
+        }
+
+        String qualifiedName = extension.getQualifiedName().toString();
+        String exportedClassName =
+                exportedName(extension, classAnnotation, extension.getSimpleName().toString());
+        if (errorCount != errorsBefore) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new ExtensionModel(
+                        qualifiedName,
+                        elements.getPackageOf(extension).getQualifiedName().toString(),
+                        extension.getSimpleName().toString(),
+                        exportedClassName,
+                        base.toString(),
+                        initializationLevel,
+                        bindingConstructor,
+                        dependencies,
+                        methods,
+                        properties,
+                        signals,
+                        overrides));
+    }
+
+    void validateAnnotationPlacement(RoundEnvironment roundEnvironment) {
+        for (String annotationName : List.of(METHOD, PROPERTY, SIGNAL, OVERRIDE, INITIALIZATION)) {
+            TypeElement annotationType = elements.getTypeElement(annotationName);
+            if (annotationType == null) {
+                continue;
+            }
+            for (Element annotated : roundEnvironment.getElementsAnnotatedWith(annotationType)) {
+                Element extension =
+                        annotationName.equals(INITIALIZATION)
+                                ? annotated
+                                : annotated.getEnclosingElement();
+                if (annotation(extension, CLASS).isEmpty()) {
+                    error(
+                            annotated,
+                            "@"
+                                    + annotationType.getSimpleName()
+                                    + " must be enclosed by a @FoundryClass");
+                }
+            }
+        }
+    }
+
+    void validateCycles(
+            Map<String, ExtensionModel> models, Map<String, TypeElement> sourceElements) {
+        models.forEach(
+                (name, model) ->
+                        model.initializationDependencies().stream()
+                                .filter(dependency -> !models.containsKey(dependency))
+                                .forEach(
+                                        dependency -> {
+                                            TypeElement element = sourceElements.get(name);
+                                            AnnotationMirror mirror =
+                                                    annotation(element, INITIALIZATION)
+                                                            .orElseThrow();
+                                            error(
+                                                    element,
+                                                    mirror,
+                                                    "initialization dependency must be part of "
+                                                            + "the current compilation: "
+                                                            + dependency);
+                                        }));
+        Map<String, List<String>> graph = new HashMap<>();
+        models.forEach(
+                (name, model) ->
+                        graph.put(
+                                name,
+                                model.initializationDependencies().stream()
+                                        .filter(models::containsKey)
+                                        .toList()));
+        Set<String> cyclic = new HashSet<>();
+        for (String name : graph.keySet()) {
+            findCycles(name, graph, new ArrayDeque<>(), new HashSet<>(), cyclic);
+        }
+        cyclic.stream()
+                .sorted()
+                .forEach(
+                        name -> {
+                            TypeElement element = sourceElements.get(name);
+                            AnnotationMirror mirror =
+                                    annotation(element, INITIALIZATION).orElseThrow();
+                            error(
+                                    element,
+                                    mirror,
+                                    "initialization dependency cycle includes " + name);
+                        });
+    }
+
+    private void findCycles(
+            String current,
+            Map<String, List<String>> graph,
+            ArrayDeque<String> path,
+            Set<String> visited,
+            Set<String> cyclic) {
+        if (path.contains(current)) {
+            boolean include = false;
+            for (String node : path) {
+                if (node.equals(current)) {
+                    include = true;
+                }
+                if (include) {
+                    cyclic.add(node);
+                }
+            }
+            cyclic.add(current);
+            return;
+        }
+        if (!visited.add(current)) {
+            return;
+        }
+        path.addLast(current);
+        for (String dependency : graph.getOrDefault(current, List.of())) {
+            findCycles(dependency, graph, path, visited, cyclic);
+        }
+        path.removeLast();
+    }
+
+    private boolean validateConstructor(TypeElement extension, TypeMirror base) {
+        List<ExecutableElement> constructors =
+                ElementFilter.constructorsIn(extension.getEnclosedElements());
+        TypeElement bindingContext =
+                elements.getTypeElement("games.cafecito.foundry.runtime.FoundryBindingContext");
+        TypeElement objectLease =
+                elements.getTypeElement("games.cafecito.foundry.runtime.ObjectLease");
+        Optional<ExecutableElement> publicBindingConstructor =
+                constructors.stream()
+                        .filter(constructor -> constructor.getModifiers().contains(Modifier.PUBLIC))
+                        .filter(constructor -> constructor.getParameters().size() == 2)
+                        .filter(
+                                constructor ->
+                                        bindingContext != null
+                                                && objectLease != null
+                                                && types.isSameType(
+                                                        constructor.getParameters().get(0).asType(),
+                                                        bindingContext.asType())
+                                                && types.isSameType(
+                                                        constructor.getParameters().get(1).asType(),
+                                                        objectLease.asType()))
+                        .findFirst();
+        if (publicBindingConstructor.isPresent()) {
+            publicBindingConstructor
+                    .filter(this::declaresCheckedException)
+                    .ifPresent(
+                            constructor ->
+                                    error(
+                                            constructor,
+                                            "extension constructor cannot declare checked exceptions"));
+            return true;
+        }
+        if (base.toString().startsWith("games.cafecito.foundry.generated.")) {
+            error(
+                    extension,
+                    "extension class must provide a public constructor accepting "
+                            + "FoundryBindingContext and ObjectLease");
+            return false;
+        }
+        Optional<ExecutableElement> publicZeroArgument =
+                constructors.stream()
+                        .filter(constructor -> constructor.getParameters().isEmpty())
+                        .filter(constructor -> constructor.getModifiers().contains(Modifier.PUBLIC))
+                        .findFirst();
+        if (publicZeroArgument.isEmpty()) {
+            error(extension, "extension class must provide a public zero-argument constructor");
+        }
+        publicZeroArgument
+                .filter(this::declaresCheckedException)
+                .ifPresent(
+                        constructor ->
+                                error(
+                                        constructor,
+                                        "extension constructor cannot declare checked exceptions"));
+        return false;
+    }
+
+    private void validateCallable(ExecutableElement method, String label) {
+        if (!method.getModifiers().contains(Modifier.PUBLIC)
+                || method.getModifiers().contains(Modifier.STATIC)) {
+            error(method, label + " must be a public instance method");
+        }
+        if (!method.getTypeParameters().isEmpty()) {
+            error(method, label + " cannot declare type parameters");
+        }
+        if (declaresCheckedException(method)) {
+            error(method, label + " cannot declare checked exceptions");
+        }
+    }
+
+    private boolean declaresCheckedException(ExecutableElement executable) {
+        TypeElement runtimeException = elements.getTypeElement("java.lang.RuntimeException");
+        TypeElement error = elements.getTypeElement("java.lang.Error");
+        return executable.getThrownTypes().stream()
+                .anyMatch(
+                        thrown ->
+                                (runtimeException == null
+                                                || !types.isSubtype(
+                                                        thrown, runtimeException.asType()))
+                                        && (error == null
+                                                || !types.isSubtype(thrown, error.asType())));
+    }
+
+    private void validateMethodTypes(ExecutableElement method) {
+        validateSupported(method.getReturnType(), method, "unsupported Foundry return type ");
+        method.getParameters()
+                .forEach(
+                        parameter ->
+                                validateSupported(
+                                        parameter.asType(),
+                                        parameter,
+                                        "unsupported Foundry parameter type "));
+    }
+
+    private void validateSupported(TypeMirror type, Element source) {
+        validateSupported(type, source, "unsupported Foundry type ");
+    }
+
+    private void validateSupported(TypeMirror type, Element source, String messagePrefix) {
+        if (type.getKind().isPrimitive() || type.getKind() == TypeKind.VOID) {
+            return;
+        }
+        if (type.getKind() == TypeKind.DECLARED) {
+            TypeElement element = (TypeElement) ((DeclaredType) type).asElement();
+            String name = element.getQualifiedName().toString();
+            if (name.equals("java.lang.String")
+                    || element.getKind() == ElementKind.ENUM
+                    || name.startsWith("games.cafecito.foundry.api.")
+                    || name.startsWith("games.cafecito.foundry.types.")
+                    || generatedType(element)
+                    || annotation(element, CLASS).isPresent()) {
+                return;
+            }
+        }
+        error(source, messagePrefix + type);
+    }
+
+    private boolean generatedType(TypeElement type) {
+        Element current = type;
+        while (current instanceof TypeElement currentType) {
+            if (annotation(currentType, GENERATED).isPresent()) {
+                return true;
+            }
+            current = currentType.getEnclosingElement();
+        }
+        return false;
+    }
+
+    private void validateProperty(
+            TypeElement extension,
+            VariableElement field,
+            AnnotationMirror property,
+            Map<String, VariableElement> usedAccessors) {
+        String getter = stringValue(property, "getter");
+        String setter = stringValue(property, "setter");
+        if (getter.isEmpty()) {
+            error(field, property, value(property, "getter"), "property getter must be specified");
+        } else {
+            checkAccessorReuse(usedAccessors, getter, field, property);
+            List<ExecutableElement> candidates = methodsNamed(extension, getter);
+            Optional<ExecutableElement> matchingGetter =
+                    candidates.stream()
+                            .filter(
+                                    method ->
+                                            isPublicInstance(method)
+                                                    && method.getParameters().isEmpty()
+                                                    && types.isSameType(
+                                                            method.getReturnType(), field.asType()))
+                            .findFirst();
+            if (matchingGetter.isEmpty()) {
+                error(
+                        field,
+                        property,
+                        "property getter " + getter + " must return " + field.asType());
+            } else {
+                matchingGetter
+                        .filter(this::declaresCheckedException)
+                        .ifPresent(
+                                method ->
+                                        error(
+                                                field,
+                                                property,
+                                                "property getter "
+                                                        + getter
+                                                        + " cannot declare checked exceptions"));
+            }
+        }
+        if (!setter.isEmpty()) {
+            checkAccessorReuse(usedAccessors, setter, field, property);
+            List<ExecutableElement> candidates = methodsNamed(extension, setter);
+            Optional<ExecutableElement> matchingSetter =
+                    candidates.stream()
+                            .filter(
+                                    method ->
+                                            isPublicInstance(method)
+                                                    && method.getReturnType().getKind()
+                                                            == TypeKind.VOID
+                                                    && method.getParameters().size() == 1
+                                                    && types.isSameType(
+                                                            method.getParameters().get(0).asType(),
+                                                            field.asType()))
+                            .findFirst();
+            if (matchingSetter.isEmpty()) {
+                error(
+                        field,
+                        property,
+                        "property setter " + setter + " must accept exactly " + field.asType());
+            } else {
+                matchingSetter
+                        .filter(this::declaresCheckedException)
+                        .ifPresent(
+                                method ->
+                                        error(
+                                                field,
+                                                property,
+                                                "property setter "
+                                                        + setter
+                                                        + " cannot declare checked exceptions"));
+            }
+        }
+    }
+
+    private void checkAccessorReuse(
+            Map<String, VariableElement> usedAccessors,
+            String accessor,
+            VariableElement field,
+            AnnotationMirror property) {
+        VariableElement previous = usedAccessors.putIfAbsent(accessor, field);
+        if (previous != null && previous != field) {
+            error(
+                    field,
+                    property,
+                    "property accessor "
+                            + accessor
+                            + " is already used by "
+                            + previous.getSimpleName());
+        }
+    }
+
+    private List<ExecutableElement> methodsNamed(TypeElement type, String name) {
+        return ElementFilter.methodsIn(type.getEnclosedElements()).stream()
+                .filter(method -> method.getSimpleName().contentEquals(name))
+                .toList();
+    }
+
+    private boolean isPublicInstance(ExecutableElement method) {
+        return method.getModifiers().contains(Modifier.PUBLIC)
+                && !method.getModifiers().contains(Modifier.STATIC);
+    }
+
+    private Optional<ResolvedMethod> validateSignal(Element element) {
+        if (element.getKind() != ElementKind.INTERFACE) {
+            error(element, "@FoundrySignal must annotate an interface");
+            return Optional.empty();
+        }
+        TypeElement signal = (TypeElement) element;
+        List<ResolvedMethod> methods = effectiveAbstractMethods(signal);
+        if (methods.size() != 1) {
+            error(signal, "signal must declare exactly one abstract method");
+            return Optional.empty();
+        }
+        ResolvedMethod method = methods.get(0);
+        if (method.type().getReturnType().getKind() != TypeKind.VOID) {
+            error(method.element(), "signal method must return void");
+        }
+        for (int index = 0; index < method.element().getParameters().size(); index++) {
+            validateSupported(
+                    method.type().getParameterTypes().get(index),
+                    method.element().getParameters().get(index));
+        }
+        return Optional.of(method);
+    }
+
+    private List<ResolvedMethod> effectiveAbstractMethods(TypeElement signal) {
+        TypeElement objectType = elements.getTypeElement("java.lang.Object");
+        List<ExecutableElement> objectMethods =
+                objectType == null
+                        ? List.of()
+                        : ElementFilter.methodsIn(elements.getAllMembers(objectType));
+        DeclaredType signalType = (DeclaredType) signal.asType();
+        Map<String, ResolvedMethod> methods = new LinkedHashMap<>();
+        ElementFilter.methodsIn(elements.getAllMembers(signal)).stream()
+                .filter(method -> method.getModifiers().contains(Modifier.ABSTRACT))
+                .filter(
+                        method ->
+                                objectMethods.stream()
+                                        .filter(
+                                                objectMethod ->
+                                                        objectMethod
+                                                                .getModifiers()
+                                                                .contains(Modifier.PUBLIC))
+                                        .noneMatch(
+                                                objectMethod ->
+                                                        sameSignature(objectMethod, method)))
+                .map(
+                        method ->
+                                new ResolvedMethod(
+                                        method,
+                                        (ExecutableType) types.asMemberOf(signalType, method)))
+                .forEach(method -> methods.putIfAbsent(methodSignatureKey(method), method));
+        return List.copyOf(methods.values());
+    }
+
+    private String methodSignatureKey(ResolvedMethod method) {
+        return method.element().getSimpleName()
+                + method.type().getParameterTypes().stream()
+                        .map(parameter -> types.erasure(parameter).toString())
+                        .collect(java.util.stream.Collectors.joining(",", "(", ")"));
+    }
+
+    private ExtensionModel.SignalModel signalModel(
+            TypeElement signal, String exported, ResolvedMethod method) {
+        return new ExtensionModel.SignalModel(
+                signal.getSimpleName().toString(),
+                exported,
+                method == null ? List.of() : parameters(method.element(), method.type()));
+    }
+
+    private Optional<String> baseVirtualIdentity(TypeMirror base, ExecutableElement override) {
+        Element baseElement = types.asElement(base);
+        if (!(baseElement instanceof TypeElement baseType)) {
+            return Optional.empty();
+        }
+        return ElementFilter.methodsIn(elements.getAllMembers(baseType)).stream()
+                .filter(method -> method.getSimpleName().contentEquals(override.getSimpleName()))
+                .filter(method -> annotation(method, VIRTUAL).isPresent())
+                .filter(method -> sameSignature(method, override))
+                .map(method -> stringValue(annotation(method, VIRTUAL).orElseThrow(), "value"))
+                .findFirst();
+    }
+
+    private boolean sameSignature(ExecutableElement expected, ExecutableElement actual) {
+        if (!expected.getSimpleName().contentEquals(actual.getSimpleName())
+                || !types.isSameType(expected.getReturnType(), actual.getReturnType())
+                || expected.getParameters().size() != actual.getParameters().size()) {
+            return false;
+        }
+        for (int index = 0; index < expected.getParameters().size(); index++) {
+            if (!types.isSameType(
+                    expected.getParameters().get(index).asType(),
+                    actual.getParameters().get(index).asType())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private List<String> initializationDependencies(
+            TypeElement extension, AnnotationMirror initialization) {
+        AnnotationValue afterValue = value(initialization, "after");
+        @SuppressWarnings("unchecked")
+        List<? extends AnnotationValue> values =
+                (List<? extends AnnotationValue>) afterValue.getValue();
+        List<String> dependencies = new ArrayList<>();
+        Set<String> uniqueDependencies = new HashSet<>();
+        for (AnnotationValue dependencyValue : values) {
+            TypeMirror dependency = (TypeMirror) dependencyValue.getValue();
+            Element dependencyElement = types.asElement(dependency);
+            if (!(dependencyElement instanceof TypeElement dependencyType)
+                    || annotation(dependencyType, CLASS).isEmpty()) {
+                error(
+                        extension,
+                        initialization,
+                        dependencyValue,
+                        "initialization dependency must be a @FoundryClass: " + dependency);
+            } else {
+                String dependencyName = dependencyType.getQualifiedName().toString();
+                if (!uniqueDependencies.add(dependencyName)) {
+                    error(
+                            extension,
+                            initialization,
+                            dependencyValue,
+                            "duplicate initialization dependency " + dependencyName);
+                } else {
+                    dependencies.add(dependencyName);
+                }
+            }
+        }
+        return List.copyOf(dependencies);
+    }
+
+    private ExtensionModel.MethodModel methodModel(ExecutableElement method, String exportedName) {
+        return new ExtensionModel.MethodModel(
+                method.getSimpleName().toString(),
+                exportedName,
+                method.getReturnType().toString(),
+                parameters(method));
+    }
+
+    private List<ExtensionModel.ParameterModel> parameters(ExecutableElement method) {
+        return method.getParameters().stream()
+                .map(
+                        parameter ->
+                                new ExtensionModel.ParameterModel(
+                                        parameter.getSimpleName().toString(),
+                                        parameter.asType().toString()))
+                .toList();
+    }
+
+    private List<ExtensionModel.ParameterModel> parameters(
+            ExecutableElement method, ExecutableType resolvedType) {
+        List<ExtensionModel.ParameterModel> parameters = new ArrayList<>();
+        for (int index = 0; index < method.getParameters().size(); index++) {
+            parameters.add(
+                    new ExtensionModel.ParameterModel(
+                            method.getParameters().get(index).getSimpleName().toString(),
+                            resolvedType.getParameterTypes().get(index).toString()));
+        }
+        return List.copyOf(parameters);
+    }
+
+    private record ResolvedMethod(ExecutableElement element, ExecutableType type) {}
+
+    private void checkDuplicate(Map<String, Element> names, String name, Element element) {
+        Element previous = names.putIfAbsent(name, element);
+        if (previous != null) {
+            error(element, "duplicate exported name " + name);
+        }
+    }
+
+    private String exportedName(Element element, AnnotationMirror annotation, String fallback) {
+        String configured = stringValue(annotation, "name");
+        String exported = configured.isEmpty() ? fallback : configured;
+        if (!exported.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+            error(
+                    element,
+                    annotation,
+                    value(annotation, "name"),
+                    "invalid exported name " + exported);
+        }
+        return exported;
+    }
+
+    private String stringValue(AnnotationMirror annotation, String name) {
+        return (String) value(annotation, name).getValue();
+    }
+
+    private Optional<AnnotationMirror> annotation(Element element, String qualifiedName) {
+        return element.getAnnotationMirrors().stream()
+                .filter(
+                        mirror ->
+                                ((TypeElement) mirror.getAnnotationType().asElement())
+                                        .getQualifiedName()
+                                        .contentEquals(qualifiedName))
+                .map(AnnotationMirror.class::cast)
+                .findFirst();
+    }
+
+    private AnnotationValue value(AnnotationMirror annotation, String name) {
+        return elements.getElementValuesWithDefaults(annotation).entrySet().stream()
+                .filter(entry -> entry.getKey().getSimpleName().contentEquals(name))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private void error(Element element, String message) {
+        errorCount++;
+        messager.printMessage(Diagnostic.Kind.ERROR, message, element);
+    }
+
+    private void error(Element element, AnnotationMirror annotation, String message) {
+        errorCount++;
+        messager.printMessage(Diagnostic.Kind.ERROR, message, element, annotation);
+    }
+
+    private void error(
+            Element element, AnnotationMirror annotation, AnnotationValue value, String message) {
+        errorCount++;
+        messager.printMessage(Diagnostic.Kind.ERROR, message, element, annotation, value);
+    }
+}

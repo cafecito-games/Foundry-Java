@@ -866,6 +866,7 @@ public final class FoundrySourceGenerator {
                         .append(PACKAGE)
                         .append(";\n\n")
                         .append("/** Strongly typed Foundry utility functions. */\n")
+                        .append("@games.cafecito.foundry.annotations.GeneratedByFoundry\n")
                         .append("public final class Utilities {\n");
         for (PublicRoot root : roots) {
             appendPublicIdentityMarkers(source, root.descriptor().entities());
@@ -882,7 +883,8 @@ public final class FoundrySourceGenerator {
                 .append("package ")
                 .append(root.packageName())
                 .append(";\n\n")
-                .append("/** Generated public root for an accepted Foundry API identity. */\n");
+                .append("/** Generated public root for an accepted Foundry API identity. */\n")
+                .append("@games.cafecito.foundry.annotations.GeneratedByFoundry\n");
     }
 
     private static void appendPublicIdentityMarkers(
@@ -1019,6 +1021,12 @@ public final class FoundrySourceGenerator {
         source.append("    /** Calls ")
                 .append(javaStringBody(foundryName))
                 .append(". */\n")
+                .append(
+                        virtual
+                                ? "    @games.cafecito.foundry.annotations.FoundryVirtual(\""
+                                        + javaStringBody(foundryName)
+                                        + "\")\n"
+                                : "")
                 .append("    ")
                 .append(virtual ? "protected " : "public ")
                 .append(style != MethodStyle.INSTANCE ? "static " : "")

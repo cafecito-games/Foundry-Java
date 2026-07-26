@@ -5,7 +5,12 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/** Identifies a type or virtual method produced by the Foundry Java generator. */
+/** Preserves the original Foundry identity of a generated Java virtual method. */
 @Retention(RetentionPolicy.CLASS)
-@Target({ElementType.TYPE, ElementType.METHOD})
-public @interface GeneratedByFoundry {}
+@Target(ElementType.METHOD)
+public @interface FoundryVirtual {
+    /**
+     * @return the original Foundry virtual method name
+     */
+    String value();
+}

@@ -136,6 +136,10 @@ class FoundrySourceGeneratorTest {
         assertNotNull(builtinWrapper);
         assertNotNull(utilityWrapper);
         assertNotNull(singletonWrapper);
+        assertTrue(nodeWrapper.contains("@games.cafecito.foundry.annotations.GeneratedByFoundry"));
+        assertTrue(
+                nodeWrapper.contains(
+                        "@games.cafecito.foundry.annotations.FoundryVirtual(\"_process\")"));
         assertTrue(nodeWrapper.contains("public class Node extends Object"));
         assertTrue(
                 objectWrapper.contains(
@@ -215,6 +219,8 @@ class FoundrySourceGeneratorTest {
         assertTrue(node.contains("setOwnerPath(games.cafecito.foundry.types.NodePath ownerPath)"));
         assertTrue(node.contains("getOwnerPath()"));
         assertTrue(node.contains("renamedSignal()"));
+        assertTrue(
+                node.contains("@games.cafecito.foundry.annotations.FoundryVirtual(\"_process\")"));
         assertTrue(node.contains("protected void onProcess(double delta)"));
         assertTrue(node.contains("public enum ProcessMode"));
         assertTrue(node.contains("NOTIFICATION_READY"));
@@ -773,10 +779,33 @@ class FoundrySourceGeneratorTest {
     }
 
     private static Path writeRuntimeStubs(Path root) throws IOException {
+        Path annotations = root.resolve("games/cafecito/foundry/annotations");
         Path runtime = root.resolve("games/cafecito/foundry/runtime");
         Path types = root.resolve("games/cafecito/foundry/types");
+        Files.createDirectories(annotations);
         Files.createDirectories(runtime);
         Files.createDirectories(types);
+        Files.writeString(
+                annotations.resolve("GeneratedByFoundry.java"),
+                """
+                package games.cafecito.foundry.annotations;
+                @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.CLASS)
+                @java.lang.annotation.Target({
+                    java.lang.annotation.ElementType.TYPE,
+                    java.lang.annotation.ElementType.METHOD
+                })
+                public @interface GeneratedByFoundry {}
+                """);
+        Files.writeString(
+                annotations.resolve("FoundryVirtual.java"),
+                """
+                package games.cafecito.foundry.annotations;
+                @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.CLASS)
+                @java.lang.annotation.Target(java.lang.annotation.ElementType.METHOD)
+                public @interface FoundryVirtual {
+                    String value();
+                }
+                """);
         Files.writeString(
                 types.resolve("Variant.java"),
                 """

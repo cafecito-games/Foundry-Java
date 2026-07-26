@@ -1,0 +1,97 @@
+package games.cafecito.foundry.generated.demomodule;
+
+@javax.annotation.processing.Generated("games.cafecito.foundry.processor.FoundryExtensionProcessor")
+public final class DemoModuleRegistry {
+    private DemoModuleRegistry() {}
+
+    private static final ModuleDescriptor DESCRIPTOR =
+            new ModuleDescriptor(
+                    "demo-module",
+                    java.util.List.of(
+                            new ClassDescriptor(
+                                    "demo.SpinningCube",
+                                    "SpinningCube",
+                                    "demo.EngineNode",
+                                    "SCENE",
+                                    java.util.List.of(),
+                                    new ExtensionAccess() {
+                                        @Override
+                                        public Object construct(
+                                                games.cafecito.foundry.runtime.FoundryBindingContext context,
+                                                games.cafecito.foundry.runtime.ObjectLease lease) {
+                                            return demo.SpinningCube_FoundryTrampoline.construct(context, lease);
+                                        }
+
+                                        @Override
+                                        public Object invoke(
+                                                Object target, String name, Object[] arguments) {
+                                            return demo.SpinningCube_FoundryTrampoline.invoke(
+                                                    target, name, arguments);
+                                        }
+
+                                        @Override
+                                        public Object getProperty(Object target, String name) {
+                                            return demo.SpinningCube_FoundryTrampoline.getProperty(target, name);
+                                        }
+
+                                        @Override
+                                        public void setProperty(
+                                                Object target, String name, Object value) {
+                                            demo.SpinningCube_FoundryTrampoline.setProperty(target, name, value);
+                                        }
+                                    },
+                                    java.util.List.of(
+                                            new MemberDescriptor(
+                                                    "override",
+                                                    "_process",
+                                                    "onProcess",
+                                                    "void(double)"),
+                                            new MemberDescriptor(
+                                                    "method", "reset", "reset", "void()"),
+                                            new MemberDescriptor(
+                                                    "signal",
+                                                    "reset_done",
+                                                    "Reset",
+                                                    "void(double)"),
+                                            new MemberDescriptor(
+                                                    "property", "speed", "speed", "double")))));
+
+    public static ModuleDescriptor descriptor() {
+        return DESCRIPTOR;
+    }
+
+    public record ModuleDescriptor(String name, java.util.List<ClassDescriptor> classes) {
+        public ModuleDescriptor {
+            classes = java.util.List.copyOf(classes);
+        }
+    }
+
+    public record ClassDescriptor(
+            String javaName,
+            String foundryName,
+            String baseName,
+            String initializationLevel,
+            java.util.List<String> after,
+            ExtensionAccess access,
+            java.util.List<MemberDescriptor> members) {
+        public ClassDescriptor {
+            after = java.util.List.copyOf(after);
+            members = java.util.List.copyOf(members);
+        }
+    }
+
+    public record MemberDescriptor(
+            String kind, String foundryName, String javaName, String signature) {}
+
+    public interface ExtensionAccess {
+        Object construct(
+                games.cafecito.foundry.runtime.FoundryBindingContext context,
+                games.cafecito.foundry.runtime.ObjectLease lease);
+
+        Object invoke(Object target, String name, Object[] arguments);
+
+        Object getProperty(Object target, String name);
+
+        void setProperty(Object target, String name, Object value);
+    }
+}
