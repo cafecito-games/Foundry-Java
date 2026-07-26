@@ -1,0 +1,246 @@
+{
+  "header": {
+    "version_major": 0,
+    "version_minor": 1,
+    "version_patch": 0,
+    "version_status": "alpha8",
+    "version_build": "test",
+    "version_full_name": "Foundry v0.1.alpha8.test",
+    "precision": "single"
+  },
+  "builtin_class_sizes": [
+    {
+      "build_configuration": "float_32",
+      "sizes": [
+        {
+          "name": "Array",
+          "size": 8
+        }
+      ]
+    }
+  ],
+  "builtin_class_member_offsets": [
+    {
+      "build_configuration": "float_32",
+      "classes": [
+        {
+          "name": "Vector3",
+          "members": [
+            {
+              "member": "x",
+              "offset": 0,
+              "meta": "float"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "global_constants": [
+    {
+      "name": "PROPERTY_USAGE_DEFAULT",
+      "value": 6,
+      "is_bitfield": true
+    }
+  ],
+  "global_enums": [
+    {
+      "name": "Variant.Type",
+      "is_bitfield": false,
+      "values": [
+        {
+          "name": "TYPE_NIL",
+          "value": 0
+        }
+      ]
+    }
+  ],
+  "utility_functions": [
+    {
+      "name": "type_convert",
+      "return_type": "Variant",
+      "category": "general",
+      "is_vararg": false,
+      "hash": 128,
+      "arguments": [
+        {
+          "name": "value",
+          "type": "Variant",
+          "default_value": "null"
+        },
+        {
+          "name": "packed",
+          "type": "PackedByteArray"
+        }
+      ]
+    }
+  ],
+  "builtin_classes": [
+    {
+      "name": "Array",
+      "is_keyed": true,
+      "operators": [
+        {
+          "name": "==",
+          "right_type": "Array",
+          "return_type": "bool"
+        }
+      ],
+      "constructors": [
+        {
+          "index": 0
+        },
+        {
+          "index": 1,
+          "arguments": [
+            {
+              "name": "from",
+              "type": "Array"
+            }
+          ]
+        }
+      ],
+      "has_destructor": true,
+      "indexing_return_type": "Variant",
+      "methods": [
+        {
+          "name": "assign",
+          "is_vararg": false,
+          "is_const": false,
+          "is_static": false,
+          "hash": 42,
+          "arguments": [
+            {
+              "name": "array",
+              "type": "Array"
+            }
+          ]
+        }
+      ],
+      "members": [
+        {
+          "name": "typed_element",
+          "type": "Variant"
+        }
+      ],
+      "constants": [
+        {
+          "name": "MAX_SIZE",
+          "type": "int",
+          "value": "2147483647"
+        }
+      ],
+      "enums": [
+        {
+          "name": "StorageMode",
+          "values": [
+            {
+              "name": "STORAGE_PACKED",
+              "value": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "classes": [
+    {
+      "name": "Object",
+      "is_refcounted": false,
+      "is_instantiable": true,
+      "api_type": "core"
+    },
+    {
+      "name": "Node",
+      "is_refcounted": false,
+      "is_instantiable": true,
+      "inherits": "Object",
+      "api_type": "core",
+      "methods": [
+        {
+          "name": "_process",
+          "is_const": false,
+          "is_vararg": false,
+          "is_static": false,
+          "is_virtual": true,
+          "is_required": false,
+          "hash": 100,
+          "arguments": [
+            {
+              "name": "delta",
+              "type": "float",
+              "meta": "double"
+            }
+          ]
+        },
+        {
+          "name": "get_children",
+          "is_const": true,
+          "is_vararg": false,
+          "is_static": false,
+          "is_virtual": false,
+          "hash": 101,
+          "return_value": {
+            "type": "typedarray::Node"
+          },
+          "arguments": [
+            {
+              "name": "include_internal",
+              "type": "bool",
+              "default_value": "false"
+            }
+          ]
+        }
+      ],
+      "properties": [
+        {
+          "type": "NodePath",
+          "name": "owner_path",
+          "setter": "set_owner_path",
+          "getter": "get_owner_path"
+        }
+      ],
+      "signals": [
+        {
+          "name": "renamed",
+          "arguments": [
+            {
+              "name": "old_name",
+              "type": "StringName"
+            }
+          ]
+        }
+      ],
+      "constants": [
+        {
+          "name": "NOTIFICATION_READY",
+          "value": 13
+        }
+      ],
+      "enums": [
+        {
+          "name": "ProcessMode",
+          "is_bitfield": false,
+          "values": [
+            {
+              "name": "PROCESS_MODE_INHERIT",
+              "value": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "singletons": [
+    {
+      "name": "Engine",
+      "type": "Engine"
+    }
+  ],
+  "native_structures": [
+    {
+      "name": "ObjectID",
+      "format": "uint64_t id"
+    }
+  ]
+}

@@ -9,8 +9,10 @@ generated, and ABI-facing types; Kotlin is an optional convenience layer over th
 
 ## Modules
 
-- `foundry-java-api-model` — public, Android-free ABI types including `FoundryExtension`.
-- `foundry-java-annotations`, `foundry-java-generator`, and `foundry-java-processor` — Java codegen support.
+- `foundry-java-api-model` — public, Android-free ABI types, strict immutable API models, and
+  compatibility metadata.
+- `foundry-java-annotations`, `foundry-java-generator`, and `foundry-java-processor` — deterministic
+  Java codegen support.
 - `foundry-java-runtime` and `foundry-java-test` — host-neutral runtime and test support.
 - `foundry-java-android` — the only Android host/package module.
 - `foundry-java-gradle-plugin` and `foundry-java-kotlin` — consumer conventions and optional Kotlin helpers.
@@ -33,3 +35,6 @@ Integrations use only the public `FoundryExtension` ABI. Foundry-Java never pack
 or redistributes `libfoundry_android.so`. The bootstrap Android AAR currently allows no classes in
 `classes.jar`; later workstreams that intentionally add Foundry-Java bootstrap classes must update
 the exact allowlist in `build.gradle.kts`.
+
+Accepted Foundry API inputs, provenance, schema rejection, classification counts, and repeat-clean
+generation are recorded in [`docs/api-compatibility.md`](docs/api-compatibility.md).

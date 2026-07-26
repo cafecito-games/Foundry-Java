@@ -1,0 +1,16 @@
+package games.cafecito.foundry.generated;
+
+public final class GeneratedApiProvenance {
+    public static final String FOUNDRY_COMMIT = "3923e920b2fb6db68f82dfdab2bf7b1df125492d";
+    public static final String FOUNDRY_VERSION = "0.1.0-alpha.8";
+    public static final String API_SHA256 =
+            "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
+    public static final String INTERFACE_HEADER_SHA256 =
+            "ecf9a1f1e6b2642385a521725313efb2baea8b81fcac9dc837f55a4b90498991";
+    public static final String COMPATIBILITY_MANIFEST_SHA256 =
+            "<manifest-sha256>";
+    public static final String GENERATOR_VERSION = "1";
+    public static final String BRIDGE_CONTRACT_VERSION = "1";
+
+    private GeneratedApiProvenance() {}
+}
