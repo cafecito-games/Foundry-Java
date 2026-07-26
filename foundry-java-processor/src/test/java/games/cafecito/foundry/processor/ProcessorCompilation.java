@@ -13,6 +13,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
+import javax.annotation.processing.Processor;
 import javax.tools.Diagnostic;
 import javax.tools.DiagnosticCollector;
 import javax.tools.JavaCompiler;
@@ -30,6 +31,12 @@ final class ProcessorCompilation {
     }
 
     static Result compile(Map<String, String> sources, String moduleName) throws IOException {
+        return compile(sources, moduleName, List.of(new FoundryExtensionProcessor()));
+    }
+
+    static Result compile(
+            Map<String, String> sources, String moduleName, List<? extends Processor> processors)
+            throws IOException {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         assertNotNull(compiler, "processor tests require a JDK");
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
@@ -58,7 +65,7 @@ final class ProcessorCompilation {
                             .toList();
             JavaCompiler.CompilationTask task =
                     compiler.getTask(null, fileManager, diagnostics, options, null, units);
-            task.setProcessors(List.of(new FoundryExtensionProcessor()));
+            task.setProcessors(processors);
             boolean successful = task.call();
             return new Result(
                     successful,

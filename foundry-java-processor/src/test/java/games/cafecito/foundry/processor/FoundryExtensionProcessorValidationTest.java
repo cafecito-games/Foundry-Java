@@ -267,6 +267,26 @@ class FoundryExtensionProcessorValidationTest {
         assertDiagnostic(result, "invalid exported name bad-name", "BadIdentity", 6);
     }
 
+    @Test
+    void rejectsAnUnnamedPackageExtensionAtItsClassDeclaration() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        Map.of(
+                                "DefaultExtension",
+                                """
+                                import games.cafecito.foundry.annotations.FoundryClass;
+                                @FoundryClass(base = DefaultBase.class)
+                                public final class DefaultExtension extends DefaultBase {}
+                                class DefaultBase {}
+                                """));
+
+        assertDiagnostic(
+                result,
+                "extension class must be declared in a named package",
+                "DefaultExtension",
+                3);
+    }
+
     private static ProcessorCompilation.Result compile(String name, String source)
             throws IOException {
         Map<String, String> sources = baseSources();

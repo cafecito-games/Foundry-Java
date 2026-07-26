@@ -16,7 +16,7 @@ final class SourceEmitter {
         this.filer = filer;
     }
 
-    void emitTrampoline(ExtensionModel model, TypeElement source) throws IOException {
+    String emitTrampoline(ExtensionModel model, TypeElement source) throws IOException {
         String qualifiedName =
                 model.packageName().isEmpty()
                         ? model.simpleName() + "_FoundryTrampoline"
@@ -24,6 +24,24 @@ final class SourceEmitter {
         try (Writer writer = filer.createSourceFile(qualifiedName, source).openWriter()) {
             writer.write(trampolineSource(model));
         }
+        return qualifiedName;
+    }
+
+    String emitRoundBarrier(int sequence) throws IOException {
+        String className = "FoundryProcessorRoundBarrier" + sequence;
+        String packageName = "games.cafecito.foundry.generated";
+        String qualifiedName = packageName + "." + className;
+        try (Writer writer = filer.createSourceFile(qualifiedName).openWriter()) {
+            writer.write(
+                    """
+                    package %s;
+
+                    @javax.annotation.processing.Generated("%s")
+                    final class %s {}
+                    """
+                            .formatted(packageName, PROCESSOR, className));
+        }
+        return qualifiedName;
     }
 
     private String trampolineSource(ExtensionModel model) {

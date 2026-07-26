@@ -7,9 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import javax.annotation.processing.AbstractProcessor;
+import javax.annotation.processing.RoundEnvironment;
+import javax.lang.model.SourceVersion;
+import javax.lang.model.element.TypeElement;
 import org.junit.jupiter.api.Test;
 
 class FoundryProcessorBuildModeTest {
@@ -114,6 +121,52 @@ class FoundryProcessorBuildModeTest {
                         .count());
     }
 
+    @Test
+    void includesExtensionsGeneratedAfterAnInitiallyEmptyRound() throws IOException {
+        Map<String, String> sources = new LinkedHashMap<>();
+        sources.put(
+                "demo.EngineNode",
+                """
+                package demo;
+                public class EngineNode {}
+                """);
+        sources.put(
+                "demo.InitialExtension",
+                """
+                package demo;
+                import games.cafecito.foundry.annotations.FoundryClass;
+                @FoundryClass(base = EngineNode.class)
+                public final class InitialExtension extends EngineNode {}
+                """);
+
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        sources,
+                        "delayed-module",
+                        List.of(new FoundryExtensionProcessor(), new DelayedExtensionProcessor()));
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+        String registry =
+                result.generatedSources()
+                        .get(
+                                "games/cafecito/foundry/generated/delayedmodule/"
+                                        + "DelayedModuleRegistry.java");
+        assertTrue(registry.contains("\"demo.InitialExtension\""), registry);
+        assertTrue(registry.contains("\"demo.GeneratedExtension\""), registry);
+        assertTrue(
+                result.generatedSources()
+                        .containsKey("demo/GeneratedExtension_FoundryTrampoline.java"));
+        String descriptor =
+                new String(
+                        result.classOutput()
+                                .get(
+                                        "META-INF/foundry-java/modules/"
+                                                + "delayed-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(descriptor.contains("class=demo.InitialExtension|"));
+        assertTrue(descriptor.contains("class=demo.GeneratedExtension|"));
+    }
+
     private static Map<String, String> twoExtensions(boolean includeTemporaryMethod) {
         Map<String, String> sources = new LinkedHashMap<>();
         sources.put(
@@ -145,5 +198,57 @@ class FoundryProcessorBuildModeTest {
                                         ? "@FoundryMethod public void temporary() {}"
                                         : ""));
         return sources;
+    }
+
+    private static final class DelayedExtensionProcessor extends AbstractProcessor {
+        private int stage;
+
+        @Override
+        public Set<String> getSupportedAnnotationTypes() {
+            return Set.of("*");
+        }
+
+        @Override
+        public SourceVersion getSupportedSourceVersion() {
+            return SourceVersion.RELEASE_17;
+        }
+
+        @Override
+        public boolean process(
+                Set<? extends TypeElement> annotations, RoundEnvironment roundEnvironment) {
+            if (roundEnvironment.processingOver()) {
+                return false;
+            }
+            try {
+                if (stage == 0) {
+                    writeSource(
+                            "demo.DelayedTrigger",
+                            """
+                            package demo;
+                            public final class DelayedTrigger {}
+                            """);
+                    stage = 1;
+                } else if (stage == 1) {
+                    writeSource(
+                            "demo.GeneratedExtension",
+                            """
+                            package demo;
+                            import games.cafecito.foundry.annotations.FoundryClass;
+                            @FoundryClass(base = EngineNode.class)
+                            public final class GeneratedExtension extends EngineNode {}
+                            """);
+                    stage = 2;
+                }
+            } catch (IOException exception) {
+                throw new java.io.UncheckedIOException(exception);
+            }
+            return false;
+        }
+
+        private void writeSource(String name, String source) throws IOException {
+            try (Writer writer = processingEnv.getFiler().createSourceFile(name).openWriter()) {
+                writer.write(source);
+            }
+        }
     }
 }

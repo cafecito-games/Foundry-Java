@@ -60,6 +60,9 @@ final class ExtensionValidator {
         if (extension.getEnclosingElement().getKind() != ElementKind.PACKAGE) {
             error(extension, "extension class must be top-level");
         }
+        if (elements.getPackageOf(extension).isUnnamed()) {
+            error(extension, "extension class must be declared in a named package");
+        }
         if (!extension.getModifiers().contains(Modifier.PUBLIC)) {
             error(extension, "extension class must be public");
         }

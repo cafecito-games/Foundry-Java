@@ -17,10 +17,14 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
     private final Map<String, ExtensionModel> models = new LinkedHashMap<>();
     private final Map<String, TypeElement> sourceElements = new LinkedHashMap<>();
     private final Set<String> emittedTrampolines = new LinkedHashSet<>();
+    private final Set<String> generatedTypeNames = new LinkedHashSet<>();
+    private final Set<String> reportedModuleNameConflicts = new LinkedHashSet<>();
     private ExtensionValidator validator;
     private SourceEmitter sourceEmitter;
     private boolean moduleEmitted;
     private int moduleErrorCount;
+    private int emptyDiscoveryRounds;
+    private int barrierSequence;
 
     @Override
     public Set<String> getSupportedAnnotationTypes() {
@@ -65,9 +69,12 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                                         models.put(model.qualifiedName(), model);
                                         sourceElements.put(model.qualifiedName(), type);
                                         if (validator.errorCount() == errorsBefore
-                                                && emittedTrampolines.add(model.qualifiedName())) {
+                                                && !emittedTrampolines.contains(
+                                                        model.qualifiedName())) {
                                             try {
-                                                sourceEmitter.emitTrampoline(model, type);
+                                                generatedTypeNames.add(
+                                                        sourceEmitter.emitTrampoline(model, type));
+                                                emittedTrampolines.add(model.qualifiedName());
                                             } catch (IOException exception) {
                                                 processingEnv
                                                         .getMessager()
@@ -90,20 +97,50 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
             }
         }
         validator.validateAnnotationPlacement(roundEnvironment);
+        boolean externalRoundActivity =
+                roundEnvironment.getRootElements().stream()
+                        .filter(TypeElement.class::isInstance)
+                        .map(TypeElement.class::cast)
+                        .map(type -> type.getQualifiedName().toString())
+                        .anyMatch(
+                                name ->
+                                        !sourceElements.containsKey(name)
+                                                && !generatedTypeNames.contains(name));
         if (discovered > 0) {
+            emptyDiscoveryRounds = 0;
             validateModuleNames();
+        } else if (externalRoundActivity) {
+            emptyDiscoveryRounds = 0;
         }
         if (discovered == 0
                 && !roundEnvironment.processingOver()
                 && !models.isEmpty()
                 && !moduleEmitted) {
+            emptyDiscoveryRounds++;
+            if (emptyDiscoveryRounds == 1) {
+                emitRoundBarrier();
+                return true;
+            }
             moduleEmitted = true;
             validator.validateCycles(Map.copyOf(models), Map.copyOf(sourceElements));
+            validateModuleNames();
             if (validator.errorCount() == 0 && moduleErrorCount == 0) {
                 emitModule();
             }
         }
         return true;
+    }
+
+    private void emitRoundBarrier() {
+        try {
+            generatedTypeNames.add(sourceEmitter.emitRoundBarrier(++barrierSequence));
+        } catch (IOException exception) {
+            processingEnv
+                    .getMessager()
+                    .printMessage(
+                            javax.tools.Diagnostic.Kind.ERROR,
+                            "cannot defer module registry generation: " + exception.getMessage());
+        }
     }
 
     private void validateModuleNames() {
@@ -115,7 +152,13 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                             String previous =
                                     exported.putIfAbsent(
                                             model.exportedName(), model.qualifiedName());
-                            if (previous != null) {
+                            String conflict =
+                                    model.exportedName()
+                                            + "|"
+                                            + previous
+                                            + "|"
+                                            + model.qualifiedName();
+                            if (previous != null && reportedModuleNameConflicts.add(conflict)) {
                                 moduleErrorCount++;
                                 processingEnv
                                         .getMessager()
