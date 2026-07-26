@@ -1,0 +1,8 @@
+format=1
+module=demo-module
+registry=games.cafecito.foundry.generated.demomodule.DemoModuleRegistry
+class=demo.SpinningCube|SpinningCube|demo.EngineNode|SCENE|
+override=demo.SpinningCube|_process|_process|void(double)
+method=demo.SpinningCube|reset|reset|void()
+signal=demo.SpinningCube|reset_done|Reset|void(double)
+property=demo.SpinningCube|speed|speed|double

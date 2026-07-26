@@ -1,0 +1,41 @@
+package demo;
+
+@javax.annotation.processing.Generated("games.cafecito.foundry.processor.FoundryExtensionProcessor")
+public final class SpinningCube_FoundryTrampoline {
+    private SpinningCube_FoundryTrampoline() {}
+
+    public static SpinningCube construct() {
+        return new SpinningCube();
+    }
+
+    public static Object invoke(Object target, String name, Object[] arguments) {
+        SpinningCube receiver = (SpinningCube) target;
+        return switch (name) {
+            case "_process" -> {
+                receiver._process((double) arguments[0]);
+                yield null;
+            }
+            case "reset" -> {
+                receiver.reset();
+                yield null;
+            }
+            default -> throw new IllegalArgumentException("Unknown method: " + name);
+        };
+    }
+
+    public static Object getProperty(Object target, String name) {
+        SpinningCube receiver = (SpinningCube) target;
+        return switch (name) {
+            case "speed" -> receiver.speed();
+            default -> throw new IllegalArgumentException("Unknown property: " + name);
+        };
+    }
+
+    public static void setProperty(Object target, String name, Object value) {
+        SpinningCube receiver = (SpinningCube) target;
+        switch (name) {
+            case "speed" -> receiver.speed((double) value);
+            default -> throw new IllegalArgumentException("Unknown property: " + name);
+        }
+    }
+}

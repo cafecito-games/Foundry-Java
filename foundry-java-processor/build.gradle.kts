@@ -6,7 +6,8 @@ dependencies {
 }
 
 val processorJar = tasks.named<Jar>("jar")
+val annotationsJar = project(":foundry-java-annotations").tasks.named<Jar>("jar")
 
 tasks.withType<Test>().configureEach {
-    dependsOn(processorJar)
+    dependsOn(processorJar, annotationsJar)
 }
