@@ -64,6 +64,42 @@ class FoundryProcessorBuildModeTest {
     }
 
     @Test
+    void exactJdk17WarningsAsErrorsCompilationIsWarningFree() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compileWithOptions(
+                        FoundryTrampolineGenerationTest.extensionSources(),
+                        "warning-free-module",
+                        List.of("-Werror"));
+
+        assertTrue(
+                result.successful(),
+                () ->
+                        result.diagnostics().stream()
+                                .map(
+                                        diagnostic ->
+                                                diagnostic.getKind()
+                                                        + ": "
+                                                        + diagnostic.getMessage(null))
+                                .toList()
+                                .toString());
+        assertTrue(
+                result.diagnostics().stream()
+                        .noneMatch(
+                                diagnostic ->
+                                        diagnostic.getKind() == javax.tools.Diagnostic.Kind.WARNING
+                                                || diagnostic.getKind()
+                                                        == javax.tools.Diagnostic.Kind
+                                                                .MANDATORY_WARNING),
+                result.diagnostics().toString());
+        assertTrue(
+                result.classOutput()
+                        .containsKey(
+                                "games/cafecito/foundry/generated/warningfreemodule/"
+                                        + "WarningFreeModuleRegistry.class"),
+                result.classOutput().keySet().toString());
+    }
+
+    @Test
     void incrementalRegenerationChangesOnlyAffectedArtifacts() throws IOException {
         Map<String, String> firstSources = twoExtensions(true);
         Map<String, String> secondSources = twoExtensions(false);
@@ -271,6 +307,27 @@ class FoundryProcessorBuildModeTest {
                         .containsKey("META-INF/foundry-java/modules/failing-module.descriptor"));
     }
 
+    @Test
+    void registryReservationAndResourceFailuresRemainFailClosed() throws IOException {
+        ProcessorCompilation.Result registryFailure =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(),
+                        "failing-registry",
+                        List.of(new FoundryExtensionProcessor()),
+                        Files.createTempDirectory("foundry-registry-filer-test-"),
+                        name -> name.endsWith("FailingRegistryRegistry"));
+        ProcessorCompilation.Result descriptorFailure =
+                ProcessorCompilation.compile(
+                        FoundryTrampolineGenerationTest.extensionSources(),
+                        "failing-descriptor",
+                        List.of(new FoundryExtensionProcessor()),
+                        Files.createTempDirectory("foundry-descriptor-filer-test-"),
+                        name -> name.endsWith("failing-descriptor.descriptor"));
+
+        assertNoModuleArtifacts(registryFailure, "failing-registry");
+        assertNoModuleArtifacts(descriptorFailure, "failing-descriptor");
+    }
+
     private static Map<String, String> twoExtensions(boolean includeTemporaryMethod) {
         Map<String, String> sources = new LinkedHashMap<>();
         sources.put(
@@ -304,6 +361,22 @@ class FoundryProcessorBuildModeTest {
                                         ? "@FoundryMethod public void temporary() {}"
                                         : ""));
         return sources;
+    }
+
+    private static void assertNoModuleArtifacts(
+            ProcessorCompilation.Result result, String moduleName) {
+        assertFalse(result.successful());
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.endsWith("Registry.java")),
+                result.generatedSources().keySet().toString());
+        assertFalse(
+                result.classOutput()
+                        .containsKey(
+                                "META-INF/foundry-java/modules/" + moduleName + ".descriptor"));
+        assertFalse(
+                result.classOutput()
+                        .containsKey("META-INF/proguard/foundry-java-" + moduleName + ".pro"));
     }
 
     private static final class DelayedExtensionProcessor extends AbstractProcessor {
@@ -431,8 +504,15 @@ class FoundryProcessorBuildModeTest {
                             """
                             package demo;
                             import games.cafecito.foundry.annotations.FoundryClass;
+                            import games.cafecito.foundry.runtime.FoundryBindingContext;
+                            import games.cafecito.foundry.runtime.ObjectLease;
                             @FoundryClass(base = EngineNode.class)
-                            public final class LateExtension extends EngineNode {}
+                            public final class LateExtension extends EngineNode {
+                                public LateExtension(
+                                        FoundryBindingContext context, ObjectLease lease) {
+                                    super(context, lease);
+                                }
+                            }
                             """);
                     extensionWritten = true;
                 } else if (round >= 1 && !triggerWritten && !barrierPresent) {

@@ -24,6 +24,12 @@ class FoundryTrampolineGenerationTest {
                 result.classOutput().containsKey("demo/SpinningCube_FoundryTrampoline.class"),
                 result.classOutput().keySet().toString());
         String generated = result.generatedSources().get(path);
+        assertTrue(
+                generated.contains(
+                        "construct(\n"
+                                + "            games.cafecito.foundry.runtime.FoundryBindingContext context,\n"
+                                + "            games.cafecito.foundry.runtime.ObjectLease lease)"),
+                generated);
         for (String forbidden :
                 new String[] {
                     "java.lang.reflect",
@@ -43,10 +49,17 @@ class FoundryTrampolineGenerationTest {
                 """
                 package demo;
                 import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                import games.cafecito.foundry.annotations.FoundryVirtual;
+                import games.cafecito.foundry.runtime.FoundryBindingContext;
+                import games.cafecito.foundry.runtime.FoundryObject;
+                import games.cafecito.foundry.runtime.ObjectLease;
                 @GeneratedByFoundry
-                public class EngineNode {
-                    @GeneratedByFoundry
-                    public void _process(double delta) {}
+                public class EngineNode extends FoundryObject {
+                    protected EngineNode(FoundryBindingContext context, ObjectLease lease) {
+                        super(context, lease);
+                    }
+                    @FoundryVirtual("_process")
+                    protected void onProcess(double delta) {}
                 }
                 """);
         sources.put(
@@ -57,12 +70,17 @@ class FoundryTrampolineGenerationTest {
                 @FoundryClass(base = EngineNode.class, name = "SpinningCube")
                 @FoundryInitialization(InitializationLevel.SCENE)
                 public final class SpinningCube extends EngineNode {
+                    public SpinningCube(
+                            games.cafecito.foundry.runtime.FoundryBindingContext context,
+                            games.cafecito.foundry.runtime.ObjectLease lease) {
+                        super(context, lease);
+                    }
                     @FoundryProperty(name = "speed", getter = "speed", setter = "speed")
                     private double speed;
                     public double speed() { return speed; }
                     public void speed(double value) { speed = value; }
                     @FoundryMethod public void reset() { speed = 0.0; }
-                    @FoundryOverride public void _process(double delta) { speed += delta; }
+                    @FoundryOverride public void onProcess(double delta) { speed += delta; }
                     @FoundrySignal(name = "reset_done")
                     public interface Reset {
                         void emitted(double previousSpeed);

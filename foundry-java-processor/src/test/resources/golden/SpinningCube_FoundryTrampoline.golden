@@ -4,15 +4,17 @@ package demo;
 public final class SpinningCube_FoundryTrampoline {
     private SpinningCube_FoundryTrampoline() {}
 
-    public static SpinningCube construct() {
-        return new SpinningCube();
+    public static SpinningCube construct(
+            games.cafecito.foundry.runtime.FoundryBindingContext context,
+            games.cafecito.foundry.runtime.ObjectLease lease) {
+        return new SpinningCube(context, lease);
     }
 
     public static Object invoke(Object target, String name, Object[] arguments) {
         SpinningCube receiver = (SpinningCube) target;
         return switch (name) {
             case "_process" -> {
-                receiver._process((double) arguments[0]);
+                receiver.onProcess((double) arguments[0]);
                 yield null;
             }
             case "reset" -> {

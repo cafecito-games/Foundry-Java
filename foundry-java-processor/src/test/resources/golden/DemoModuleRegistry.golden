@@ -16,8 +16,10 @@ public final class DemoModuleRegistry {
                                     java.util.List.of(),
                                     new ExtensionAccess() {
                                         @Override
-                                        public Object construct() {
-                                            return demo.SpinningCube_FoundryTrampoline.construct();
+                                        public Object construct(
+                                                games.cafecito.foundry.runtime.FoundryBindingContext context,
+                                                games.cafecito.foundry.runtime.ObjectLease lease) {
+                                            return demo.SpinningCube_FoundryTrampoline.construct(context, lease);
                                         }
 
                                         @Override
@@ -42,7 +44,7 @@ public final class DemoModuleRegistry {
                                             new MemberDescriptor(
                                                     "override",
                                                     "_process",
-                                                    "_process",
+                                                    "onProcess",
                                                     "void(double)"),
                                             new MemberDescriptor(
                                                     "method", "reset", "reset", "void()"),
@@ -82,7 +84,9 @@ public final class DemoModuleRegistry {
             String kind, String foundryName, String javaName, String signature) {}
 
     public interface ExtensionAccess {
-        Object construct();
+        Object construct(
+                games.cafecito.foundry.runtime.FoundryBindingContext context,
+                games.cafecito.foundry.runtime.ObjectLease lease);
 
         Object invoke(Object target, String name, Object[] arguments);
 

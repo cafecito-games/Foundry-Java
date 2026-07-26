@@ -78,6 +78,12 @@ class FoundryAnnotationApiTest {
                 new java.lang.annotation.ElementType[] {
                     java.lang.annotation.ElementType.TYPE, java.lang.annotation.ElementType.METHOD
                 });
+        assertAnnotation(
+                FoundryVirtual.class,
+                RetentionPolicy.CLASS,
+                new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.METHOD});
+        assertEquals(String.class, method(FoundryVirtual.class, "value").getReturnType());
+        assertEquals(null, method(FoundryVirtual.class, "value").getDefaultValue());
     }
 
     private static void assertAnnotation(

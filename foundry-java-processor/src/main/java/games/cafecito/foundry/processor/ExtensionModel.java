@@ -10,6 +10,7 @@ record ExtensionModel(
         String exportedName,
         String baseType,
         String initializationLevel,
+        boolean bindingConstructor,
         List<String> initializationDependencies,
         List<MethodModel> methods,
         List<PropertyModel> properties,

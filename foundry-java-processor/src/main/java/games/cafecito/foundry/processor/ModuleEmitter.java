@@ -8,6 +8,8 @@ import java.util.List;
 import java.util.Locale;
 import javax.annotation.processing.Filer;
 import javax.lang.model.element.TypeElement;
+import javax.tools.FileObject;
+import javax.tools.JavaFileObject;
 import javax.tools.StandardLocation;
 
 final class ModuleEmitter {
@@ -19,41 +21,67 @@ final class ModuleEmitter {
         this.filer = filer;
     }
 
-    void emit(String moduleName, List<ExtensionModel> unsorted, List<TypeElement> sources)
+    ReservedRegistry reserve(String moduleName, TypeElement source) throws IOException {
+        String packageName = registryPackage(moduleName);
+        String className = registryClassName(moduleName);
+        String qualifiedName = packageName + "." + className;
+        return new ReservedRegistry(
+                moduleName,
+                packageName,
+                className,
+                qualifiedName,
+                filer.createSourceFile(qualifiedName, source));
+    }
+
+    void emit(ReservedRegistry reserved, List<ExtensionModel> unsorted, List<TypeElement> sources)
             throws IOException {
         List<ExtensionModel> models =
                 unsorted.stream()
                         .sorted(Comparator.comparing(ExtensionModel::qualifiedName))
                         .toList();
-        String packageName = registryPackage(moduleName);
-        String className = registryClassName(moduleName);
-        String qualifiedName = packageName + "." + className;
         TypeElement[] origins = sources.toArray(TypeElement[]::new);
-        try (Writer writer = filer.createSourceFile(qualifiedName, origins).openWriter()) {
-            writer.write(registrySource(moduleName, packageName, className, models));
+        FileObject descriptor =
+                filer.createResource(
+                        StandardLocation.CLASS_OUTPUT,
+                        "",
+                        "META-INF/foundry-java/modules/" + reserved.moduleName() + ".descriptor",
+                        origins);
+        FileObject keepRules =
+                filer.createResource(
+                        StandardLocation.CLASS_OUTPUT,
+                        "",
+                        "META-INF/proguard/foundry-java-" + reserved.moduleName() + ".pro",
+                        origins);
+        try (Writer writer = reserved.source().openWriter()) {
+            writer.write(
+                    registrySource(
+                            reserved.moduleName(),
+                            reserved.packageName(),
+                            reserved.className(),
+                            models));
         }
         writeResource(
-                "META-INF/foundry-java/modules/" + moduleName + ".descriptor",
-                descriptor(moduleName, qualifiedName, models),
-                origins);
+                descriptor, descriptor(reserved.moduleName(), reserved.qualifiedName(), models));
         writeResource(
-                "META-INF/proguard/foundry-java-" + moduleName + ".pro",
-                keepRules(moduleName, qualifiedName, models),
-                origins);
+                keepRules, keepRules(reserved.moduleName(), reserved.qualifiedName(), models));
     }
 
     static String registryQualifiedName(String moduleName) {
         return registryPackage(moduleName) + "." + registryClassName(moduleName);
     }
 
-    private void writeResource(String path, String contents, TypeElement[] origins)
-            throws IOException {
-        try (Writer writer =
-                filer.createResource(StandardLocation.CLASS_OUTPUT, "", path, origins)
-                        .openWriter()) {
+    private void writeResource(FileObject resource, String contents) throws IOException {
+        try (Writer writer = resource.openWriter()) {
             writer.write(contents);
         }
     }
+
+    record ReservedRegistry(
+            String moduleName,
+            String packageName,
+            String className,
+            String qualifiedName,
+            JavaFileObject source) {}
 
     private String registrySource(
             String moduleName, String packageName, String className, List<ExtensionModel> models) {
@@ -103,7 +131,9 @@ final class ModuleEmitter {
                             String kind, String foundryName, String javaName, String signature) {}
 
                     public interface ExtensionAccess {
-                        Object construct();
+                        Object construct(
+                                games.cafecito.foundry.runtime.FoundryBindingContext context,
+                                games.cafecito.foundry.runtime.ObjectLease lease);
 
                         Object invoke(Object target, String name, Object[] arguments);
 
@@ -137,8 +167,10 @@ final class ModuleEmitter {
                                                     java.util.List.of(%s),
                                                     new ExtensionAccess() {
                                                         @Override
-                                                        public Object construct() {
-                                                            return %s_FoundryTrampoline.construct();
+                                                        public Object construct(
+                                                                games.cafecito.foundry.runtime.FoundryBindingContext context,
+                                                                games.cafecito.foundry.runtime.ObjectLease lease) {
+                                                            return %s_FoundryTrampoline.%s;
                                                         }
 
                                                         @Override
@@ -168,6 +200,7 @@ final class ModuleEmitter {
                         model.initializationLevel(),
                         after,
                         model.qualifiedName(),
+                        model.bindingConstructor() ? "construct(context, lease)" : "construct()",
                         model.qualifiedName(),
                         model.qualifiedName(),
                         model.qualifiedName(),

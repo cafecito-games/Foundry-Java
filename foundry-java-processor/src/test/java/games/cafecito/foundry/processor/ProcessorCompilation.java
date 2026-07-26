@@ -66,6 +66,29 @@ final class ProcessorCompilation {
             Path output,
             Predicate<String> failOutput)
             throws IOException {
+        return compile(sources, moduleName, processors, output, failOutput, List.of());
+    }
+
+    static Result compileWithOptions(
+            Map<String, String> sources, String moduleName, List<String> extraOptions)
+            throws IOException {
+        return compile(
+                sources,
+                moduleName,
+                List.of(new FoundryExtensionProcessor()),
+                Files.createTempDirectory("foundry-processor-test-"),
+                name -> false,
+                extraOptions);
+    }
+
+    private static Result compile(
+            Map<String, String> sources,
+            String moduleName,
+            List<? extends Processor> processors,
+            Path output,
+            Predicate<String> failOutput,
+            List<String> extraOptions)
+            throws IOException {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         assertNotNull(compiler, "processor tests require a JDK");
         DiagnosticCollector<JavaFileObject> diagnostics = new DiagnosticCollector<>();
@@ -85,6 +108,7 @@ final class ProcessorCompilation {
                             "17",
                             "-classpath",
                             System.getProperty("java.class.path")));
+            options.addAll(extraOptions);
             if (moduleName != null) {
                 options.add("-Afoundry.module=" + moduleName);
             }

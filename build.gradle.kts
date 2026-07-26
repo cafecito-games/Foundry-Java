@@ -661,6 +661,8 @@ val requiredBoundaryDependencies =
         ":foundry-java-processor" to
             listOf(
                 "implementation=project(:foundry-java-annotations)",
+                "testImplementation=project(:foundry-java-generator)",
+                "testImplementation=project(:foundry-java-runtime)",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",

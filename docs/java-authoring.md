@@ -13,15 +13,20 @@ Java package segment is not a Java 17 keyword.
 
 ## Extension declarations
 
-An extension is a public, final, top-level class with a public zero-argument constructor. The
-constructor may declare unchecked exceptions, but not checked exceptions because generated
-construction cannot propagate them. Its direct Java superclass must match the generated engine
-class named by `@FoundryClass`; ordinary application classes are not valid extension bases:
+An extension is a public, final, top-level class. Its direct Java superclass must match the
+generated engine class named by `@FoundryClass`; ordinary application classes are not valid
+extension bases. Extensions over generated engine bindings provide a public constructor accepting
+the live `FoundryBindingContext` and its `ObjectLease`. The constructor may declare unchecked
+exceptions, but not checked exceptions because generated construction cannot propagate them:
 
 ```java
 @FoundryClass(base = Node3D.class)
 @FoundryInitialization(InitializationLevel.SCENE)
 public final class SpinningCube extends Node3D {
+    public SpinningCube(FoundryBindingContext context, ObjectLease lease) {
+        super(context, lease);
+    }
+
     @FoundryProperty(getter = "speed", setter = "speed")
     private double speed;
 
@@ -39,7 +44,7 @@ public final class SpinningCube extends Node3D {
     }
 
     @FoundryOverride
-    public void _process(double delta) {
+    public void onProcess(double delta) {
         rotateY(delta * speed);
     }
 
@@ -51,22 +56,28 @@ public final class SpinningCube extends Node3D {
 ```
 
 `@FoundryClass`, `@FoundryMethod`, `@FoundryProperty`, `@FoundrySignal`, and
-`@FoundryOverride` accept an optional exported `name`. Empty names use the Java declaration name.
-All exported names in one class share a namespace and must be unique.
+`@FoundryOverride` accept an optional exported `name`. Empty method, property, signal, and class
+names use the Java declaration name. An empty override name instead uses the original Foundry
+virtual identity preserved on the generated Java callback, such as `_process` for `onProcess`.
+When an override name is explicit, it must equal that generated identity. All exported names in one
+class share a namespace and must be unique.
 
 An exported method or virtual override must be a public instance method without Java type
 parameters or checked exceptions. Unchecked `RuntimeException` and `Error` declarations are
 allowed. `@FoundryOverride` must exactly match a generator-owned virtual method on the declared
-engine base, including its return and parameter types; an ordinary same-named Java method is not a
-virtual callback. A property annotation belongs on a field; its public getter returns exactly the
-field type and its optional public setter accepts exactly that type. A signal annotation belongs on
-a nested interface whose effective inherited method set contains exactly one abstract, `void`
-method.
+engine base by Java name and signature. The processor obtains the original Foundry name from the
+CLASS-retained generated metadata; an ordinary same-named Java method is not a virtual callback. A
+property annotation belongs on a field; its public getter returns exactly the field type and its
+optional public setter accepts exactly that type. A signal annotation belongs on a nested interface
+whose effective inherited method set contains exactly one abstract, `void` method. Generic inherited
+SAM methods are resolved as members of the concrete signal interface, so
+`Changed extends Parent<String>` exports `String`, not the parent's type variable.
 
-Supported callback types are Java primitives, `void` returns, `String`, enums, generated types below
-`games.cafecito.foundry.api` or `games.cafecito.foundry.types`, and other annotated extension
-classes. Unsupported, ambiguous, or incorrectly placed declarations stop javac with a diagnostic at
-the offending annotation, member, or parameter.
+Supported callback types are Java primitives, `void` returns, `String`, enums, generated value types
+below `games.cafecito.foundry.types`, generator-provenance engine/API types below
+`games.cafecito.foundry.generated`, and other annotated extension classes. Unsupported, ambiguous,
+or incorrectly placed declarations stop javac with a diagnostic at the offending annotation,
+member, or parameter.
 
 ## Initialization order
 
@@ -89,9 +100,12 @@ stable-sorted registry for the consumer module. It also emits an immutable modul
 `META-INF/foundry-java/modules/<module>.descriptor` and narrow, exact-class keep rules at
 `META-INF/proguard/foundry-java-<module>.pro`.
 
-Registration uses direct constructor, method, override, and accessor calls. Registration has no
-runtime reflection, classpath scanning, Android manifest discovery, `Class.forName` lookup, or
-reflective member enumeration. Generated entry points are the only dynamically retained classes.
+Registration uses direct constructor, method, override, and accessor calls. The registry passes the
+binding context and object lease through its generated access contract, and normal
+`FoundryBindingContext.bind` lifecycle checks reject stale contexts before an extension factory is
+invoked. Registration has no runtime reflection, classpath scanning, Android manifest discovery,
+`Class.forName` lookup, or reflective member enumeration. Generated entry points are the only
+dynamically retained classes.
 
 The annotations artifact is platform-neutral Java metadata. It has no Android, JNI, or native
 dependency. Extension code consumes only the public FoundryExtension-facing API; Foundry-Java never

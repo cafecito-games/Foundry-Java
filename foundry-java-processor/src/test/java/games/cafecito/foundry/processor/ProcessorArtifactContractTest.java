@@ -47,6 +47,7 @@ class ProcessorArtifactContractTest {
                         "games/cafecito/foundry/annotations/FoundryOverride.class",
                         "games/cafecito/foundry/annotations/FoundryProperty.class",
                         "games/cafecito/foundry/annotations/FoundrySignal.class",
+                        "games/cafecito/foundry/annotations/FoundryVirtual.class",
                         "games/cafecito/foundry/annotations/GeneratedByFoundry.class",
                         "games/cafecito/foundry/annotations/InitializationLevel.class",
                         "games/cafecito/foundry/annotations/PublicFoundryAbi.class"),

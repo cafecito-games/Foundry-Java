@@ -16,9 +16,10 @@ class FoundryExtensionProcessorValidationTest {
             """
             package demo;
             import games.cafecito.foundry.annotations.GeneratedByFoundry;
+            import games.cafecito.foundry.annotations.FoundryVirtual;
             @GeneratedByFoundry
             public class EngineNode {
-                @GeneratedByFoundry
+                @FoundryVirtual("_process")
                 public void _process(double delta) {}
             }
             """;
@@ -119,6 +120,87 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
+    void rejectsAnExplicitOverrideNameThatDiffersFromTheGeneratedVirtualIdentity()
+            throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "MismatchedOverrideName",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class MismatchedOverrideName extends EngineNode {
+                            @FoundryOverride(name = "_physics_process")
+                            public void _process(double delta) {}
+                        }
+                        """);
+
+        assertDiagnostic(
+                result,
+                "Foundry override name _physics_process does not match generated Foundry virtual identity _process",
+                "MismatchedOverrideName",
+                6);
+    }
+
+    @Test
+    void requiresLifecycleConstructionForCanonicalGeneratedBindings() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        Map.of(
+                                "games.cafecito.foundry.generated.mock.EngineNode",
+                                """
+                                package games.cafecito.foundry.generated.mock;
+                                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                                @GeneratedByFoundry
+                                public class EngineNode {}
+                                """,
+                                "demo.MissingBindingConstructor",
+                                """
+                                package demo;
+                                import games.cafecito.foundry.annotations.FoundryClass;
+                                @FoundryClass(base = games.cafecito.foundry.generated.mock.EngineNode.class)
+                                public final class MissingBindingConstructor
+                                        extends games.cafecito.foundry.generated.mock.EngineNode {}
+                                """));
+
+        assertDiagnostic(
+                result,
+                "extension class must provide a public constructor accepting FoundryBindingContext and ObjectLease",
+                "MissingBindingConstructor",
+                4);
+    }
+
+    @Test
+    void acceptsGeneratedBindingTypesInExportedMembersAndSignals() throws IOException {
+        Map<String, String> sources = baseSources();
+        sources.put(
+                "demo.GeneratedValue",
+                """
+                package demo;
+                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                @GeneratedByFoundry
+                public final class GeneratedValue {}
+                """);
+        sources.put(
+                "demo.GeneratedTypes",
+                """
+                package demo;
+                import games.cafecito.foundry.annotations.*;
+                @FoundryClass(base = EngineNode.class)
+                public final class GeneratedTypes extends EngineNode {
+                    @FoundryMethod
+                    public GeneratedValue transform(GeneratedValue value) { return value; }
+                    @FoundrySignal
+                    public interface Changed { void emitted(GeneratedValue value); }
+                }
+                """);
+
+        ProcessorCompilation.Result result = ProcessorCompilation.compile(sources);
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+    }
+
+    @Test
     void rejectsInvalidExtensionAndMemberShapes() throws IOException {
         ProcessorCompilation.Result result =
                 compile(
@@ -207,10 +289,11 @@ class FoundryExtensionProcessorValidationTest {
                         import games.cafecito.foundry.annotations.*;
                         @FoundryClass(base = EngineNode.class)
                         public final class InheritedSignal extends EngineNode {
-                            public interface SignalParent {
-                                void emitted(int value);
+                            public interface SignalParent<T> {
+                                void emitted(T value);
                             }
-                            @FoundrySignal public interface Changed extends SignalParent {}
+                            @FoundrySignal
+                            public interface Changed extends SignalParent<String> {}
                         }
                         """);
 
@@ -221,7 +304,8 @@ class FoundryExtensionProcessorValidationTest {
                                 .get("META-INF/foundry-java/modules/demo-module.descriptor"),
                         StandardCharsets.UTF_8);
         assertTrue(
-                descriptor.contains("signal=demo.InheritedSignal|Changed|Changed|void(int)"),
+                descriptor.contains(
+                        "signal=demo.InheritedSignal|Changed|Changed|void(java.lang.String)"),
                 descriptor);
     }
 
@@ -382,6 +466,15 @@ class FoundryExtensionProcessorValidationTest {
 
         assertDiagnostic(result, "property accessor readFirst is already used", "FirstName", 7);
         assertDiagnostic(result, "duplicate exported class name Duplicate", "SecondName", 4);
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(path -> path.endsWith("Registry.java")),
+                result.generatedSources().keySet().toString());
+        assertFalse(
+                result.classOutput()
+                        .containsKey("META-INF/foundry-java/modules/demo-module.descriptor"));
+        assertFalse(
+                result.classOutput().containsKey("META-INF/proguard/foundry-java-demo-module.pro"));
     }
 
     @Test

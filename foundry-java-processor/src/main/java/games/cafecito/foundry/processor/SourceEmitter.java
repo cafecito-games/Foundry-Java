@@ -44,10 +44,13 @@ final class SourceEmitter {
                 .append("() {}\n\n")
                 .append("    public static ")
                 .append(model.simpleName())
-                .append(" construct() {\n")
+                .append(
+                        model.bindingConstructor()
+                                ? bindingConstructSignature()
+                                : " construct() {\n")
                 .append("        return new ")
                 .append(model.simpleName())
-                .append("();\n")
+                .append(model.bindingConstructor() ? "(context, lease);\n" : "();\n")
                 .append("    }\n\n");
         appendInvoke(source, model);
         source.append('\n');
@@ -56,6 +59,12 @@ final class SourceEmitter {
         appendPropertySetter(source, model);
         source.append("}\n");
         return source.toString();
+    }
+
+    private String bindingConstructSignature() {
+        return " construct(\n"
+                + "            games.cafecito.foundry.runtime.FoundryBindingContext context,\n"
+                + "            games.cafecito.foundry.runtime.ObjectLease lease) {\n";
     }
 
     private void appendInvoke(StringBuilder source, ExtensionModel model) {

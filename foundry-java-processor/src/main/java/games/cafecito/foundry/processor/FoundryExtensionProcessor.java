@@ -20,6 +20,8 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
     private final Set<String> reportedModuleNameConflicts = new LinkedHashSet<>();
     private ExtensionValidator validator;
     private SourceEmitter sourceEmitter;
+    private ModuleEmitter moduleEmitter;
+    private ModuleEmitter.ReservedRegistry reservedRegistry;
     private int moduleErrorCount;
 
     @Override
@@ -49,6 +51,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
         if (validator == null) {
             validator = new ExtensionValidator(processingEnv);
             sourceEmitter = new SourceEmitter(processingEnv.getFiler());
+            moduleEmitter = new ModuleEmitter(processingEnv.getFiler());
         }
         TypeElement foundryClass =
                 processingEnv.getElementUtils().getTypeElement(ExtensionValidator.CLASS);
@@ -70,6 +73,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                                             try {
                                                 sourceEmitter.emitTrampoline(model, type);
                                                 emittedTrampolines.add(model.qualifiedName());
+                                                reserveModuleRegistry(type);
                                             } catch (IOException exception) {
                                                 moduleErrorCount++;
                                                 processingEnv
@@ -155,12 +159,20 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                             "processor option -Afoundry.module cannot produce a Java keyword package");
             return;
         }
+        if (reservedRegistry == null) {
+            moduleErrorCount++;
+            processingEnv
+                    .getMessager()
+                    .printMessage(
+                            javax.tools.Diagnostic.Kind.ERROR,
+                            "cannot generate module registry: registry output was not reserved");
+            return;
+        }
         try {
-            new ModuleEmitter(processingEnv.getFiler())
-                    .emit(
-                            moduleName,
-                            List.copyOf(models.values()),
-                            List.copyOf(sourceElements.values()));
+            moduleEmitter.emit(
+                    reservedRegistry,
+                    List.copyOf(models.values()),
+                    List.copyOf(sourceElements.values()));
         } catch (IOException exception) {
             moduleErrorCount++;
             processingEnv
@@ -168,6 +180,29 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                     .printMessage(
                             javax.tools.Diagnostic.Kind.ERROR,
                             "cannot generate module registry: " + exception.getMessage());
+        }
+    }
+
+    private void reserveModuleRegistry(TypeElement source) {
+        if (reservedRegistry != null) {
+            return;
+        }
+        String moduleName = processingEnv.getOptions().get("foundry.module");
+        if (moduleName == null
+                || !moduleName.matches("[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
+                || SourceVersion.isKeyword(moduleName.replace("-", ""), SourceVersion.RELEASE_17)) {
+            return;
+        }
+        try {
+            reservedRegistry = moduleEmitter.reserve(moduleName, source);
+        } catch (IOException exception) {
+            moduleErrorCount++;
+            processingEnv
+                    .getMessager()
+                    .printMessage(
+                            javax.tools.Diagnostic.Kind.ERROR,
+                            "cannot reserve module registry: " + exception.getMessage(),
+                            source);
         }
     }
 }

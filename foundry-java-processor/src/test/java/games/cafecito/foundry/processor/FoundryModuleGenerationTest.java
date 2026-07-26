@@ -25,7 +25,8 @@ class FoundryModuleGenerationTest {
                                 "games/cafecito/foundry/generated/demomodule/"
                                         + "DemoModuleRegistry.java");
         assertEquals(FoundryTrampolineGenerationTest.golden("DemoModuleRegistry.golden"), registry);
-        assertTrue(registry.contains("demo.SpinningCube_FoundryTrampoline.construct()"));
+        assertTrue(
+                registry.contains("demo.SpinningCube_FoundryTrampoline.construct(context, lease)"));
         assertTrue(registry.contains("demo.SpinningCube_FoundryTrampoline.invoke("));
         assertResource(
                 result,
