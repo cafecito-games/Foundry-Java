@@ -163,6 +163,9 @@ public record ApiInputs(
         if (value.isBlank()) {
             throw new ApiInputException(path + " must not be blank.");
         }
+        if (value.codePoints().anyMatch(Character::isISOControl)) {
+            throw new ApiInputException(path + " must not contain control characters.");
+        }
         return value;
     }
 

@@ -113,6 +113,20 @@ public final class CompatibilityManifest {
         return create(api, apiSha256, generatorVersion, bridgeContractVersion, classifications);
     }
 
+    public static CompatibilityManifest parse(FoundryApi api, ApiInputs inputs) {
+        CompatibilityManifest manifest = parse(api, inputs.compatibilityManifestJson());
+        requireVerifiedMetadata("api_sha256", manifest.apiSha256(), inputs.extensionApiSha256());
+        requireVerifiedMetadata(
+                "generator_version",
+                manifest.generatorVersion(),
+                inputs.provenance().generatorVersion());
+        requireVerifiedMetadata(
+                "bridge_contract_version",
+                manifest.bridgeContractVersion(),
+                inputs.provenance().bridgeContractVersion());
+        return manifest;
+    }
+
     public String apiSha256() {
         return apiSha256;
     }
@@ -180,6 +194,20 @@ public final class CompatibilityManifest {
         }
     }
 
+    private static void requireVerifiedMetadata(
+            String field, String manifestValue, String verifiedValue) {
+        if (!manifestValue.equals(verifiedValue)) {
+            throw new ApiInputException(
+                    "$."
+                            + field
+                            + " does not match verified provenance: expected "
+                            + verifiedValue
+                            + ", got "
+                            + manifestValue
+                            + ".");
+        }
+    }
+
     private static void requireClassification(String identity, Classification classification) {
         if (classification == null || classification.status() == null) {
             throw new ApiInputException(identity + " must have an approved compatibility status.");
@@ -217,6 +245,9 @@ public final class CompatibilityManifest {
         String value = object.require(key, parentPath).requireString(path);
         if (value.isBlank()) {
             throw new ApiInputException(path + " must not be blank.");
+        }
+        if (value.codePoints().anyMatch(Character::isISOControl)) {
+            throw new ApiInputException(path + " must not contain control characters.");
         }
         return value;
     }

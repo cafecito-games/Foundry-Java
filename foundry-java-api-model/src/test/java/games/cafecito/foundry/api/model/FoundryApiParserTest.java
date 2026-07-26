@@ -25,7 +25,19 @@ class FoundryApiParserTest {
         assertEquals(1051, api.categories().get("classes").size());
         assertEquals(38, api.categories().get("builtin_classes").size());
         assertEquals(39, api.categories().get("singletons").size());
-        assertTrue(api.entities().size() > 10_000);
+        assertEquals(57_904, api.entities().size());
+        assertEquals(
+                Map.of(
+                        "builtin_class_member_offsets", 252,
+                        "builtin_class_sizes", 164,
+                        "builtin_classes", 3_333,
+                        "classes", 53_240,
+                        "global_constants", 11,
+                        "global_enums", 542,
+                        "native_structures", 14,
+                        "singletons", 39,
+                        "utility_functions", 309),
+                api.categoryCounts());
         assertEquals(api.categoryCounts(), reparsed.categoryCounts());
         assertEquals(api.canonicalJson(), reparsed.canonicalJson());
     }
@@ -90,6 +102,19 @@ class FoundryApiParserTest {
         assertTrue(api.entity("classes/Node/signals/renamed").isPresent());
         assertTrue(api.entity("builtin_classes/Array/operators/==#Array").isPresent());
         assertTrue(api.entity("utility_functions/type_convert#128/arguments/packed").isPresent());
+        FoundryApi.Entity valueArgument =
+                api.entity("utility_functions/type_convert#128/arguments/value").orElseThrow();
+        FoundryApi.Entity packedArgument =
+                api.entity("utility_functions/type_convert#128/arguments/packed").orElseThrow();
+        assertEquals("arguments", valueArgument.edge());
+        assertEquals(0, valueArgument.ordinal());
+        assertEquals("arguments", packedArgument.edge());
+        assertEquals(1, packedArgument.ordinal());
+        assertEquals(
+                List.of(valueArgument.identity(), packedArgument.identity()),
+                api.entity("utility_functions/type_convert#128").orElseThrow().children().stream()
+                        .map(FoundryApi.Entity::identity)
+                        .toList());
         assertThrows(UnsupportedOperationException.class, () -> api.entities().clear());
         assertThrows(
                 UnsupportedOperationException.class,
@@ -172,6 +197,50 @@ class FoundryApiParserTest {
                                                         "\"api_type\": \"core\"",
                                                         "\"api_type\": \"mobile\"")));
         assertTrue(unknownApiType.getMessage().contains("$.classes[0].api_type"));
+        assertTrue(unknownApiType.getMessage().contains("classes/Object"));
+    }
+
+    @Test
+    void validatesIntegerFieldsWithoutNarrowingUnsignedHashes() throws IOException {
+        for (String invalidHash : List.of("42.5", "4e2", "-1", "18446744073709551616")) {
+            String invalid = fixture().replace("\"hash\": 42", "\"hash\": " + invalidHash);
+            ApiInputException failure =
+                    assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(invalid));
+            assertTrue(failure.getMessage().contains("$.builtin_classes[0].methods[0].hash"));
+            assertTrue(failure.getMessage().contains("builtin_classes/Array/methods/assign"));
+        }
+
+        String maximumUnsigned =
+                fixture().replace("\"hash\": 42", "\"hash\": 18446744073709551615");
+        FoundryApi parsed = FoundryApiParser.parse(maximumUnsigned);
+        assertTrue(
+                parsed.entity("builtin_classes/Array/methods/" + "assign#18446744073709551615")
+                        .isPresent());
+
+        for (String mutation : List.of("\"index\": 0", "\"size\": 8", "\"offset\": 0")) {
+            String invalid =
+                    fixture().replace(mutation, mutation.replace("0", "-1").replace("8", "-8"));
+            assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(invalid));
+        }
+        String fractionalEnum = fixture().replace("\"value\": 13", "\"value\": 1.3");
+        assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(fractionalEnum));
+    }
+
+    @Test
+    void rejectsBlankIdentitySegmentsAndEscapedControlCharacters() throws IOException {
+        String blankOperator =
+                fixture().replace("\"right_type\": \"Array\"", "\"right_type\": \" \"");
+        ApiInputException operatorFailure =
+                assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(blankOperator));
+        assertTrue(operatorFailure.getMessage().contains(".right_type"));
+        assertTrue(operatorFailure.getMessage().contains("builtin_classes/Array/operators"));
+
+        String injectedName =
+                fixture().replace("\"name\": \"Node\"", "\"name\": \"Node\\nInjected\"");
+        ApiInputException injectionFailure =
+                assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(injectedName));
+        assertTrue(injectionFailure.getMessage().contains("$.classes[1].name"));
+        assertTrue(injectionFailure.getMessage().contains("control"));
     }
 
     private static String fixture() throws IOException {

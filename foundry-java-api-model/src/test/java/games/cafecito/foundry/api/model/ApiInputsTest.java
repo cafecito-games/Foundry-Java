@@ -90,6 +90,25 @@ class ApiInputsTest {
     }
 
     @Test
+    void rejectsProvenanceControlCharactersBeforeGeneration() throws IOException {
+        Path apiDirectory = writeAcceptedInputs();
+        Path provenance = apiDirectory.resolve("provenance.json");
+        Files.writeString(
+                provenance,
+                Files.readString(provenance)
+                        .replace(
+                                "\"foundry_version\": \"0.1.0-alpha.8\"",
+                                "\"foundry_version\": \"0.1.0-alpha.8\\nInjected\""),
+                StandardCharsets.UTF_8);
+
+        ApiInputException failure =
+                assertThrows(ApiInputException.class, () -> ApiInputs.load(apiDirectory));
+
+        assertTrue(failure.getMessage().contains("$.foundry_version"));
+        assertTrue(failure.getMessage().contains("control"));
+    }
+
+    @Test
     void rejectsAHashMismatchBeforeReturningApiText() throws IOException {
         Path apiDirectory = writeAcceptedInputs();
         Files.writeString(

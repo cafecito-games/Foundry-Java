@@ -1,4 +1,4 @@
 dependencies {
-    implementation(project(":foundry-java-api-model"))
+    api(project(":foundry-java-api-model"))
     implementation(project(":foundry-java-annotations"))
 }

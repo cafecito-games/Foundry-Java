@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -125,6 +126,44 @@ class CompatibilityManifestTest {
                         ApiInputException.class,
                         () -> CompatibilityManifest.parse(api, unknownStatus));
         assertTrue(statusFailure.getMessage().contains("unknown compatibility status"));
+    }
+
+    @Test
+    void checkedManifestMetadataMustMatchVerifiedApiInputs() {
+        Path acceptedDirectory =
+                Path.of(System.getProperty("user.dir")).resolve("../api/current").normalize();
+        ApiInputs inputs = ApiInputs.load(acceptedDirectory);
+        FoundryApi api = FoundryApiParser.parse(inputs);
+
+        CompatibilityManifest accepted = CompatibilityManifest.parse(api, inputs);
+        assertEquals(inputs.extensionApiSha256(), accepted.apiSha256());
+        assertEquals(inputs.provenance().generatorVersion(), accepted.generatorVersion());
+        assertEquals(inputs.provenance().bridgeContractVersion(), accepted.bridgeContractVersion());
+
+        for (String mutation :
+                List.of(
+                        "\"api_sha256\":\"" + API_HASH + "\"",
+                        "\"generator_version\":\"1\"",
+                        "\"bridge_contract_version\":\"1\"")) {
+            String replacement =
+                    mutation.startsWith("\"api_sha256\"")
+                            ? "\"api_sha256\":\"" + "0".repeat(64) + "\""
+                            : mutation.replace(":\"1\"", ":\"2\"");
+            ApiInputs mismatched =
+                    new ApiInputs(
+                            inputs.provenance(),
+                            inputs.extensionApiJson(),
+                            inputs.interfaceHeader(),
+                            inputs.compatibilityManifestJson().replace(mutation, replacement));
+
+            ApiInputException failure =
+                    assertThrows(
+                            ApiInputException.class,
+                            () -> CompatibilityManifest.parse(api, mismatched));
+            assertTrue(
+                    failure.getMessage().contains(mutation.substring(1, mutation.indexOf('"', 1))));
+            assertTrue(failure.getMessage().contains("verified provenance"));
+        }
     }
 
     private static Map<String, CompatibilityManifest.Classification>

@@ -21,14 +21,18 @@ public final class GeneratedTree {
     private final Map<String, String> sources;
     private final Set<String> coveredIdentities;
     private final CompatibilityManifest manifest;
+    private final Map<String, String> descriptorCatalog;
 
     GeneratedTree(
             Map<String, String> sources,
             Set<String> coveredIdentities,
-            CompatibilityManifest manifest) {
+            CompatibilityManifest manifest,
+            Map<String, String> descriptorCatalog) {
         this.sources = Collections.unmodifiableMap(new LinkedHashMap<>(new TreeMap<>(sources)));
         this.coveredIdentities = Collections.unmodifiableSet(new TreeSet<>(coveredIdentities));
         this.manifest = manifest;
+        this.descriptorCatalog =
+                Collections.unmodifiableMap(new LinkedHashMap<>(new TreeMap<>(descriptorCatalog)));
     }
 
     public Map<String, String> sources() {
@@ -41,6 +45,10 @@ public final class GeneratedTree {
 
     public CompatibilityManifest manifest() {
         return manifest;
+    }
+
+    public Map<String, String> descriptorCatalog() {
+        return descriptorCatalog;
     }
 
     public Map<String, String> sha256ByPath() {
@@ -56,22 +64,23 @@ public final class GeneratedTree {
             throw new ApiInputException("Generated output must be a directory: " + root + ".");
         }
         try {
-            Files.createDirectories(root);
-            try (var existing = Files.list(root)) {
+            Path normalizedRoot = root.toAbsolutePath().normalize();
+            Files.createDirectories(normalizedRoot);
+            try (var existing = Files.list(normalizedRoot)) {
                 if (existing.findAny().isPresent()) {
                     throw new ApiInputException(
-                            "Generated output directory must be empty: " + root + ".");
+                            "Generated output directory must be empty: " + normalizedRoot + ".");
                 }
             }
             for (var source : sources.entrySet()) {
                 Path relative = Path.of(source.getKey());
-                if (relative.isAbsolute() || relative.startsWith("..")) {
+                Path destination = normalizedRoot.resolve(relative).normalize();
+                if (relative.isAbsolute() || !destination.startsWith(normalizedRoot)) {
                     throw new ApiInputException(
                             "Generated source path escapes the output root: "
                                     + source.getKey()
                                     + ".");
                 }
-                Path destination = root.resolve(relative);
                 Files.createDirectories(destination.getParent());
                 Files.writeString(destination, source.getValue(), StandardCharsets.UTF_8);
             }

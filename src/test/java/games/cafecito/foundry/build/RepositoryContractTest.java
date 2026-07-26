@@ -93,6 +93,23 @@ class RepositoryContractTest {
     }
 
     @Test
+    void generatorPublishesApiModelAndARealGeneratorOnlyConsumerCompiles() throws IOException {
+        String generatorBuild = read("foundry-java-generator/build.gradle.kts");
+        String rootBuild = read("build.gradle.kts");
+
+        assertTrue(generatorBuild.contains("api(project(\":foundry-java-api-model\"))"));
+        assertFalse(
+                generatorBuild.contains("implementation(project(\":foundry-java-api-model\"))"));
+        assertTrue(rootBuild.contains("generatorOnlyConsumer"));
+        assertTrue(rootBuild.contains("compileGeneratorOnlyConsumer"));
+        assertTrue(
+                Files.isRegularFile(
+                        ROOT.resolve(
+                                "src/generatorOnlyConsumer/java/"
+                                        + "games/cafecito/foundry/build/GeneratorOnlyConsumer.java")));
+    }
+
+    @Test
     void androidSourceScanOnlyMatchesPackageAndImportDeclarations() {
         assertFalse(
                 containsAndroidDeclaration(
@@ -190,10 +207,8 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("ktlint(\"1.3.1\")"));
         assertTrue(rootBuild.contains("lineEndings = LineEnding.UNIX"));
         assertTrue(rootBuild.contains("https://github.com/diffplug/spotless/issues/2431"));
-        assertTrue(
-                rootBuild.contains(
-                        "tasks.named(\"check\") {"
-                                + " dependsOn(\"spotlessCheck\", \"verifyRepositoryContract\") }"));
+        assertTrue(rootBuild.contains("tasks.named(\"check\") {"));
+        assertTrue(rootBuild.contains("\"spotlessCheck\", \"verifyRepositoryContract\""));
         assertFalse(rootBuild.contains("notCompatibleWithConfigurationCache"));
     }
 

@@ -99,6 +99,8 @@ public final class FoundryApi {
             String category,
             String identity,
             String sourcePath,
+            String edge,
+            int ordinal,
             JsonValue.JsonObject source,
             List<Entity> children) {
         public Entity {
@@ -111,6 +113,11 @@ public final class FoundryApi {
                 count += child.descendantCount();
             }
             return count;
+        }
+
+        Entity withPosition(String newEdge, int newOrdinal) {
+            return new Entity(
+                    category, identity, sourcePath, newEdge, newOrdinal, source, children);
         }
     }
 }

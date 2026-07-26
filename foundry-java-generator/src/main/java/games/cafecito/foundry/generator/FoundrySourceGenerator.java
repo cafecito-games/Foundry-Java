@@ -17,7 +17,6 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -29,7 +28,6 @@ import java.util.stream.Collectors;
 public final class FoundrySourceGenerator {
     private static final String PACKAGE = "games.cafecito.foundry.generated";
     private static final String PACKAGE_PATH = "games/cafecito/foundry/generated/";
-    private static final String SUPPORTED_REASON = "WS5_MODEL_AND_GENERATOR_REPRESENTABLE";
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern COMMIT = Pattern.compile("[0-9a-f]{40}");
 
@@ -37,8 +35,16 @@ public final class FoundrySourceGenerator {
         return FoundryExtension.class.getName();
     }
 
-    public GeneratedTree generate(FoundryApi api, Metadata metadata) {
+    public GeneratedTree generate(
+            FoundryApi api, Metadata metadata, CompatibilityManifest manifest) {
         metadata.validate();
+        requireManifestMetadata("api_sha256", manifest.apiSha256(), metadata.apiSha256());
+        requireManifestMetadata(
+                "generator_version", manifest.generatorVersion(), metadata.generatorVersion());
+        requireManifestMetadata(
+                "bridge_contract_version",
+                manifest.bridgeContractVersion(),
+                metadata.bridgeContractVersion());
         List<Descriptor> descriptors = descriptors(api);
         Map<String, FoundryApi.Entity> covered = new TreeMap<>();
         for (Descriptor descriptor : descriptors) {
@@ -70,22 +76,14 @@ public final class FoundrySourceGenerator {
                             + ".");
         }
 
-        Map<String, CompatibilityManifest.Classification> classifications = new LinkedHashMap<>();
-        covered.keySet()
-                .forEach(
-                        identity ->
-                                classifications.put(
-                                        identity,
-                                        new CompatibilityManifest.Classification(
-                                                CompatibilityManifest.Status.SUPPORTED,
-                                                SUPPORTED_REASON)));
-        CompatibilityManifest manifest =
-                CompatibilityManifest.create(
-                        api,
-                        metadata.apiSha256(),
-                        metadata.generatorVersion(),
-                        metadata.bridgeContractVersion(),
-                        classifications);
+        Set<String> manifestIdentities =
+                manifest.entries().stream()
+                        .map(CompatibilityManifest.Entry::sourceIdentity)
+                        .collect(Collectors.toSet());
+        if (!manifestIdentities.equals(covered.keySet())) {
+            throw new ApiInputException(
+                    "Checked compatibility classifications differ from generated coverage.");
+        }
         String manifestSha256 = sha256(manifest.canonicalJson());
 
         Map<String, String> sources = new TreeMap<>();
@@ -94,14 +92,18 @@ public final class FoundrySourceGenerator {
                 provenanceSource(metadata, manifestSha256));
         sources.put(
                 PACKAGE_PATH + "GeneratedRegistration.java",
-                registrationSource(metadata, manifestSha256, descriptors.size(), covered.size()));
+                registrationSource(metadata, manifestSha256, descriptors, covered.size()));
         for (Descriptor descriptor : descriptors) {
             String path = PACKAGE_PATH + descriptor.className() + ".java";
             if (sources.put(path, descriptorSource(metadata, manifestSha256, descriptor)) != null) {
                 throw new ApiInputException("Generated source path collision: " + path + ".");
             }
         }
-        return new GeneratedTree(sources, covered.keySet(), manifest);
+        Map<String, String> descriptorCatalog = new TreeMap<>();
+        descriptors.forEach(
+                descriptor ->
+                        descriptorCatalog.put(descriptor.rootIdentity(), descriptor.className()));
+        return new GeneratedTree(sources, covered.keySet(), manifest, descriptorCatalog);
     }
 
     public static void main(String[] arguments) {
@@ -121,7 +123,8 @@ public final class FoundrySourceGenerator {
                         inputs.provenance().foundryVersion(),
                         inputs.provenance().generatorVersion(),
                         inputs.provenance().bridgeContractVersion());
-        GeneratedTree generated = new FoundrySourceGenerator().generate(api, metadata);
+        CompatibilityManifest manifest = CompatibilityManifest.parse(api, inputs);
+        GeneratedTree generated = new FoundrySourceGenerator().generate(api, metadata, manifest);
         generated.writeTo(Path.of(arguments[1]));
         Path manifestPath = Path.of(arguments[2]);
         try {
@@ -139,7 +142,6 @@ public final class FoundrySourceGenerator {
             for (FoundryApi.Entity root : category.getValue()) {
                 List<FoundryApi.Entity> entities = new ArrayList<>();
                 flatten(root, entities);
-                entities.sort(Comparator.comparing(FoundryApi.Entity::identity));
                 descriptors.add(
                         new Descriptor(
                                 descriptorClassName(root),
@@ -148,7 +150,7 @@ public final class FoundrySourceGenerator {
                                 List.copyOf(entities)));
             }
         }
-        descriptors.sort(Comparator.comparing(Descriptor::className));
+        descriptors.sort(Comparator.comparing(Descriptor::rootIdentity));
         return List.copyOf(descriptors);
     }
 
@@ -183,39 +185,44 @@ public final class FoundrySourceGenerator {
     }
 
     private static String provenanceSource(Metadata metadata, String manifestSha256) {
-        return """
-                package %s;
+        return generatedHeader(metadata, manifestSha256)
+                + """
+                        package %s;
 
-                public final class GeneratedApiProvenance {
-                    public static final String FOUNDRY_COMMIT = "%s";
-                    public static final String FOUNDRY_VERSION = "%s";
-                    public static final String API_SHA256 =
-                            "%s";
-                    public static final String INTERFACE_HEADER_SHA256 =
-                            "%s";
-                    public static final String COMPATIBILITY_MANIFEST_SHA256 =
-                            "%s";
-                    public static final String GENERATOR_VERSION = "%s";
-                    public static final String BRIDGE_CONTRACT_VERSION = "%s";
+                        public final class GeneratedApiProvenance {
+                            public static final String FOUNDRY_COMMIT = "%s";
+                            public static final String FOUNDRY_VERSION = "%s";
+                            public static final String API_SHA256 =
+                                    "%s";
+                            public static final String INTERFACE_HEADER_SHA256 =
+                                    "%s";
+                            public static final String COMPATIBILITY_MANIFEST_SHA256 =
+                                    "%s";
+                            public static final String GENERATOR_VERSION = "%s";
+                            public static final String BRIDGE_CONTRACT_VERSION = "%s";
 
-                    private GeneratedApiProvenance() {}
-                }
-                """
-                .formatted(
-                        PACKAGE,
-                        metadata.foundryCommit(),
-                        javaStringBody(metadata.foundryVersion()),
-                        metadata.apiSha256(),
-                        metadata.interfaceHeaderSha256(),
-                        manifestSha256,
-                        javaStringBody(metadata.generatorVersion()),
-                        javaStringBody(metadata.bridgeContractVersion()));
+                            private GeneratedApiProvenance() {}
+                        }
+                        """
+                        .formatted(
+                                PACKAGE,
+                                metadata.foundryCommit(),
+                                javaStringBody(metadata.foundryVersion()),
+                                metadata.apiSha256(),
+                                metadata.interfaceHeaderSha256(),
+                                manifestSha256,
+                                javaStringBody(metadata.generatorVersion()),
+                                javaStringBody(metadata.bridgeContractVersion()));
     }
 
     private static String registrationSource(
-            Metadata metadata, String manifestSha256, int descriptorCount, int entityCount) {
-        return generatedHeader(metadata, manifestSha256)
-                + """
+            Metadata metadata,
+            String manifestSha256,
+            List<Descriptor> descriptors,
+            int entityCount) {
+        StringBuilder source = new StringBuilder(generatedHeader(metadata, manifestSha256));
+        source.append(
+                """
                         package %s;
 
                         /** Deterministic registration inventory consumed by later runtime work. */
@@ -223,10 +230,54 @@ public final class FoundrySourceGenerator {
                             public static final int DESCRIPTOR_COUNT = %d;
                             public static final int ENTITY_COUNT = %d;
 
+                            public record Descriptor(String rootIdentity, Class<?> descriptorClass) {}
+
+                            private static final java.util.List<Descriptor> DESCRIPTORS = createDescriptors();
+
+                            public static java.util.List<Descriptor> descriptors() {
+                                return DESCRIPTORS;
+                            }
+
+                            private static java.util.List<Descriptor> createDescriptors() {
+                                var descriptors = new java.util.ArrayList<Descriptor>(DESCRIPTOR_COUNT);
+                        """
+                        .formatted(PACKAGE, descriptors.size(), entityCount));
+        int chunkCount = (descriptors.size() + 99) / 100;
+        for (int chunk = 0; chunk < chunkCount; chunk++) {
+            source.append("        descriptors.addAll(descriptorChunk")
+                    .append(chunk)
+                    .append("());\n");
+        }
+        source.append(
+                """
+                                return java.util.List.copyOf(descriptors);
+                            }
+
+                        """);
+        for (int chunk = 0; chunk < chunkCount; chunk++) {
+            int start = chunk * 100;
+            int end = Math.min(start + 100, descriptors.size());
+            source.append("    private static java.util.List<Descriptor> descriptorChunk")
+                    .append(chunk)
+                    .append("() {\n")
+                    .append("        return java.util.List.of(\n");
+            for (int index = start; index < end; index++) {
+                Descriptor descriptor = descriptors.get(index);
+                source.append("                new Descriptor(\"")
+                        .append(javaStringBody(descriptor.rootIdentity()))
+                        .append("\", ")
+                        .append(descriptor.className())
+                        .append(".class)")
+                        .append(index + 1 == end ? "\n" : ",\n");
+            }
+            source.append("        );\n    }\n\n");
+        }
+        source.append(
+                """
                             private GeneratedRegistration() {}
                         }
-                        """
-                        .formatted(PACKAGE, descriptorCount, entityCount);
+                        """);
+        return source.toString();
     }
 
     private static String descriptorSource(
@@ -237,6 +288,12 @@ public final class FoundrySourceGenerator {
         for (FoundryApi.Entity entity : descriptor.entities()) {
             source.append("// entity ")
                     .append(entity.identity())
+                    .append(" edge-base64 ")
+                    .append(
+                            Base64.getEncoder()
+                                    .encodeToString(entity.edge().getBytes(StandardCharsets.UTF_8)))
+                    .append(" ordinal ")
+                    .append(entity.ordinal())
                     .append(" source-base64 ")
                     .append(
                             Base64.getEncoder()
@@ -333,10 +390,23 @@ public final class FoundrySourceGenerator {
                         "Foundry commit must be 40 lowercase hexadecimal digits.");
             }
             for (String value : List.of(foundryVersion, generatorVersion, bridgeContractVersion)) {
-                if (value == null || value.isBlank()) {
-                    throw new ApiInputException("Generation metadata values must not be blank.");
+                if (value == null
+                        || value.isBlank()
+                        || value.codePoints().anyMatch(Character::isISOControl)) {
+                    throw new ApiInputException(
+                            "Generation metadata values must not be blank or contain controls.");
                 }
             }
+        }
+    }
+
+    private static void requireManifestMetadata(
+            String field, String manifestValue, String metadataValue) {
+        if (!manifestValue.equals(metadataValue)) {
+            throw new ApiInputException(
+                    "Compatibility manifest "
+                            + field
+                            + " does not match verified generation metadata.");
         }
     }
 

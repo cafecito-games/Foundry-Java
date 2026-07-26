@@ -23,7 +23,9 @@ parser then rejects duplicate JSON keys, unknown top-level or nested constructs,
 enumerations, missing or malformed stable identities, and duplicate source identities. A schema
 error includes both the JSON path and the nearest stable entity identity. Models and their
 collections are immutable, object keys are canonicalized, named entity collections are ordered by
-source identity, and argument order remains semantic.
+source identity, and argument order remains semantic. Every entity records its parent edge and
+normalized ordinal so semantic order is explicit and reconstructable. Integer-valued schema fields
+use field-specific ranges, including the full unsigned 64-bit hash range, without narrowing.
 
 ## Exhaustive classification
 
@@ -45,6 +47,9 @@ The compatibility manifest accounts for every parsed source entity exactly once:
 The approved statuses are `supported`, `excluded-language`, `excluded-platform`, and
 `excluded-upstream`. Every entry requires a stable reason code and source identity; missing,
 duplicate, extra, blank-reason, or unknown-status entries fail generation.
+The production generator consumes this verified manifest and requires its API hash, generator
+version, bridge-contract version, identity set, and classifications to match the accepted inputs;
+it never synthesizes replacement classifications.
 
 For this workstream, all 57,904 entries are `supported` with reason
 `WS5_MODEL_AND_GENERATOR_REPRESENTABLE`. Here, `supported` means the WS5 model can represent the
@@ -56,13 +61,18 @@ runtime-callable wrappers or JNI bridge scheduled for later workstreams are alre
 Generation groups every parsed identity under exactly one per-root Java descriptor and emits
 1,298 descriptors plus provenance and registration catalogs. Coverage is accepted only when the
 parsed identity set, generated identity set, and manifest identity set are exactly equal. Generated
-files include the producer commit/version and input/manifest hashes; they contain no timestamp or
-absolute path.
+files include the same standard producer commit/version and input/manifest hash header; they
+contain no timestamp or absolute path. The public registration catalog maps each root identity to
+its generated descriptor class in deterministic root order.
 
 Tests generate into two independent clean directories and byte-compare every relative path and
 file hash. They repeat from canonical reordered input, regenerate the complete accepted API, verify
 the checked-in manifest byte-for-byte, and compile all 1,300 generated Java sources with the
 supported JDK 17 compiler.
+
+`foundry-java-generator` publishes `foundry-java-api-model` as an API dependency. The repository
+compiles a consumer that depends only on the generator to prove its public model types remain
+available transitively in both Gradle and Maven publication metadata.
 
 This pipeline consumes only the public `FoundryExtension` API description and C interface header.
 It neither reads private Android host JNI nor packages or links `libfoundry_android.so`.

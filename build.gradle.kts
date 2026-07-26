@@ -25,6 +25,7 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
+import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugin.devel.GradlePluginDevelopmentExtension
@@ -474,6 +475,22 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
+val generatorOnlyConsumer by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
+dependencies {
+    add(generatorOnlyConsumer.name, project(":foundry-java-generator"))
+}
+
+val compileGeneratorOnlyConsumer by tasks.registering(JavaCompile::class) {
+    source = fileTree("src/generatorOnlyConsumer/java") { include("**/*.java") }
+    classpath = generatorOnlyConsumer
+    destinationDirectory = layout.buildDirectory.dir("classes/generatorOnlyConsumer")
+    options.release = 17
+}
+
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
@@ -599,7 +616,7 @@ val requiredBoundaryDependencies =
             ),
         ":foundry-java-generator" to
             listOf(
-                "implementation=project(:foundry-java-api-model)",
+                "api=project(:foundry-java-api-model)",
                 "implementation=project(:foundry-java-annotations)",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
@@ -725,8 +742,8 @@ val requiredPomDependencies =
             "compile|$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
         generatorPublicationDirectory to
             listOf(
+                "compile|$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
                 "runtime|$requiredGroupCoordinate|foundry-java-annotations|$requiredPublicationVersion",
-                "runtime|$requiredGroupCoordinate|foundry-java-api-model|$requiredPublicationVersion",
             ).sorted()
                 .joinToString(";"),
         gradlePluginPublicationDirectory to "",
@@ -920,7 +937,9 @@ tasks.register("verifyRepositoryContract") {
     dependsOn(verifyRepositoryModel, verifyAndroidAar, verifyPublications)
 }
 
-tasks.named("check") { dependsOn("spotlessCheck", "verifyRepositoryContract") }
+tasks.named("check") {
+    dependsOn("spotlessCheck", "verifyRepositoryContract", compileGeneratorOnlyConsumer)
+}
 
 subprojects {
     if (name != "foundry-java-android") {
