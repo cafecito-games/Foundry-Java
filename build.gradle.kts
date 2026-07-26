@@ -696,10 +696,12 @@ val requiredBoundaryDependencies =
         ":foundry-java-gradle-plugin" to
             listOf(
                 "api=$requiredGradleApiFileSignature",
+                "compileOnly=com.android.tools.build:gradle-api",
                 "testImplementation=$requiredGradleTestKitFileSignature",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
                 "testRuntimeOnly=$requiredGradlePluginRuntimeFileSignature",
+                "testRuntimeOnly=com.android.tools.build:gradle",
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
                 "testRuntimeOnly=org.junit.platform:junit-platform-launcher",
             ),

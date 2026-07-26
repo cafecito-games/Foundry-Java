@@ -12,6 +12,26 @@ artifact compatibility change. It must be a stable lowercase hyphen-separated na
 subsequent segments start with a letter, and whose generated Java package segment is not a Java 17
 keyword.
 
+A Gradle Java module can configure the processor explicitly:
+
+```kotlin
+dependencies {
+    compileOnly("games.cafecito.foundry:foundry-java-annotations:<foundry-java-version>")
+    implementation("games.cafecito.foundry:foundry-java-runtime:<foundry-java-version>")
+    annotationProcessor("games.cafecito.foundry:foundry-java-processor:<foundry-java-version>")
+}
+
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("-Afoundry.module=my-gameplay")
+}
+```
+
+The consuming Android application normally adds this module to an Android runtime dependency
+configuration such as `implementation`; the plugin aggregates that variant graph. Use the
+transitive `foundryJavaModules` configuration only for supplemental descriptor artifacts outside
+the Android runtime graph. See [Android integration](android-integration.md) for the application
+plugin, requested-ABI DSL, and AAR setup.
+
 ## Extension declarations
 
 An extension is a public, final, top-level class. Its direct Java superclass must match the
@@ -102,12 +122,22 @@ stable-sorted registry for the consumer module. It also emits an immutable modul
 `META-INF/foundry-java/modules/<module>.descriptor` and narrow, exact-class keep rules at
 `META-INF/proguard/foundry-java-<module>.pro`.
 
-Registration uses direct constructor, method, override, and accessor calls. The registry passes the
-binding context and object lease through its generated access contract, and normal
-`FoundryBindingContext.bind` lifecycle checks reject stale contexts before an extension factory is
-invoked. Registration has no runtime reflection, classpath scanning, Android manifest discovery,
-`Class.forName` lookup, or reflective member enumeration. Generated entry points are the only
-dynamically retained classes.
+The descriptor uses format 2. Its required ordered headers are `format`, `module`, `registry`,
+`api_sha256`, `generator_version`, `runtime_contract_version`, and `bridge_contract_version`.
+Class and member entries follow in stable order. The generated registry implements
+`FoundryModuleProvider`, exposes one typed `PROVIDER`, and returns an immutable
+`FoundryModuleDescriptor` carrying the same provenance and declarations.
+
+The application plugin validates all descriptor provenance before it generates a sorted registry
+index and `FoundryGeneratedBootstrap`. Registration uses direct provider, constructor, method,
+override, and accessor calls. The registry passes the binding context and object lease through its
+generated access contract, and normal `FoundryBindingContext.bind` lifecycle checks reject stale
+contexts before an extension factory is invoked.
+
+There is no format-1 compatibility reader, runtime reflection, classpath scanning, Android manifest
+discovery, `FoundryPlugin` lookup, `Class.forName`, or reflective member enumeration. Generated
+entry points are the only dynamically retained classes. Processor keep rules name only the module
+registry and its generated trampolines; do not replace them with package-wide rules.
 
 The annotations artifact is platform-neutral Java metadata. It has no Android, JNI, or native
 dependency. Extension code consumes only the public FoundryExtension-facing API; Foundry-Java never

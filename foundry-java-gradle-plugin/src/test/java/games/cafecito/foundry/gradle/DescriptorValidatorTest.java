@@ -310,6 +310,22 @@ class DescriptorValidatorTest {
     }
 
     @Test
+    void rejectsBridgeAndConfigurationSplitAcrossArtifacts() {
+        IllegalArgumentException failure =
+                assertGraphInvalid(
+                        List.of(parse("demo.jar", "demo", "example.Demo", API_SHA, "1", "1", "1")),
+                        List.of(
+                                new DescriptorValidator.AndroidPayload(
+                                        "bridge.aar", true, false, Set.of("x86_64")),
+                                new DescriptorValidator.AndroidPayload(
+                                        "configuration.aar", false, true, Set.of())),
+                        Set.of("x86_64"));
+
+        assertContainsAll(
+                failure.getMessage(), "bridge.aar", "configuration.aar", "same binding artifact");
+    }
+
+    @Test
     void wholeGraphDiagnosticsAreStableSortedAndNameConflictingValues() {
         IllegalArgumentException failure =
                 assertGraphInvalid(

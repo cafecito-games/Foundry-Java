@@ -192,6 +192,13 @@ final class DescriptorValidator {
         if (payloads.isEmpty() && requestedAbis.isEmpty()) {
             return;
         }
+        if (bridges.size() != 1) {
+            diagnostics.add("bridge payload count=" + bridges.size() + "; expected 1");
+        }
+        if (configurations.size() != 1) {
+            diagnostics.add(
+                    "configuration payload count=" + configurations.size() + "; expected 1");
+        }
         if (bridges.size() != 1 || configurations.size() != 1) {
             for (AndroidPayload payload : payloads) {
                 diagnostics.add(
@@ -201,6 +208,15 @@ final class DescriptorValidator {
                                 + ", configuration_payload="
                                 + payload.configurationPayload());
             }
+        }
+        if (bridges.size() == 1
+                && configurations.size() == 1
+                && !bridges.get(0).artifact().equals(configurations.get(0).artifact())) {
+            diagnostics.add(
+                    "bridge and configuration must use the same binding artifact: "
+                            + bridges.get(0).artifact()
+                            + ", "
+                            + configurations.get(0).artifact());
         }
         if (bridges.size() == 1) {
             AndroidPayload bridge = bridges.get(0);

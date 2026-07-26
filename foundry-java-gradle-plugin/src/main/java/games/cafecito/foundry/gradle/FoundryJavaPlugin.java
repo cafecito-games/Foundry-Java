@@ -1,5 +1,7 @@
 package games.cafecito.foundry.gradle;
 
+import java.util.Set;
+import org.gradle.api.GradleException;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
@@ -9,7 +11,9 @@ import org.gradle.api.tasks.TaskProvider;
 public final class FoundryJavaPlugin implements Plugin<Project> {
     @Override
     public void apply(Project project) {
-        project.getExtensions().getExtraProperties().set("foundryJava", true);
+        FoundryJavaExtension extension =
+                project.getExtensions().create("foundryJava", FoundryJavaExtension.class);
+        extension.getRequestedAbis().convention(Set.of());
         Configuration modules =
                 project.getConfigurations()
                         .create(
@@ -31,6 +35,8 @@ public final class FoundryJavaPlugin implements Plugin<Project> {
                                     task.setDescription(
                                             "Validates Foundry-Java modules and generates the registry bootstrap.");
                                     task.getModuleArtifacts().from(modules);
+                                    task.getPayloadArtifacts().from(modules);
+                                    task.getRequestedAbis().set(extension.getRequestedAbis());
                                     task.getAssetsOutputDirectory()
                                             .set(
                                                     project.getLayout()
@@ -44,8 +50,28 @@ public final class FoundryJavaPlugin implements Plugin<Project> {
                                                             .getBuildDirectory()
                                                             .dir("generated/foundryJava/java"));
                                 });
-        project.getTasks()
-                .matching(task -> task.getName().equals("preBuild"))
-                .configureEach(task -> task.dependsOn(registry));
+        rejectUnsupportedAndroidPlugins(project);
+        project.getPluginManager()
+                .withPlugin(
+                        "com.android.application",
+                        ignored ->
+                                FoundryAndroidApplicationIntegration.configure(
+                                        project, modules, extension));
+    }
+
+    private static void rejectUnsupportedAndroidPlugins(Project project) {
+        for (String plugin :
+                Set.of("com.android.library", "com.android.dynamic-feature", "com.android.test")) {
+            project.getPluginManager()
+                    .withPlugin(
+                            plugin,
+                            ignored -> {
+                                throw new GradleException(
+                                        "The Foundry-Java plugin requires "
+                                                + "com.android.application; found "
+                                                + plugin
+                                                + ".");
+                            });
+        }
     }
 }
