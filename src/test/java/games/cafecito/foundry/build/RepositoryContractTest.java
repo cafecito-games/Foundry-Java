@@ -297,8 +297,16 @@ class RepositoryContractTest {
                         "allowedBootstrapAndroidClasses =\n"
                                 + "    setOf(\n"
                                 + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$DiagnosticCallbacks.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$DiagnosticSink.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$NativeLibrary.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
                                 + "FoundryJavaInitializer.class\",\n"
                                 + "    )"));
+        assertTrue(rootBuild.contains("expectedFixedConfiguration"));
+        assertTrue(rootBuild.contains("expectedConsumerRules"));
         assertFalse(rootBuild.contains("substringAfterLast('/').contains(\"Host\")"));
         assertTrue(rootBuild.contains("libfoundry_android.so"));
     }

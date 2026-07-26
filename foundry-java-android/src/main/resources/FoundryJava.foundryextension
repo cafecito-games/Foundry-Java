@@ -1,0 +1,10 @@
+[configuration]
+
+entry_symbol = "foundry_java_library_init"
+
+[libraries]
+
+android.arm32 = "libfoundry_java.so"
+android.arm64 = "libfoundry_java.so"
+android.x86_32 = "libfoundry_java.so"
+android.x86_64 = "libfoundry_java.so"

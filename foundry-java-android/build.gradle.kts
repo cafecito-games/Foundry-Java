@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.android.library)
     `maven-publish`
@@ -14,6 +16,7 @@ android {
     defaultConfig {
         minSdk = 23
         testInstrumentationRunner = "games.cafecito.foundry.java.FoundryJavaInstrumentation"
+        consumerProguardFiles("src/main/consumer-rules.pro")
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
@@ -48,6 +51,14 @@ android {
 
 dependencies {
     api(project(":foundry-java-runtime"))
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
 
 afterEvaluate {

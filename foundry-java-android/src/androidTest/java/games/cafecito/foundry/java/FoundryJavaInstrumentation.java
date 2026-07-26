@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.os.Bundle;
 import games.cafecito.foundry.runtime.FoundryBridgeCallbacks;
+import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Device-side acceptance runner for the versioned JNI bridge lifecycle. */
@@ -33,7 +35,10 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
 
     private static void exerciseBridge() {
         LifecycleCallbacks callbacks = new LifecycleCallbacks();
-        require(FoundryJavaInitializer.initialize(callbacks), "native bootstrap was rejected");
+        require(
+                FoundryJavaInitializer.initialize(
+                        new FoundryRegistryBootstrap(List.of()), callbacks),
+                "native bootstrap was rejected");
 
         long context = FoundryJavaInitializer.createContext();
         require(context != 0, "native context was not created");

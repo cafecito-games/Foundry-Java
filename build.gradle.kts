@@ -214,6 +214,14 @@ abstract class VerifyAndroidAar : DefaultTask() {
     @get:Input
     abstract val expectedNativeLibraries: SetProperty<String>
 
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val expectedFixedConfiguration: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val expectedConsumerRules: RegularFileProperty
+
     @TaskAction
     fun verifyAar() {
         val aar = aarFile.get().asFile
@@ -238,16 +246,64 @@ abstract class VerifyAndroidAar : DefaultTask() {
             }
             val classesJar = zip.getEntry("classes.jar")
             check(classesJar != null) { "Release AAR must contain classes.jar." }
-            val actualClasses =
+            val nestedEntries =
                 ZipInputStream(zip.getInputStream(classesJar)).use { nestedZip ->
-                    generateSequence(nestedZip::getNextEntry)
-                        .map { it.name }
-                        .filter { it.endsWith(".class") }
-                        .toSet()
+                    buildList {
+                        while (true) {
+                            val entry = nestedZip.nextEntry ?: break
+                            if (!entry.isDirectory) {
+                                add(entry.name to nestedZip.readBytes())
+                            }
+                        }
+                    }
                 }
+            val actualClasses =
+                nestedEntries
+                    .map { it.first }
+                    .filter { it.endsWith(".class") }
+                    .toSet()
             check(actualClasses == allowedClasses.get()) {
                 "Release AAR classes.jar must contain exactly the allowed bootstrap classes. " +
                     "Expected ${allowedClasses.get()}, found $actualClasses."
+            }
+            val fixedConfigurations =
+                nestedEntries.filter { it.first == "FoundryJava.foundryextension" }
+            check(fixedConfigurations.size == 1) {
+                "Release AAR classes.jar must contain exactly one fixed " +
+                    "FoundryJava.foundryextension; found ${fixedConfigurations.size}."
+            }
+            check(
+                fixedConfigurations.single().second.contentEquals(
+                    expectedFixedConfiguration.get().asFile.readBytes(),
+                ),
+            ) {
+                "Release AAR fixed FoundryJava.foundryextension differs from the checked-in contract."
+            }
+            check(
+                zip.entries().asSequence().none {
+                    it.name == "FoundryJava.foundryextension"
+                },
+            ) {
+                "Release AAR must not duplicate FoundryJava.foundryextension outside classes.jar."
+            }
+
+            val packagedConsumerRules =
+                zip
+                    .entries()
+                    .asSequence()
+                    .filter { it.name == "proguard.txt" }
+                    .toList()
+            check(packagedConsumerRules.size == 1) {
+                "Release AAR must contain exactly one consumer-rule payload; " +
+                    "found ${packagedConsumerRules.size}."
+            }
+            check(
+                zip
+                    .getInputStream(packagedConsumerRules.single())
+                    .readBytes()
+                    .contentEquals(expectedConsumerRules.get().asFile.readBytes()),
+            ) {
+                "Release AAR consumer rules differ from the checked-in narrow contract."
             }
         }
     }
@@ -849,6 +905,9 @@ val requiredPublicationArtifacts =
     )
 val allowedBootstrapAndroidClasses =
     setOf(
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$DiagnosticCallbacks.class",
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$DiagnosticSink.class",
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$NativeLibrary.class",
         "games/cafecito/foundry/java/FoundryJavaInitializer.class",
     )
 val requiredAndroidNativeLibraries =
@@ -940,6 +999,16 @@ val verifyAndroidAar =
         )
         allowedClasses.set(allowedBootstrapAndroidClasses)
         expectedNativeLibraries.set(requiredAndroidNativeLibraries)
+        expectedFixedConfiguration.set(
+            project(":foundry-java-android")
+                .layout.projectDirectory
+                .file("src/main/resources/FoundryJava.foundryextension"),
+        )
+        expectedConsumerRules.set(
+            project(":foundry-java-android")
+                .layout.projectDirectory
+                .file("src/main/consumer-rules.pro"),
+        )
     }
 
 val verifyPublications =
