@@ -107,6 +107,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
         if (roundEnvironment.processingOver() && !models.isEmpty()) {
             validator.validateCycles(Map.copyOf(models), Map.copyOf(sourceElements));
             validateModuleNames();
+            validateModuleOption();
             if (validator.errorCount() == 0 && moduleErrorCount == 0) {
                 emitTrampolines();
                 if (moduleErrorCount == 0) {
@@ -147,9 +148,10 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
                         });
     }
 
-    private void emitModule() {
+    private void validateModuleOption() {
         String moduleName = processingEnv.getOptions().get("foundry.module");
         if (moduleName == null || !moduleName.matches(MODULE_NAME_PATTERN)) {
+            moduleErrorCount++;
             processingEnv
                     .getMessager()
                     .printMessage(
@@ -158,13 +160,16 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
             return;
         }
         if (SourceVersion.isKeyword(moduleName.replace("-", ""), SourceVersion.RELEASE_17)) {
+            moduleErrorCount++;
             processingEnv
                     .getMessager()
                     .printMessage(
                             javax.tools.Diagnostic.Kind.ERROR,
                             "processor option -Afoundry.module cannot produce a Java keyword package");
-            return;
         }
+    }
+
+    private void emitModule() {
         if (reservedRegistry == null) {
             moduleErrorCount++;
             processingEnv

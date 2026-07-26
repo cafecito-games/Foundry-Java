@@ -74,6 +74,10 @@ class FoundryProcessorBuildModeTest {
                                 message ->
                                         message.contains("-Afoundry.module")
                                                 && message.contains("Java keyword")));
+        assertNoRegistrationArtifacts(missing);
+        assertNoRegistrationArtifacts(invalid);
+        assertNoRegistrationArtifacts(colliding);
+        assertNoRegistrationArtifacts(keyword);
     }
 
     @Test
@@ -390,6 +394,24 @@ class FoundryProcessorBuildModeTest {
         assertFalse(
                 result.classOutput()
                         .containsKey("META-INF/proguard/foundry-java-" + moduleName + ".pro"));
+    }
+
+    private static void assertNoRegistrationArtifacts(ProcessorCompilation.Result result) {
+        assertTrue(
+                result.generatedSources().keySet().stream()
+                        .noneMatch(
+                                path ->
+                                        path.endsWith("_FoundryTrampoline.java")
+                                                || path.endsWith("Registry.java")),
+                result.generatedSources().keySet().toString());
+        assertTrue(
+                result.classOutput().keySet().stream()
+                        .noneMatch(
+                                path ->
+                                        path.startsWith("META-INF/foundry-java/modules/")
+                                                || path.startsWith(
+                                                        "META-INF/proguard/foundry-java-")),
+                result.classOutput().keySet().toString());
     }
 
     private static final class DelayedExtensionProcessor extends AbstractProcessor {
