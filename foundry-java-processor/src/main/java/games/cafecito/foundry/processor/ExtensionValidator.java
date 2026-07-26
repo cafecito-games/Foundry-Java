@@ -242,6 +242,23 @@ final class ExtensionValidator {
 
     void validateCycles(
             Map<String, ExtensionModel> models, Map<String, TypeElement> sourceElements) {
+        models.forEach(
+                (name, model) ->
+                        model.initializationDependencies().stream()
+                                .filter(dependency -> !models.containsKey(dependency))
+                                .forEach(
+                                        dependency -> {
+                                            TypeElement element = sourceElements.get(name);
+                                            AnnotationMirror mirror =
+                                                    annotation(element, INITIALIZATION)
+                                                            .orElseThrow();
+                                            error(
+                                                    element,
+                                                    mirror,
+                                                    "initialization dependency must be part of "
+                                                            + "the current compilation: "
+                                                            + dependency);
+                                        }));
         Map<String, List<String>> graph = new HashMap<>();
         models.forEach(
                 (name, model) ->
@@ -505,7 +522,7 @@ final class ExtensionValidator {
         }
         TypeElement signal = (TypeElement) element;
         List<ResolvedMethod> methods = effectiveAbstractMethods(signal);
-        if (!elements.isFunctionalInterface(signal) || methods.size() != 1) {
+        if (methods.size() != 1) {
             error(signal, "signal must declare exactly one abstract method");
             return Optional.empty();
         }
@@ -580,7 +597,8 @@ final class ExtensionValidator {
     }
 
     private boolean sameSignature(ExecutableElement expected, ExecutableElement actual) {
-        if (!types.isSameType(expected.getReturnType(), actual.getReturnType())
+        if (!expected.getSimpleName().contentEquals(actual.getSimpleName())
+                || !types.isSameType(expected.getReturnType(), actual.getReturnType())
                 || expected.getParameters().size() != actual.getParameters().size()) {
             return false;
         }

@@ -73,8 +73,9 @@ whose effective inherited method set contains exactly one abstract, `void` metho
 SAM methods are resolved as members of the concrete signal interface, so
 `Changed extends Parent<String>` exports `String`, not the parent's type variable.
 
-Supported callback types are Java primitives, `void` returns, `String`, enums, generated value types
-below `games.cafecito.foundry.types`, generator-provenance engine/API types below
+Supported callback types are Java primitives, `void` returns, `String`, enums, generated API types
+below `games.cafecito.foundry.api`, generated value types below
+`games.cafecito.foundry.types`, generator-provenance engine/API types below
 `games.cafecito.foundry.generated`, and other annotated extension classes. Unsupported, ambiguous,
 or incorrectly placed declarations stop javac with a diagnostic at the offending annotation,
 member, or parameter.

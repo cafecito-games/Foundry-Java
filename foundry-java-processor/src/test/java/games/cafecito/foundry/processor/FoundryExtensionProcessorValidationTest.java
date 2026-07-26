@@ -6,7 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import javax.tools.Diagnostic;
 import org.junit.jupiter.api.Test;
@@ -201,6 +204,76 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
+    void acceptsReadOnlyPropertiesAndAnExplicitMatchingRenamedVirtual() throws IOException {
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compile(
+                        Map.of(
+                                "demo.RenamedBase",
+                                """
+                                package demo;
+                                import games.cafecito.foundry.annotations.*;
+                                @GeneratedByFoundry
+                                public class RenamedBase {
+                                    @FoundryVirtual("_process")
+                                    public void onProcess(double delta) {}
+                                }
+                                """,
+                                "demo.ExplicitVirtual",
+                                """
+                                package demo;
+                                import games.cafecito.foundry.annotations.*;
+                                @FoundryClass(base = RenamedBase.class)
+                                public final class ExplicitVirtual extends RenamedBase {
+                                    @FoundryProperty(getter = "speed")
+                                    private double speed;
+                                    public double speed() { return speed; }
+                                    @FoundryOverride(name = "_process")
+                                    public void onProcess(double delta) {}
+                                }
+                                """));
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+    }
+
+    @Test
+    void rejectsGenericExportsAndMethodOverrideNameCollisions() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "UnsupportedMembers",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class UnsupportedMembers extends EngineNode {
+                            @FoundryMethod public <T> void generic(T value) {}
+                            @FoundryMethod(name = "_process") public void collide() {}
+                            @FoundryOverride public void _process(double delta) {}
+                        }
+                        """);
+
+        assertDiagnostic(
+                result, "exported method cannot declare type parameters", "UnsupportedMembers", 5);
+        assertDiagnostic(result, "duplicate exported name _process", "UnsupportedMembers", 7);
+    }
+
+    @Test
+    void rejectsANonVoidSignalMethod() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "NonVoidSignal",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class NonVoidSignal extends EngineNode {
+                            @FoundrySignal public interface Changed { int emitted(); }
+                        }
+                        """);
+
+        assertDiagnostic(result, "signal method must return void", "NonVoidSignal", 5);
+    }
+
+    @Test
     void rejectsInvalidExtensionAndMemberShapes() throws IOException {
         ProcessorCompilation.Result result =
                 compile(
@@ -355,6 +428,46 @@ class FoundryExtensionProcessorValidationTest {
 
         assertDiagnostic(result, "initialization dependency cycle", "First", 4);
         assertDiagnostic(result, "initialization dependency cycle", "Second", 4);
+    }
+
+    @Test
+    void rejectsAnInitializationDependencyOutsideTheCurrentCompilation() throws IOException {
+        Path foreignOutput = Files.createTempDirectory("foundry-foreign-extension-test-");
+        ProcessorCompilation.Result foreign =
+                ProcessorCompilation.compile(
+                        Map.of(
+                                "foreign.ForeignExtension",
+                                """
+                                package foreign;
+                                import games.cafecito.foundry.annotations.FoundryClass;
+                                @FoundryClass(base = String.class)
+                                public final class ForeignExtension {}
+                                """),
+                        null,
+                        List.of(),
+                        foreignOutput,
+                        name -> false);
+        assertTrue(foreign.successful(), () -> foreign.errorMessages().toString());
+
+        Map<String, String> sources = baseSources();
+        sources.put(
+                "demo.DependsOnForeignExtension",
+                """
+                package demo;
+                import games.cafecito.foundry.annotations.*;
+                @FoundryClass(base = EngineNode.class)
+                @FoundryInitialization(after = foreign.ForeignExtension.class)
+                public final class DependsOnForeignExtension extends EngineNode {}
+                """);
+        ProcessorCompilation.Result result =
+                ProcessorCompilation.compileWithClasspath(
+                        sources, "demo-module", List.of(foreignOutput.resolve("classes")));
+
+        assertDiagnostic(
+                result,
+                "initialization dependency must be part of the current compilation",
+                "DependsOnForeignExtension",
+                4);
     }
 
     @Test

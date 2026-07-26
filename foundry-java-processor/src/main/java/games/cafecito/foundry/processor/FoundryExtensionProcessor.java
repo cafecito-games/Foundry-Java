@@ -16,6 +16,7 @@ import javax.lang.model.element.TypeElement;
 public final class FoundryExtensionProcessor extends AbstractProcessor {
     private final Map<String, ExtensionModel> models = new LinkedHashMap<>();
     private final Map<String, TypeElement> sourceElements = new LinkedHashMap<>();
+    // JSR-269 source identities are single-assignment; Filer rejects recreating the same FQN.
     private final Set<String> emittedTrampolines = new LinkedHashSet<>();
     private final Set<String> reportedModuleNameConflicts = new LinkedHashSet<>();
     private ExtensionValidator validator;

@@ -2,6 +2,7 @@ package games.cafecito.foundry.processor;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -66,7 +67,7 @@ final class ProcessorCompilation {
             Path output,
             Predicate<String> failOutput)
             throws IOException {
-        return compile(sources, moduleName, processors, output, failOutput, List.of());
+        return compile(sources, moduleName, processors, output, failOutput, List.of(), List.of());
     }
 
     static Result compileWithOptions(
@@ -78,7 +79,21 @@ final class ProcessorCompilation {
                 List.of(new FoundryExtensionProcessor()),
                 Files.createTempDirectory("foundry-processor-test-"),
                 name -> false,
-                extraOptions);
+                extraOptions,
+                List.of());
+    }
+
+    static Result compileWithClasspath(
+            Map<String, String> sources, String moduleName, List<Path> additionalClasspath)
+            throws IOException {
+        return compile(
+                sources,
+                moduleName,
+                List.of(new FoundryExtensionProcessor()),
+                Files.createTempDirectory("foundry-processor-test-"),
+                name -> false,
+                List.of(),
+                additionalClasspath);
     }
 
     private static Result compile(
@@ -87,7 +102,8 @@ final class ProcessorCompilation {
             List<? extends Processor> processors,
             Path output,
             Predicate<String> failOutput,
-            List<String> extraOptions)
+            List<String> extraOptions,
+            List<Path> additionalClasspath)
             throws IOException {
         JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
         assertNotNull(compiler, "processor tests require a JDK");
@@ -102,12 +118,12 @@ final class ProcessorCompilation {
                     StandardLocation.SOURCE_OUTPUT, List.of(generated));
             JavaFileManager fileManager = failingFileManager(standardFileManager, failOutput);
             List<String> options = new ArrayList<>();
-            options.addAll(
-                    List.of(
-                            "--release",
-                            "17",
-                            "-classpath",
-                            System.getProperty("java.class.path")));
+            String classpath =
+                    Stream.concat(
+                                    Stream.of(System.getProperty("java.class.path")),
+                                    additionalClasspath.stream().map(Path::toString))
+                            .collect(java.util.stream.Collectors.joining(File.pathSeparator));
+            options.addAll(List.of("--release", "17", "-classpath", classpath));
             options.addAll(extraOptions);
             if (moduleName != null) {
                 options.add("-Afoundry.module=" + moduleName);
