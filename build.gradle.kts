@@ -481,7 +481,7 @@ tasks.withType<Test>().configureEach {
 configure<SpotlessExtension> {
     // Spotless's git-aware default can capture cold-only JGit state as a Gradle configuration
     // cache input. Explicit LF matches the repository policy and avoids that clean-state miss.
-    // Related upstream regression: https://github.com/diffplug/spotless/issues/2950
+    // Related upstream regression: https://github.com/diffplug/spotless/issues/2431
     lineEndings = LineEnding.UNIX
     java {
         target("src/**/*.java", "*/src/**/*.java")

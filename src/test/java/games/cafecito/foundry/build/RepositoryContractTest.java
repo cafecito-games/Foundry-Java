@@ -189,7 +189,7 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("target(\"*/src/**/*.kt\")"));
         assertTrue(rootBuild.contains("ktlint(\"1.3.1\")"));
         assertTrue(rootBuild.contains("lineEndings = LineEnding.UNIX"));
-        assertTrue(rootBuild.contains("https://github.com/diffplug/spotless/issues/2950"));
+        assertTrue(rootBuild.contains("https://github.com/diffplug/spotless/issues/2431"));
         assertTrue(
                 rootBuild.contains(
                         "tasks.named(\"check\") {"
