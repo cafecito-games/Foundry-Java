@@ -8,7 +8,4 @@ import games.cafecito.foundry.annotations.PublicFoundryAbi;
  * <p>Implementations are supplied by applications and are invoked by the Foundry host.
  */
 @PublicFoundryAbi
-public interface FoundryExtension {
-    /** Called when the host has attached the extension. */
-    default void onAttached() {}
-}
+public interface FoundryExtension {}

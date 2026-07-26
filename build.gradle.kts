@@ -48,6 +48,15 @@ configure<SpotlessExtension> {
 allprojects {
     group = rootProject.group
     version = rootProject.version
+
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+
+    tasks.withType<AbstractArchiveTask>().configureEach {
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+    }
 }
 
 subprojects {
@@ -72,15 +81,6 @@ subprojects {
         }
     }
 
-    dependencyLocking {
-        lockAllConfigurations()
-    }
-
-    tasks.withType<AbstractArchiveTask>().configureEach {
-        isPreserveFileTimestamps = false
-        isReproducibleFileOrder = true
-    }
-
     plugins.withId("maven-publish") {
         extensions.configure<PublishingExtension> {
             publications.withType<MavenPublication>().configureEach {
@@ -100,7 +100,7 @@ subprojects {
                     }
                 }
             }
-            if (plugins.hasPlugin("java") && publications.findByName("mavenJava") == null) {
+            if (plugins.hasPlugin("java") && !plugins.hasPlugin("java-gradle-plugin") && publications.findByName("mavenJava") == null) {
                 publications.create<MavenPublication>("mavenJava") {
                     from(components.getByName("java"))
                 }

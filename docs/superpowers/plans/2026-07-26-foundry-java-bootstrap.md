@@ -6,7 +6,7 @@
 
 **Architecture:** A root Kotlin DSL build applies shared Java 17, publishing, locking, and reproducibility conventions to nine deliberately thin modules. The public API model and annotations stay platform-neutral; runtime stays host-neutral; Android host packaging is isolated; Kotlin is a Java-facing optional layer.
 
-**Tech Stack:** Gradle 8.10.2 wrapper, Kotlin DSL, Java 17 toolchains, JUnit 5, Maven Publish, Spotless, Android Gradle Plugin.
+**Tech Stack:** Gradle 8.11.1 wrapper, Kotlin DSL, Java 17 toolchains, JUnit 5, Maven Publish, Spotless, Android Gradle Plugin.
 
 ---
 
@@ -72,8 +72,8 @@ plugins.withId("maven-publish") { publishing { publications.withType<MavenPublic
 
 - [ ] **Step 3: Generate and pin Gradle wrapper**
 
-Run: `curl -fsSLO https://services.gradle.org/distributions/gradle-8.10.2-bin.zip`
-Expected: wrapper files reference the fixed Gradle 8.10.2 distribution.
+Run: `curl -fsSLO https://services.gradle.org/distributions/gradle-8.11.1-bin.zip`
+Expected: wrapper files reference the fixed Gradle 8.11.1 distribution.
 
 - [ ] **Step 4: Run formatting and structural checks**
 

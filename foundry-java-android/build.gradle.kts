@@ -24,3 +24,13 @@ android {
 dependencies {
     api(project(":foundry-java-runtime"))
 }
+
+afterEvaluate {
+    publishing {
+        publications {
+            create<MavenPublication>("release") {
+                from(components["release"])
+            }
+        }
+    }
+}
