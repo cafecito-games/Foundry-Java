@@ -8,9 +8,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class RepositoryContractTest {
+    private static final String LOCK_COMMAND = "./gradlew --write-locks resolveAndLockAll";
     private static final Path ROOT = Path.of("").toAbsolutePath();
     private static final List<String> MODULES =
             List.of(
@@ -56,6 +58,56 @@ class RepositoryContractTest {
         assertTrue(read("foundry-java-kotlin/build.gradle.kts").contains("foundry-java-runtime"));
         assertTrue(read("foundry-java-android/build.gradle.kts").contains("foundry-java-runtime"));
         assertFalse(readTree("foundry-java-android").contains("libfoundry_android.so"));
+    }
+
+    @Test
+    void buildToolingIsPinnedFormattedAndConfigurationCacheSafe() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+        String wrapper = read("gradle/wrapper/gradle-wrapper.properties");
+        String workflow = read(".github/workflows/ci.yml");
+        Pattern immutableAction = Pattern.compile("^[0-9a-f]{40}(?:\\s+#.*)?$");
+
+        assertTrue(
+                wrapper.contains(
+                        "distributionSha256Sum="
+                                + "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6"));
+        workflow.lines()
+                .map(String::trim)
+                .filter(line -> line.startsWith("- uses: "))
+                .forEach(
+                        line ->
+                                assertTrue(
+                                        immutableAction
+                                                .matcher(line.substring(line.indexOf('@') + 1))
+                                                .matches(),
+                                        line + " must use an immutable commit SHA"));
+        assertTrue(rootBuild.contains("target(\"*/src/**/*.kt\")"));
+        assertTrue(rootBuild.contains("ktlint(\"1.3.1\")"));
+        assertFalse(rootBuild.contains("notCompatibleWithConfigurationCache"));
+    }
+
+    @Test
+    void repositoryUsesCanonicalLockAndBuildLocalPublicationWorkflows() throws IOException {
+        for (String documentation :
+                List.of("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/releasing.md")) {
+            assertTrue(read(documentation).contains(LOCK_COMMAND), documentation);
+        }
+        String workflow = read(".github/workflows/ci.yml");
+        assertTrue(workflow.contains("- run: " + LOCK_COMMAND));
+
+        String rootBuild = read("build.gradle.kts");
+        assertTrue(rootBuild.contains("layout.buildDirectory.dir(\"repository\")"));
+        assertTrue(rootBuild.contains("VerifyPublications"));
+        assertFalse(rootBuild.contains("publishReleasePublicationToMavenLocal"));
+    }
+
+    @Test
+    void androidArtifactPolicyUsesAnExactBootstrapClassAllowlist() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+
+        assertTrue(rootBuild.contains("allowedBootstrapAndroidClasses = emptySet<String>()"));
+        assertFalse(rootBuild.contains("substringAfterLast('/').contains(\"Host\")"));
+        assertTrue(rootBuild.contains("libfoundry_android.so"));
     }
 
     private static String read(String relativePath) throws IOException {

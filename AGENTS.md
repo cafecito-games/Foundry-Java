@@ -8,4 +8,4 @@ required ABI. Use only the public `FoundryExtension` ABI; never package, link, l
 Keep Android APIs and host code in `foundry-java-android`. `foundry-java-api-model`,
 `foundry-java-annotations`, and `foundry-java-runtime` must remain Android-free. Run
 `./gradlew clean check` before submitting changes and update dependency locks deliberately with
-`./gradlew --write-locks` when dependencies change.
+`./gradlew --write-locks resolveAndLockAll` when dependencies change.

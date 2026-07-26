@@ -20,8 +20,12 @@ Use JDK 17 and the checked-in wrapper:
 ```
 
 Dependency versions live in `gradle/libs.versions.toml`; resolve a deliberate update with
-`./gradlew --write-locks` and commit the changed lockfiles. Archives are configured for reproducible
-file order and timestamps.
+`./gradlew --write-locks resolveAndLockAll` and commit the changed lockfiles. Archives are configured
+for reproducible file order and timestamps. `check` publishes every configured bootstrap publication
+to `build/repository` and validates its POM, Gradle module metadata, and artifacts without writing to
+the user Maven-local repository.
 
 Integrations use only the public `FoundryExtension` ABI. Foundry-Java never packages, links, loads,
-or redistributes `libfoundry_android.so`.
+or redistributes `libfoundry_android.so`. The bootstrap Android AAR currently allows no classes in
+`classes.jar`; later workstreams that intentionally add Foundry-Java bootstrap classes must update
+the exact allowlist in `build.gradle.kts`.
