@@ -60,24 +60,33 @@ allprojects {
     }
 }
 
-val requiredProjects = setOf(
-    "foundry-java-api-model", "foundry-java-generator", "foundry-java-annotations",
-    "foundry-java-processor", "foundry-java-runtime", "foundry-java-android",
-    "foundry-java-gradle-plugin", "foundry-java-kotlin", "foundry-java-test",
-)
+val requiredProjects =
+    setOf(
+        "foundry-java-api-model",
+        "foundry-java-generator",
+        "foundry-java-annotations",
+        "foundry-java-processor",
+        "foundry-java-runtime",
+        "foundry-java-android",
+        "foundry-java-gradle-plugin",
+        "foundry-java-kotlin",
+        "foundry-java-test",
+    )
 
-val resolveLockTasks = allprojects.map { project ->
-    project.tasks.register("resolveAndLockProject") {
-        notCompatibleWithConfigurationCache("Resolves project dependency configurations for lock generation.")
-        doLast {
-            project.configurations.filter {
-                it.isCanBeResolved &&
-                    (it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath")) &&
-                    !it.name.contains("Test", ignoreCase = true)
-            }.forEach { it.resolve() }
+val resolveLockTasks =
+    allprojects.map { project ->
+        project.tasks.register("resolveAndLockProject") {
+            notCompatibleWithConfigurationCache("Resolves project dependency configurations for lock generation.")
+            doLast {
+                project.configurations
+                    .filter {
+                        it.isCanBeResolved &&
+                            (it.name.endsWith("CompileClasspath") || it.name.endsWith("RuntimeClasspath")) &&
+                            !it.name.contains("Test", ignoreCase = true)
+                    }.forEach { it.resolve() }
+            }
         }
     }
-}
 
 tasks.register("resolveAndLockAll") {
     group = "verification"
@@ -107,7 +116,12 @@ tasks.register("verifyRepositoryContract") {
         listOf(":foundry-java-api-model", ":foundry-java-annotations", ":foundry-java-runtime").forEach { path ->
             check(!project(path).pluginManager.hasPlugin("com.android.library"))
         }
-        check(project(":foundry-java-kotlin").configurations.getByName("api").dependencies.any { it.name == "foundry-java-runtime" })
+        check(
+            project(":foundry-java-kotlin").configurations.getByName("api").dependencies.any {
+                it.name ==
+                    "foundry-java-runtime"
+            },
+        )
         val androidPublishing = android.extensions.getByType(PublishingExtension::class.java)
         check(androidPublishing.publications.names.contains("release"))
         check(android.tasks.names.contains("publishReleasePublicationToMavenLocal"))
@@ -116,10 +130,19 @@ tasks.register("verifyRepositoryContract") {
         check(pluginPublishing.publications.names.contains("pluginMaven"))
         check(pluginPublishing.publications.names.none { it == "mavenJava" })
         check(plugin.tasks.names.any { it.startsWith("publishPluginMavenPublication") })
-        val aar = android.layout.buildDirectory.file("outputs/aar/foundry-java-android-release.aar").get().asFile
+        val aar =
+            android.layout.buildDirectory
+                .file("outputs/aar/foundry-java-android-release.aar")
+                .get()
+                .asFile
         check(aar.isFile) { "Release AAR was not produced." }
         ZipFile(aar).use { zip ->
-            check(zip.entries().asSequence().none { it.name.contains("libfoundry_android.so") || it.name.contains("FoundryAndroidHost") })
+            check(
+                zip.entries().asSequence().none {
+                    it.name.contains("libfoundry_android.so") ||
+                        it.name.contains("FoundryAndroidHost")
+                },
+            )
         }
     }
 }
@@ -167,7 +190,10 @@ subprojects {
                     }
                 }
             }
-            if (project.name != "foundry-java-gradle-plugin" && plugins.hasPlugin("java") && publications.findByName("mavenJava") == null) {
+            if (project.name != "foundry-java-gradle-plugin" &&
+                plugins.hasPlugin("java") &&
+                publications.findByName("mavenJava") == null
+            ) {
                 publications.create<MavenPublication>("mavenJava") {
                     from(components.getByName("java"))
                 }
