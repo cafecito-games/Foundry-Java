@@ -1,6 +1,5 @@
 package games.cafecito.foundry.types;
 
-import java.util.Arrays;
 import java.util.Objects;
 
 /** Mutable 64-bit floating-point packed array with copied Java array boundaries. */
@@ -32,13 +31,26 @@ public final class PackedFloat64Array implements PackedArray<Double> {
 
     @Override
     public boolean equals(Object other) {
-        return this == other
-                || (other instanceof PackedFloat64Array array
-                        && Arrays.equals(values, array.values));
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof PackedFloat64Array array) || values.length != array.values.length) {
+            return false;
+        }
+        for (int index = 0; index < values.length; index++) {
+            if (!FoundryFloat.equals(values[index], array.values[index])) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
     public int hashCode() {
-        return Arrays.hashCode(values);
+        int result = 1;
+        for (double value : values) {
+            result = 31 * result + FoundryFloat.hash(value);
+        }
+        return result;
     }
 }

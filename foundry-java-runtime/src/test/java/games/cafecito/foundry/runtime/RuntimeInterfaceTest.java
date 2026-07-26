@@ -33,6 +33,7 @@ class RuntimeInterfaceTest {
                         "call(long,long,String,List):CallResult",
                         "decodeVariant(long,long):Variant",
                         "encodeVariant(long,Variant):long",
+                        "instantiate(long,String):long",
                         "isObjectValid(long,long):boolean",
                         "objectType(long,long):String",
                         "release(long,long):void",

@@ -192,6 +192,47 @@ class VariantTest {
     }
 
     @Test
+    void normalizesSignedZeroAndNanRecursivelyAcrossCompositeAndPackedValues() {
+        Variant compositeA =
+                Variant.of(
+                        new Transform3D(
+                                new Basis(
+                                        new Vector3(-0.0d, Double.NaN, 1.0d),
+                                        new Vector3(2.0d, 3.0d, 4.0d),
+                                        new Vector3(5.0d, 6.0d, 7.0d)),
+                                new Vector3(8.0d, 9.0d, -0.0d)));
+        Variant compositeB =
+                Variant.of(
+                        new Transform3D(
+                                new Basis(
+                                        new Vector3(
+                                                0.0d,
+                                                Double.longBitsToDouble(0x7ff8000000000001L),
+                                                1.0d),
+                                        new Vector3(2.0d, 3.0d, 4.0d),
+                                        new Vector3(5.0d, 6.0d, 7.0d)),
+                                new Vector3(8.0d, 9.0d, 0.0d)));
+        Variant packedA =
+                Variant.of(new PackedFloat64Array(new double[] {-0.0d, Double.NaN, 4.0d}));
+        Variant packedB =
+                Variant.of(
+                        new PackedFloat64Array(
+                                new double[] {
+                                    0.0d, Double.longBitsToDouble(0x7ff8000000000001L), 4.0d
+                                }));
+
+        assertEquals(compositeA, compositeB);
+        assertEquals(compositeA.hashCode(), compositeB.hashCode());
+        assertEquals(packedA, packedB);
+        assertEquals(packedA.hashCode(), packedB.hashCode());
+        assertEquals(
+                Variant.of(new PackedFloat32Array(new float[] {-0.0f, Float.NaN})),
+                Variant.of(
+                        new PackedFloat32Array(
+                                new float[] {0.0f, Float.intBitsToFloat(0x7fc00001)})));
+    }
+
+    @Test
     void performsOnlyStrictLosslessConversions() {
         assertEquals(true, Variant.of(true).asBoolean());
         assertEquals(42L, Variant.of(42L).asLong());

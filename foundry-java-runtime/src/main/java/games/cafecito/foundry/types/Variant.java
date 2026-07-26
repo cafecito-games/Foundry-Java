@@ -201,6 +201,12 @@ public final class Variant {
         return type == VariantType.NIL;
     }
 
+    /** Returns this value after verifying that it is the canonical Nil Variant. */
+    public Variant asNil() {
+        as(VariantType.NIL);
+        return this;
+    }
+
     public boolean asBoolean() {
         return require(VariantType.BOOLEAN, Boolean.class);
     }

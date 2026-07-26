@@ -31,6 +31,11 @@ class NoOpEngine implements FoundryEngine {
     }
 
     @Override
+    public long instantiate(long contextHandle, String className) {
+        return 1;
+    }
+
+    @Override
     public void retain(long contextHandle, long objectHandle) {}
 
     @Override

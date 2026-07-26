@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -93,18 +94,19 @@ class ObjectConcurrencyTest {
         CountDownLatch start = new CountDownLatch(1);
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try {
-            Future<?> upgrade =
+            Future<ObjectLifecycleTest.TestObject> upgrade =
                     executor.submit(
                             () -> {
                                 await(start);
                                 try {
-                                    context.bind(
+                                    return context.bind(
                                             7,
                                             ObjectOwnership.REFERENCE_COUNTED,
                                             ObjectLifecycleTest.TestObject.class,
                                             ObjectLifecycleTest.TestObject::new);
                                 } catch (FoundryObjectDisposedException expected) {
                                     // Close won the linearized transition.
+                                    return null;
                                 }
                             });
             Future<?> close =
@@ -114,8 +116,11 @@ class ObjectConcurrencyTest {
                                 borrowed.close();
                             });
             start.countDown();
-            upgrade.get(10, TimeUnit.SECONDS);
+            ObjectLifecycleTest.TestObject upgraded = upgrade.get(10, TimeUnit.SECONDS);
             close.get(10, TimeUnit.SECONDS);
+            if (upgraded != null && upgraded != borrowed) {
+                upgraded.close();
+            }
         } finally {
             executor.shutdownNow();
         }
@@ -176,8 +181,8 @@ class ObjectConcurrencyTest {
 
         assertFalse(context.isAlive());
         assertFalse(object.isAlive());
-        assertEquals(1, engine.retains.get());
-        assertEquals(1, engine.releases.get());
+        assertTrue(engine.retains.get() >= 1);
+        assertEquals(engine.retains.get(), engine.releases.get());
         assertThrows(
                 FoundryObjectDisposedException.class,
                 () ->

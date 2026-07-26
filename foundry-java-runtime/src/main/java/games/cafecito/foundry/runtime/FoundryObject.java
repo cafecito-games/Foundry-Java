@@ -55,7 +55,7 @@ public class FoundryObject implements AutoCloseable {
 
     @Override
     public final void close() {
-        context.invalidateObject(lease.objectHandle());
+        context.releaseWrapper(lease);
         cleanable.clean();
     }
 

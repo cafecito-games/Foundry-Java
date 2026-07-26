@@ -164,6 +164,19 @@ public final class FoundryBindingContext implements AutoCloseable {
         }
     }
 
+    void releaseWrapper(ObjectLease lease) {
+        Objects.requireNonNull(lease, "lease");
+        synchronized (lifecycleLock) {
+            WeakReference<FoundryObject> reference = wrappers.get(lease.objectHandle());
+            FoundryObject wrapper = reference == null ? null : reference.get();
+            if (wrapper != null && wrapper.lease() == lease) {
+                wrappers.remove(lease.objectHandle());
+            }
+            leases.remove(lease);
+        }
+        lease.run();
+    }
+
     @Override
     public void close() {
         if (!callbackRegistry.disable()) {

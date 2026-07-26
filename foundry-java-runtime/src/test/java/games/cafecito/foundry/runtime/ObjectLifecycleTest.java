@@ -146,6 +146,49 @@ class ObjectLifecycleTest {
     }
 
     @Test
+    void closeReleasesOnlyTheWrapperAndAllowsAStillLiveObjectToBeReacquired() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+
+        TestObject first =
+                context.bind(
+                        7, ObjectOwnership.REFERENCE_COUNTED, TestObject.class, TestObject::new);
+        first.close();
+        TestObject reacquired =
+                context.bind(
+                        7, ObjectOwnership.REFERENCE_COUNTED, TestObject.class, TestObject::new);
+
+        org.junit.jupiter.api.Assertions.assertNotSame(first, reacquired);
+        assertFalse(first.isAlive());
+        assertTrue(reacquired.isAlive());
+        assertEquals(2, engine.retains.get());
+        assertEquals(1, engine.releases.get());
+
+        reacquired.close();
+        assertEquals(2, engine.releases.get());
+    }
+
+    @Test
+    void closingABorrowedWrapperDoesNotTombstoneTheEngineObject() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+
+        TestObject first =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+        first.close();
+        TestObject reacquired =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+
+        org.junit.jupiter.api.Assertions.assertNotSame(first, reacquired);
+        assertFalse(first.isAlive());
+        assertTrue(reacquired.isAlive());
+        assertEquals(0, engine.retains.get());
+        assertEquals(0, engine.releases.get());
+    }
+
+    @Test
     void shutdownInvalidatesBeforeReleasingAndRejectsNewWrappers() {
         CountingEngine engine = new CountingEngine();
         engine.valid(7);

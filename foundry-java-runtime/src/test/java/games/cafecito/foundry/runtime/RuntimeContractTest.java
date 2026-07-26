@@ -1,8 +1,13 @@
 package games.cafecito.foundry.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 class RuntimeContractTest {
@@ -24,5 +29,18 @@ class RuntimeContractTest {
         FoundryEngine engine = new NoOpEngine();
 
         assertThrows(IllegalArgumentException.class, () -> new FoundryBindingContext(0, engine));
+    }
+
+    @Test
+    void binaryApiGateIncludesGeneratedPublicBindings() throws IOException {
+        Path verifier =
+                Path.of(System.getProperty("user.dir"))
+                        .resolve("../gradle/verify-runtime-api.sh")
+                        .normalize();
+        String script = Files.readString(verifier);
+
+        assertTrue(script.contains("\"$classes_directory/games/cafecito/foundry\""));
+        assertFalse(script.contains("\"$classes_directory/games/cafecito/foundry/runtime\""));
+        assertFalse(script.contains("\"$classes_directory/games/cafecito/foundry/types\""));
     }
 }

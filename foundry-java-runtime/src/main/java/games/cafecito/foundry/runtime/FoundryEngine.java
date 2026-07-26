@@ -21,6 +21,9 @@ public interface FoundryEngine {
      */
     String objectType(long contextHandle, long objectHandle);
 
+    /** Instantiates one schema-declared instantiable engine class. */
+    long instantiate(long contextHandle, String className);
+
     void retain(long contextHandle, long objectHandle);
 
     void release(long contextHandle, long objectHandle);
