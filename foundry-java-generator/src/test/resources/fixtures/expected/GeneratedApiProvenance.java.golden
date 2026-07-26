@@ -1,0 +1,23 @@
+// Foundry-Java generated metadata; dynamic values use RFC 4648 base64.
+// generator-version-base64 MQ==
+// foundry-version-base64 MC4xLjAtYWxwaGEuOA==
+// foundry-commit-base64 MzkyM2U5MjBiMmZiNmRiNjhmODJkZmRhYjJiZjdiMWRmMTI1NDkyZA==
+// api-sha256-base64 ODVlOTExNzRjMWE4YTQ4NjI5MjIzZDY0NTliYjJlZjU5NWFkMWRhNDA1YjJjZTg4NDM1YzI0ZmUyMjFhZWM1MQ==
+// interface-header-sha256-base64 ZWNmOWExZjFlNmIyNjQyMzg1YTUyMTcyNTMxM2VmYjJiYWVhOGI4MWZjYWM5ZGM4MzdmNTVhNGI5MDQ5ODk5MQ==
+// compatibility-manifest-sha256-base64 MDE4M2Q1NDI0ZTBmZTlmM2M4ZTZhN2UxMjc0MzYwNTc5MTUxZTQ1YjQ1OTJjZmIwNGVmYWM2YzQzNTFkOTJjMw==
+package games.cafecito.foundry.generated;
+
+public final class GeneratedApiProvenance {
+    public static final String FOUNDRY_COMMIT = "3923e920b2fb6db68f82dfdab2bf7b1df125492d";
+    public static final String FOUNDRY_VERSION = "0.1.0-alpha.8";
+    public static final String API_SHA256 =
+            "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
+    public static final String INTERFACE_HEADER_SHA256 =
+            "ecf9a1f1e6b2642385a521725313efb2baea8b81fcac9dc837f55a4b90498991";
+    public static final String COMPATIBILITY_MANIFEST_SHA256 =
+            "<manifest-sha256>";
+    public static final String GENERATOR_VERSION = "1";
+    public static final String BRIDGE_CONTRACT_VERSION = "1";
+
+    private GeneratedApiProvenance() {}
+}
