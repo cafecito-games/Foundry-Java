@@ -31,6 +31,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
     public Set<String> getSupportedAnnotationTypes() {
         return Set.of(
                 ExtensionValidator.CLASS,
+                ExtensionValidator.CONSTANT,
                 ExtensionValidator.METHOD,
                 ExtensionValidator.PROPERTY,
                 ExtensionValidator.SIGNAL,

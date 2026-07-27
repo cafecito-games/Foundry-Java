@@ -32,6 +32,10 @@ val actualRuntimeJar =
         .tasks
         .named<Jar>("jar")
         .flatMap(Jar::getArchiveFile)
+val processorDescriptorGolden =
+    project(":foundry-java-processor")
+        .layout.projectDirectory
+        .file("src/test/resources/golden/demo-module.descriptor")
 
 tasks.named<PluginUnderTestMetadata>("pluginUnderTestMetadata") {
     pluginClasspath.from(agpTestPluginClasspath)
@@ -42,12 +46,17 @@ tasks.withType<Test>().configureEach {
     inputs.files(agp891TestPluginFiles)
     inputs.file(actualAndroidAar)
     inputs.file(actualRuntimeJar)
+    inputs.file(processorDescriptorGolden)
     systemProperty(
         "foundry.agp891.plugin.classpath",
         agp891TestPluginFiles.joinToString(File.pathSeparator),
     )
     systemProperty("foundry.actual.android.aar", actualAndroidAar.get().asFile.absolutePath)
     systemProperty("foundry.actual.runtime.jar", actualRuntimeJar.get().asFile.absolutePath)
+    systemProperty(
+        "foundry.processor.descriptor.golden",
+        processorDescriptorGolden.asFile.absolutePath,
+    )
 }
 
 gradlePlugin {

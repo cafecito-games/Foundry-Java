@@ -51,6 +51,9 @@ public final class SpinningCube extends Node3D {
     @FoundryProperty(getter = "speed", setter = "speed")
     private double speed;
 
+    @FoundryConstant(name = "FAST_MODE", enumName = "MovementMode")
+    public static final int FAST_MODE = 2;
+
     public double speed() {
         return speed;
     }
@@ -76,12 +79,26 @@ public final class SpinningCube extends Node3D {
 }
 ```
 
-`@FoundryClass`, `@FoundryMethod`, `@FoundryProperty`, `@FoundrySignal`, and
-`@FoundryOverride` accept an optional exported `name`. Empty method, property, signal, and class
-names use the Java declaration name. An empty override name instead uses the original Foundry
+`@FoundryClass`, `@FoundryConstant`, `@FoundryMethod`, `@FoundryProperty`, `@FoundrySignal`, and
+`@FoundryOverride` accept an optional exported `name`. Empty constant, method, property, signal, and
+class names use the Java declaration name. An empty override name instead uses the original Foundry
 virtual identity preserved on the generated Java callback, such as `_process` for `onProcess`.
 When an override name is explicit, it must equal that generated identity. All exported names in one
 class share a namespace and must be unique.
+
+`@FoundryConstant` belongs on a `static final` integral field whose initializer is a compile-time
+constant expression. The processor reads the constant value from the field itself. Its optional
+`enumName` places the value in a named Foundry enum group, while `bitfield = true` marks that group
+as a bitfield. All three annotation members default to the legacy-neutral values `name = ""`,
+`enumName = ""`, and `bitfield = false`.
+
+`@FoundryProperty` keeps `name`, `getter`, and `setter` source-compatible and adds optional
+registration metadata. `index` defaults to `-1`, meaning an ordinary non-indexed property.
+Non-empty `groupName` and optional `groupPrefix` identify a property group; non-empty
+`subgroupName` and optional `subgroupPrefix` identify a subgroup. A prefix requires its
+corresponding name, while a named group or subgroup may use an empty prefix. The processor validates
+those pairs before emitting registration metadata. Existing property declarations need no changes
+because every new member has a neutral default.
 
 An exported method or virtual override must be a public instance method without Java type
 parameters or checked exceptions. Unchecked `RuntimeException` and `Error` declarations are

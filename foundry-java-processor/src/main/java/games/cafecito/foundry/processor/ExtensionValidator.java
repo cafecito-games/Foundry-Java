@@ -31,6 +31,7 @@ import javax.tools.Diagnostic;
 
 final class ExtensionValidator {
     static final String CLASS = "games.cafecito.foundry.annotations.FoundryClass";
+    static final String CONSTANT = "games.cafecito.foundry.annotations.FoundryConstant";
     static final String METHOD = "games.cafecito.foundry.annotations.FoundryMethod";
     static final String PROPERTY = "games.cafecito.foundry.annotations.FoundryProperty";
     static final String SIGNAL = "games.cafecito.foundry.annotations.FoundrySignal";
@@ -99,12 +100,23 @@ final class ExtensionValidator {
 
         List<ExtensionModel.MethodModel> methods = new ArrayList<>();
         List<ExtensionModel.MethodModel> overrides = new ArrayList<>();
+        List<ExtensionModel.ConstantModel> constants = new ArrayList<>();
         List<ExtensionModel.PropertyModel> properties = new ArrayList<>();
         List<ExtensionModel.SignalModel> signals = new ArrayList<>();
         Map<String, Element> exportedNames = new LinkedHashMap<>();
         Map<String, VariableElement> propertyAccessors = new LinkedHashMap<>();
 
         for (Element member : extension.getEnclosedElements()) {
+            annotation(member, CONSTANT)
+                    .ifPresent(
+                            mirror -> {
+                                VariableElement field = (VariableElement) member;
+                                String exported =
+                                        exportedName(
+                                                field, mirror, field.getSimpleName().toString());
+                                checkDuplicate(exportedNames, exported, field);
+                                validateConstant(field, mirror, exported).ifPresent(constants::add);
+                            });
             annotation(member, METHOD)
                     .ifPresent(
                             mirror -> {
@@ -166,7 +178,12 @@ final class ExtensionValidator {
                                                 exported,
                                                 field.asType().toString(),
                                                 stringValue(mirror, "getter"),
-                                                stringValue(mirror, "setter")));
+                                                stringValue(mirror, "setter"),
+                                                intValue(mirror, "index"),
+                                                stringValue(mirror, "groupName"),
+                                                stringValue(mirror, "groupPrefix"),
+                                                stringValue(mirror, "subgroupName"),
+                                                stringValue(mirror, "subgroupPrefix")));
                             });
             annotation(member, SIGNAL)
                     .ifPresent(
@@ -218,13 +235,15 @@ final class ExtensionValidator {
                         bindingConstructor,
                         dependencies,
                         methods,
+                        constants,
                         properties,
                         signals,
                         overrides));
     }
 
     void validateAnnotationPlacement(RoundEnvironment roundEnvironment) {
-        for (String annotationName : List.of(METHOD, PROPERTY, SIGNAL, OVERRIDE, INITIALIZATION)) {
+        for (String annotationName :
+                List.of(CONSTANT, METHOD, PROPERTY, SIGNAL, OVERRIDE, INITIALIZATION)) {
             TypeElement annotationType = elements.getTypeElement(annotationName);
             if (annotationType == null) {
                 continue;
@@ -447,6 +466,62 @@ final class ExtensionValidator {
         return false;
     }
 
+    private Optional<ExtensionModel.ConstantModel> validateConstant(
+            VariableElement field, AnnotationMirror constant, String exportedName) {
+        int errorsBefore = errorCount;
+        String fieldName = field.getSimpleName().toString();
+        boolean staticFinal =
+                field.getModifiers().contains(Modifier.STATIC)
+                        && field.getModifiers().contains(Modifier.FINAL);
+        if (!staticFinal) {
+            error(field, constant, "Foundry constant " + fieldName + " must be static final");
+        }
+        TypeKind kind = field.asType().getKind();
+        boolean integral =
+                kind == TypeKind.BYTE
+                        || kind == TypeKind.SHORT
+                        || kind == TypeKind.INT
+                        || kind == TypeKind.LONG
+                        || kind == TypeKind.CHAR;
+        if (!integral) {
+            error(
+                    field,
+                    constant,
+                    "Foundry constant " + fieldName + " must use byte, short, int, long, or char");
+        }
+        Object rawValue = field.getConstantValue();
+        if (staticFinal && integral && rawValue == null) {
+            error(
+                    field,
+                    constant,
+                    "Foundry constant " + fieldName + " must have a compile-time integral value");
+        }
+        String enumName = optionalMetadata(field, constant, "enumName", "constant enumName");
+        boolean bitfield = booleanValue(constant, "bitfield");
+        if (bitfield && enumName.isEmpty()) {
+            error(
+                    field,
+                    constant,
+                    value(constant, "bitfield"),
+                    "bitfield constant must declare a non-empty enumName");
+        }
+        if (errorCount != errorsBefore) {
+            return Optional.empty();
+        }
+        long value =
+                rawValue instanceof Character character
+                        ? character.charValue()
+                        : ((Number) rawValue).longValue();
+        return Optional.of(
+                new ExtensionModel.ConstantModel(
+                        fieldName,
+                        exportedName,
+                        field.asType().toString(),
+                        enumName,
+                        value,
+                        bitfield));
+    }
+
     private void validateProperty(
             TypeElement extension,
             VariableElement field,
@@ -454,8 +529,39 @@ final class ExtensionValidator {
             Map<String, VariableElement> usedAccessors) {
         String getter = stringValue(property, "getter");
         String setter = stringValue(property, "setter");
+        int index = intValue(property, "index");
+        String groupName = optionalMetadata(field, property, "groupName", "property groupName");
+        String groupPrefix =
+                optionalMetadata(field, property, "groupPrefix", "property groupPrefix");
+        String subgroupName =
+                optionalMetadata(field, property, "subgroupName", "property subgroupName");
+        String subgroupPrefix =
+                optionalMetadata(field, property, "subgroupPrefix", "property subgroupPrefix");
+        if (index < -1) {
+            error(
+                    field,
+                    property,
+                    value(property, "index"),
+                    "property index must be -1 or non-negative");
+        }
+        if (groupName.isEmpty() && !groupPrefix.isEmpty()) {
+            error(
+                    field,
+                    property,
+                    value(property, "groupPrefix"),
+                    "property groupPrefix requires a non-empty groupName");
+        }
+        if (subgroupName.isEmpty() && !subgroupPrefix.isEmpty()) {
+            error(
+                    field,
+                    property,
+                    value(property, "subgroupPrefix"),
+                    "property subgroupPrefix requires a non-empty subgroupName");
+        }
         if (getter.isEmpty()) {
             error(field, property, value(property, "getter"), "property getter must be specified");
+        } else if (getter.isBlank()) {
+            error(field, property, value(property, "getter"), "property getter must be non-blank");
         } else {
             checkAccessorReuse(usedAccessors, getter, field, property);
             List<ExecutableElement> candidates = methodsNamed(extension, getter);
@@ -487,6 +593,14 @@ final class ExtensionValidator {
             }
         }
         if (!setter.isEmpty()) {
+            if (setter.isBlank()) {
+                error(
+                        field,
+                        property,
+                        value(property, "setter"),
+                        "property setter must be empty or non-blank");
+                return;
+            }
             checkAccessorReuse(usedAccessors, setter, field, property);
             List<ExecutableElement> candidates = methodsNamed(extension, setter);
             Optional<ExecutableElement> matchingSetter =
@@ -519,6 +633,22 @@ final class ExtensionValidator {
                                                         + " cannot declare checked exceptions"));
             }
         }
+    }
+
+    private String optionalMetadata(
+            Element element,
+            AnnotationMirror annotation,
+            String memberName,
+            String diagnosticName) {
+        String configured = stringValue(annotation, memberName);
+        if (!configured.isEmpty() && configured.isBlank()) {
+            error(
+                    element,
+                    annotation,
+                    value(annotation, memberName),
+                    diagnosticName + " must be empty or non-blank");
+        }
+        return configured;
     }
 
     private void checkAccessorReuse(
@@ -734,6 +864,14 @@ final class ExtensionValidator {
 
     private String stringValue(AnnotationMirror annotation, String name) {
         return (String) value(annotation, name).getValue();
+    }
+
+    private int intValue(AnnotationMirror annotation, String name) {
+        return (Integer) value(annotation, name).getValue();
+    }
+
+    private boolean booleanValue(AnnotationMirror annotation, String name) {
+        return (Boolean) value(annotation, name).getValue();
     }
 
     private Optional<AnnotationMirror> annotation(Element element, String qualifiedName) {
