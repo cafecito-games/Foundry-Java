@@ -6,15 +6,19 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import games.cafecito.foundry.runtime.FoundryBridgeCallbacks;
+import games.cafecito.foundry.runtime.FoundryEngine;
 import games.cafecito.foundry.runtime.FoundryModuleDescriptor;
 import games.cafecito.foundry.runtime.FoundryModuleProvider;
 import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
 import games.cafecito.foundry.runtime.FoundryRuntime;
 import java.io.IOException;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class FoundryJavaInitializerTest {
@@ -67,6 +71,34 @@ class FoundryJavaInitializerTest {
         TypedInitializer initializer = FoundryJavaInitializer::initialize;
 
         assertNotNull(initializer);
+    }
+
+    @Test
+    void productionEngineConstructionIsDeferredUntilCoreInitialization() {
+        AtomicInteger constructions = new AtomicInteger();
+        AtomicReference<FoundryBridgeCallbacks> primedCallbacks = new AtomicReference<>();
+        FoundryJavaInitializer.PrimingState state =
+                new FoundryJavaInitializer.PrimingState(
+                        () -> {},
+                        (loader, callbacks) -> {
+                            primedCallbacks.set(callbacks);
+                            return true;
+                        },
+                        ignored -> {
+                            constructions.incrementAndGet();
+                            return noOpEngine();
+                        },
+                        ignored -> {});
+
+        state.prime(getClass().getClassLoader(), new FoundryRegistryBootstrap(List.of()));
+
+        assertEquals(0, constructions.get());
+        assertFalse(primedCallbacks.get().initialize(91, 1));
+        assertEquals(0, constructions.get());
+        assertTrue(primedCallbacks.get().initialize(91, 0));
+        assertEquals(1, constructions.get());
+        assertTrue(primedCallbacks.get().initialize(91, 0));
+        assertEquals(1, constructions.get());
     }
 
     @Test
@@ -128,6 +160,19 @@ class FoundryJavaInitializerTest {
                         FoundryRuntime.BRIDGE_CONTRACT_VERSION,
                         List.of());
         return () -> descriptor;
+    }
+
+    private static FoundryEngine noOpEngine() {
+        return (FoundryEngine)
+                Proxy.newProxyInstance(
+                        FoundryEngine.class.getClassLoader(),
+                        new Class<?>[] {FoundryEngine.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getReturnType().getName()) {
+                                    case "boolean" -> false;
+                                    case "long" -> 0L;
+                                    default -> null;
+                                });
     }
 
     @FunctionalInterface
