@@ -109,6 +109,22 @@ public final class games.cafecito.foundry.kotlin.FoundryDelegates {
     descriptor: (Lkotlin/jvm/functions/Function0;)Lkotlin/properties/ReadOnlyProperty;
 }
 
+## games.cafecito.foundry.kotlin.FoundryRegistration
+Compiled from "Registration.kt"
+public final class games.cafecito.foundry.kotlin.FoundryRegistration {
+  public static final games.cafecito.foundry.runtime.FoundryRegistryBootstrap foundryRegistry(kotlin.jvm.functions.Function1<? super games.cafecito.foundry.kotlin.FoundryRegistryBuilder, kotlin.Unit>);
+    descriptor: (Lkotlin/jvm/functions/Function1;)Lgames/cafecito/foundry/runtime/FoundryRegistryBootstrap;
+}
+
+## games.cafecito.foundry.kotlin.FoundryRegistryBuilder
+Compiled from "Registration.kt"
+public final class games.cafecito.foundry.kotlin.FoundryRegistryBuilder {
+  public games.cafecito.foundry.kotlin.FoundryRegistryBuilder();
+    descriptor: ()V
+  public final void provider(games.cafecito.foundry.runtime.FoundryModuleProvider);
+    descriptor: (Lgames/cafecito/foundry/runtime/FoundryModuleProvider;)V
+}
+
 ## games.cafecito.foundry.kotlin.FoundrySignalAwait
 Compiled from "SignalAwait.kt"
 public final class games.cafecito.foundry.kotlin.FoundrySignalAwait {

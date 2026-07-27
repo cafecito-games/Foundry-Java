@@ -5,12 +5,15 @@ import games.cafecito.foundry.kotlin.await
 import games.cafecito.foundry.kotlin.bind
 import games.cafecito.foundry.kotlin.call
 import games.cafecito.foundry.kotlin.foundryProperty
+import games.cafecito.foundry.kotlin.foundryRegistry
 import games.cafecito.foundry.kotlin.listen
 import games.cafecito.foundry.kotlin.toFoundryArray
 import games.cafecito.foundry.kotlin.toKotlinList
 import games.cafecito.foundry.kotlin.toVariant
 import games.cafecito.foundry.runtime.FoundryBindingContext
+import games.cafecito.foundry.runtime.FoundryModuleProvider
 import games.cafecito.foundry.runtime.FoundryObject
+import games.cafecito.foundry.runtime.FoundryRegistryBootstrap
 import games.cafecito.foundry.runtime.FoundrySignal
 import games.cafecito.foundry.runtime.FoundryTypedSignal
 import games.cafecito.foundry.runtime.ObjectLease
@@ -56,3 +59,8 @@ suspend fun awaitTwo(
 ): SignalArgs2<String, Long> = signal.await(owner)
 
 fun rawVariant(value: String): Variant = value.toVariant()
+
+fun bootstrapKotlinProviders(vararg providers: FoundryModuleProvider): FoundryRegistryBootstrap =
+    foundryRegistry {
+        providers.forEach(::provider)
+    }

@@ -242,10 +242,24 @@ names or overloads.
 
 ## Registration boundary
 
-Kotlin registration conveniences are thin builders over the public generated
-module-provider and registry-bootstrap API. Providers remain explicit and
-reflection-free. The Kotlin artifact never scans classes, service metadata,
-manifests, or descriptors and never defines another registry protocol.
+Kotlin registration is a thin builder over the public generated
+module-provider and registry-bootstrap API:
+
+```kotlin
+import games.cafecito.foundry.kotlin.foundryRegistry
+
+val bootstrap =
+    foundryRegistry {
+        provider(CoffeeRegistry.PROVIDER)
+        provider(PastryRegistry.PROVIDER)
+    }
+```
+
+Providers remain explicit and reflection-free. The Java
+`FoundryRegistryBootstrap` performs deterministic sorting, duplicate checks,
+and provenance validation. The Kotlin artifact never scans classes, service
+metadata, manifests, or descriptors and never defines another registry
+protocol.
 
 ## Deliberate boundaries
 
