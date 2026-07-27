@@ -254,12 +254,8 @@ private:
 };
 
 struct JniState {
-	std::mutex mutex;
-	JavaVM *java_vm = nullptr;
-	jobject class_loader = nullptr;
+	JniTransitionState transition;
 	std::shared_ptr<FoundryErrorSink> errors = std::make_shared<FoundryErrorSink>();
-	std::shared_ptr<BridgeRuntime> runtime;
-	bool bootstrap_in_progress = false;
 };
 
 JniState state;
@@ -276,31 +272,34 @@ public:
 			return false;
 		}
 		GlobalReferenceGuard loader_guard(environment, requested_global);
-		jobject previous_class_loader = nullptr;
-		{
-			std::lock_guard lock(state.mutex);
-			if (state.runtime != nullptr || state.bootstrap_in_progress ||
-					state.java_vm == nullptr || state.class_loader == nullptr) {
-				return false;
-			}
-			state.bootstrap_in_progress = true;
-			java_vm = state.java_vm;
-			previous_class_loader = std::exchange(
-					state.class_loader, loader_guard.release());
-			active = true;
+		JniTransitionState::Token java_vm_token = 0;
+		ticket = state.transition.reserve_bootstrap(java_vm_token);
+		if (ticket == 0) {
+			return false;
 		}
-		environment->DeleteGlobalRef(previous_class_loader);
+		this->environment = environment;
+		requested_global = loader_guard.release();
+		java_vm = reinterpret_cast<JavaVM *>(java_vm_token);
+		active = true;
 		return true;
 	}
 
 	bool publish(std::shared_ptr<BridgeRuntime> runtime) {
-		std::lock_guard lock(state.mutex);
-		if (!active || !state.bootstrap_in_progress || state.runtime != nullptr) {
+		if (!active || environment == nullptr || requested_global == nullptr) {
 			return false;
 		}
-		state.runtime = std::move(runtime);
-		state.bootstrap_in_progress = false;
+		JniTransitionState::Token previous_class_loader = 0;
+		if (!state.transition.publish_bootstrap(
+					ticket,
+					std::move(runtime),
+					reinterpret_cast<JniTransitionState::Token>(requested_global),
+					previous_class_loader)) {
+			return false;
+		}
+		requested_global = nullptr;
 		active = false;
+		environment->DeleteGlobalRef(
+				reinterpret_cast<jobject>(previous_class_loader));
 		return true;
 	}
 
@@ -308,8 +307,10 @@ public:
 		if (!active) {
 			return;
 		}
-		std::lock_guard lock(state.mutex);
-		state.bootstrap_in_progress = false;
+		(void)state.transition.cancel_bootstrap(ticket);
+		if (environment != nullptr && requested_global != nullptr) {
+			environment->DeleteGlobalRef(requested_global);
+		}
 	}
 
 	BootstrapReservation() = default;
@@ -317,6 +318,9 @@ public:
 	BootstrapReservation &operator=(const BootstrapReservation &) = delete;
 
 private:
+	JNIEnv *environment = nullptr;
+	jobject requested_global = nullptr;
+	JniTransitionState::Ticket ticket = 0;
 	bool active = false;
 };
 
@@ -347,15 +351,13 @@ bool contract_matches(
 }
 
 std::shared_ptr<BridgeRuntime> live_runtime() {
-	std::lock_guard lock(state.mutex);
-	return state.runtime;
+	return state.transition.runtime();
 }
 
 } // namespace
 
 bool jni_bridge_is_ready() noexcept {
-	std::lock_guard lock(state.mutex);
-	return state.java_vm != nullptr && state.class_loader != nullptr && state.runtime != nullptr;
+	return state.transition.ready();
 }
 
 ContextHandle jni_bridge_create_context() noexcept {
@@ -400,24 +402,26 @@ bool jni_bridge_install_native_services(
 }
 
 bool jni_bridge_shutdown() noexcept {
-	auto runtime = live_runtime();
-	if (runtime != nullptr &&
-			!runtime->shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE)) {
+	std::shared_ptr<BridgeRuntime> runtime;
+	const JniTransitionState::Ticket ticket =
+			state.transition.reserve_shutdown(runtime);
+	if (ticket == 0) {
 		return false;
 	}
-	JavaVM *java_vm = nullptr;
-	jobject class_loader = nullptr;
-	{
-		std::lock_guard lock(state.mutex);
-		if (state.bootstrap_in_progress) {
-			return false;
-		}
-		if (state.runtime == runtime) {
-			state.runtime.reset();
-		}
-		java_vm = state.java_vm;
-		class_loader = std::exchange(state.class_loader, nullptr);
+	if (runtime != nullptr &&
+			!runtime->shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE)) {
+		(void)state.transition.cancel_shutdown(ticket, runtime);
+		return false;
 	}
+	JniTransitionState::Token java_vm_token = 0;
+	JniTransitionState::Token class_loader_token = 0;
+	if (!state.transition.finish_shutdown(
+				ticket, runtime, java_vm_token, class_loader_token)) {
+		(void)state.transition.cancel_shutdown(ticket, runtime);
+		return false;
+	}
+	auto *java_vm = reinterpret_cast<JavaVM *>(java_vm_token);
+	auto class_loader = reinterpret_cast<jobject>(class_loader_token);
 	AttachedEnvironment attached(java_vm);
 	if (attached.get() != nullptr && class_loader != nullptr) {
 		attached.get()->DeleteGlobalRef(class_loader);
@@ -468,14 +472,12 @@ FOUNDRY_JAVA_JNI_EXPORT jint JNICALL JNI_OnLoad(JavaVM *java_vm, void *) {
 			return JNI_ERR;
 		}
 		foundry_java::GlobalReferenceGuard loader_guard(environment, global_loader);
-		{
-			std::lock_guard lock(foundry_java::state.mutex);
-			if (foundry_java::state.java_vm != nullptr || foundry_java::state.class_loader != nullptr) {
-				return JNI_ERR;
-			}
-			foundry_java::state.java_vm = java_vm;
-			foundry_java::state.class_loader = loader_guard.release();
+		if (!foundry_java::state.transition.install(
+					reinterpret_cast<foundry_java::JniTransitionState::Token>(java_vm),
+					reinterpret_cast<foundry_java::JniTransitionState::Token>(global_loader))) {
+			return JNI_ERR;
 		}
+		(void)loader_guard.release();
 		return JNI_VERSION_1_6;
 	} catch (...) {
 		return JNI_ERR;
@@ -485,8 +487,7 @@ FOUNDRY_JAVA_JNI_EXPORT jint JNICALL JNI_OnLoad(JavaVM *java_vm, void *) {
 FOUNDRY_JAVA_JNI_EXPORT void JNICALL JNI_OnUnload(JavaVM *, void *) {
 	try {
 		(void)foundry_java::jni_bridge_shutdown();
-		std::lock_guard lock(foundry_java::state.mutex);
-		foundry_java::state.java_vm = nullptr;
+		foundry_java::state.transition.clear_java_vm();
 	} catch (...) {
 	}
 }
@@ -843,12 +844,14 @@ jclass load_application_class(JNIEnv *environment, const char *slash_name) {
 		return nullptr;
 	}
 	jobject loader = nullptr;
-	{
-		std::lock_guard lock(state.mutex);
-		if (state.class_loader != nullptr) {
-			loader = environment->NewLocalRef(state.class_loader);
-		}
-	}
+	const JniTransitionState::Token loader_token =
+			state.transition.pin_class_loader(
+					[environment](JniTransitionState::Token class_loader) {
+						return reinterpret_cast<JniTransitionState::Token>(
+								environment->NewLocalRef(
+										reinterpret_cast<jobject>(class_loader)));
+					});
+	loader = reinterpret_cast<jobject>(loader_token);
 	if (loader == nullptr) {
 		return nullptr;
 	}
@@ -1233,7 +1236,8 @@ NativeHandle encode_variant(
 			return 0;
 		}
 		auto reference = std::make_shared<JavaCallableReference>();
-		reference->java_vm = state.java_vm;
+		reference->java_vm = reinterpret_cast<JavaVM *>(
+				state.transition.java_vm());
 		reference->callable = global;
 		return transport.construct_local_callable(
 				context,

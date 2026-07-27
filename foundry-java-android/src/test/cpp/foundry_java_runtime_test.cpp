@@ -16,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -1052,6 +1053,145 @@ public:
 	bool deinitialize_started = false;
 	bool release_deinitialize = false;
 };
+
+void test_jni_transition_tickets_commit_and_release_loader_ownership_exactly() {
+	using State = foundry_java::JniTransitionState;
+	int loader_creations = 0;
+	int loader_releases = 0;
+	std::unordered_set<State::Token> owned_loaders;
+	const auto create_loader = [&] {
+		const State::Token loader = static_cast<State::Token>(++loader_creations);
+		owned_loaders.insert(loader);
+		return loader;
+	};
+	const auto release_loader = [&](State::Token loader) {
+		expect(loader != 0, "released loader token must be nonzero");
+		expect(
+				owned_loaders.erase(loader) == 1,
+				"every loader token must transfer and release exactly once");
+		loader_releases++;
+	};
+	const auto current_loader = [](const State &state) {
+		return state.pin_class_loader([](State::Token loader) { return loader; });
+	};
+
+	State state;
+	const State::Token initial_loader = create_loader();
+	expect(state.install(71, initial_loader), "JNI transition state must install exactly once");
+	State::Token java_vm = 0;
+	const State::Ticket first_bootstrap = state.reserve_bootstrap(java_vm);
+	expect(
+			first_bootstrap != 0 && java_vm == 71,
+			"bootstrap reservation must authenticate the installed VM");
+	const State::Token rejected_candidate = create_loader();
+	State::Token previous_loader = 0;
+	expect(
+			!state.publish_bootstrap(
+					first_bootstrap, nullptr, rejected_candidate, previous_loader),
+			"bootstrap cannot commit a candidate loader without a runtime");
+	expect(
+			current_loader(state) == initial_loader,
+			"failed bootstrap publish must preserve the installed loader");
+	expect(
+			!state.cancel_bootstrap(first_bootstrap + 1),
+			"a stale bootstrap ticket cannot cancel its owner");
+	expect(
+			state.cancel_bootstrap(first_bootstrap),
+			"the owning bootstrap ticket must cancel after validation failure");
+	release_loader(rejected_candidate);
+
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	auto runtime = std::make_shared<foundry_java::BridgeRuntime>(callbacks, errors);
+	const State::Token committed_candidate = create_loader();
+	const State::Ticket second_bootstrap = state.reserve_bootstrap(java_vm);
+	expect(second_bootstrap != 0, "bootstrap must retry after its owner cancels");
+	expect(
+			state.reserve_shutdown(runtime) == 0,
+			"shutdown cannot overlap an active bootstrap reservation");
+	std::shared_ptr<foundry_java::BridgeRuntime> published_runtime = runtime;
+	expect(
+			state.publish_bootstrap(
+					second_bootstrap,
+					published_runtime,
+					committed_candidate,
+					previous_loader),
+			"bootstrap publish must atomically commit runtime and candidate loader");
+	expect(
+			previous_loader == initial_loader &&
+					current_loader(state) == committed_candidate &&
+					state.runtime() == runtime && state.ready(),
+			"published runtime and loader must become visible as one state transition");
+	release_loader(previous_loader);
+	expect(
+			!state.cancel_bootstrap(second_bootstrap),
+			"a consumed bootstrap ticket must be stale");
+
+	std::shared_ptr<foundry_java::BridgeRuntime> shutdown_runtime;
+	const State::Ticket failed_shutdown = state.reserve_shutdown(shutdown_runtime);
+	expect(
+			failed_shutdown != 0 && shutdown_runtime == runtime,
+			"shutdown reservation must atomically snapshot the published runtime");
+	expect(
+			state.reserve_bootstrap(java_vm) == 0,
+			"bootstrap cannot overlap a reserved runtime drain");
+	State::Token shutdown_vm = 0;
+	State::Token shutdown_loader = 0;
+	expect(
+			!state.finish_shutdown(
+					failed_shutdown + 1,
+					shutdown_runtime,
+					shutdown_vm,
+					shutdown_loader),
+			"a stale shutdown ticket cannot clear runtime or loader state");
+	expect(
+			state.cancel_shutdown(failed_shutdown, shutdown_runtime) && state.ready(),
+			"a failed drain must cancel without changing published ownership");
+
+	const State::Ticket retry_shutdown = state.reserve_shutdown(shutdown_runtime);
+	expect(retry_shutdown != 0, "shutdown must retry after a failed drain cancels");
+	expect(
+			state.finish_shutdown(
+					retry_shutdown,
+					shutdown_runtime,
+					shutdown_vm,
+					shutdown_loader),
+			"the owning shutdown ticket must atomically clear runtime and loader");
+	expect(
+			shutdown_vm == 71 && shutdown_loader == committed_candidate &&
+					state.runtime() == nullptr && current_loader(state) == 0,
+			"shutdown must return the exact committed loader for JNI deletion");
+	release_loader(shutdown_loader);
+	state.clear_java_vm();
+	expect(state.java_vm() == 0, "unloaded, drained JNI state must clear its VM");
+
+	State null_runtime_state;
+	const State::Token null_runtime_loader = create_loader();
+	expect(
+			null_runtime_state.install(72, null_runtime_loader),
+			"null-runtime shutdown fixture must install");
+	std::shared_ptr<foundry_java::BridgeRuntime> null_runtime;
+	const State::Ticket null_shutdown =
+			null_runtime_state.reserve_shutdown(null_runtime);
+	expect(
+			null_shutdown != 0 && null_runtime == nullptr,
+			"shutdown must reserve even before a runtime is published");
+	expect(
+			null_runtime_state.reserve_bootstrap(java_vm) == 0,
+			"null-runtime shutdown must exclude bootstrap through loader clearing");
+	expect(
+			null_runtime_state.finish_shutdown(
+					null_shutdown,
+					null_runtime,
+					shutdown_vm,
+					shutdown_loader),
+			"null-runtime shutdown owner must clear the initial loader");
+	release_loader(shutdown_loader);
+
+	expect(
+			loader_creations == 4 && loader_releases == 4 && owned_loaders.empty(),
+			"every initial and candidate loader must have one exact release owner");
+}
 
 void test_context_identity_reentrancy_and_exception_containment() {
 	auto callbacks = std::make_shared<RecordingCallbacks>();
@@ -2598,6 +2738,7 @@ bool jni_bridge_shutdown() noexcept {
 } // namespace foundry_java
 
 int main() {
+	test_jni_transition_tickets_commit_and_release_loader_ownership_exactly();
 	test_context_identity_reentrancy_and_exception_containment();
 	test_shutdown_waits_for_active_callback_lease();
 	test_shutdown_waits_for_native_operations_then_tears_down_resources();

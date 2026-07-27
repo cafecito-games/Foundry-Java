@@ -373,18 +373,25 @@ class NativeBridgeContractTest {
     @Test
     void bootstrapDoesNotHoldStateMutexAcrossJniWork() throws IOException {
         String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        String transitions = read("foundry-java-android/src/main/cpp/foundry_java_handles.cpp");
         int bootstrapStart = jni.indexOf("FoundryJavaInitializer_nativeBootstrapV1(");
         int bootstrapEnd = jni.indexOf("FoundryJavaInitializer_nativeCreateContextV1(");
         String bootstrap = jni.substring(bootstrapStart, bootstrapEnd);
 
-        assertTrue(jni.contains("bootstrap_in_progress"));
+        assertTrue(jni.contains("JniTransitionState transition"));
         assertTrue(bootstrap.contains("BootstrapReservation"));
         assertTrue(bootstrap.contains("bootstrap.begin(environment, class_loader, java_vm)"));
         assertFalse(bootstrap.contains("IsSameObject"));
         assertFalse(bootstrap.contains("std::lock_guard lock(foundry_java::state.mutex)"));
+        assertTrue(transitions.contains("impl->phase = Impl::Phase::BOOTSTRAP"));
+        assertTrue(transitions.contains("impl->phase = Impl::Phase::SHUTDOWN"));
+        assertTrue(transitions.contains("impl->active_ticket != ticket"));
+        assertTrue(transitions.contains("impl->class_loader, requested_class_loader"));
+        assertTrue(jni.contains("state.transition.reserve_shutdown(runtime)"));
+        assertTrue(jni.contains("state.transition.cancel_shutdown(ticket, runtime)"));
         assertEquals(2, occurrences(jni, "\"argument unmarshaling\""));
         assertFalse(jni.contains("void release_class_loader()"));
-        assertTrue(jni.contains("class_loader = std::exchange(state.class_loader, nullptr)"));
+        assertFalse(jni.contains("state.class_loader"));
     }
 
     @Test

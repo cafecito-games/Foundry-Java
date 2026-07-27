@@ -176,6 +176,159 @@ struct BridgeRuntime::Impl {
 	bool accepting_contexts = true;
 };
 
+struct JniTransitionState::Impl {
+	enum class Phase : std::uint8_t {
+		IDLE,
+		BOOTSTRAP,
+		SHUTDOWN,
+	};
+
+	mutable std::mutex mutex;
+	Token java_vm = 0;
+	Token class_loader = 0;
+	std::shared_ptr<BridgeRuntime> runtime;
+	Phase phase = Phase::IDLE;
+	Ticket active_ticket = 0;
+	Ticket next_ticket = 1;
+};
+
+JniTransitionState::JniTransitionState() :
+		impl(std::make_unique<Impl>()) {
+}
+
+JniTransitionState::~JniTransitionState() = default;
+
+bool JniTransitionState::install(Token java_vm, Token class_loader) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (java_vm == 0 || class_loader == 0 ||
+			impl->java_vm != 0 || impl->class_loader != 0 ||
+			impl->runtime != nullptr || impl->phase != Impl::Phase::IDLE) {
+		return false;
+	}
+	impl->java_vm = java_vm;
+	impl->class_loader = class_loader;
+	return true;
+}
+
+JniTransitionState::Ticket JniTransitionState::reserve_bootstrap(
+		Token &java_vm) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (impl->runtime != nullptr || impl->phase != Impl::Phase::IDLE ||
+			impl->java_vm == 0 || impl->class_loader == 0 ||
+			impl->next_ticket == 0 ||
+			impl->next_ticket == std::numeric_limits<Ticket>::max()) {
+		return 0;
+	}
+	impl->phase = Impl::Phase::BOOTSTRAP;
+	impl->active_ticket = impl->next_ticket++;
+	java_vm = impl->java_vm;
+	return impl->active_ticket;
+}
+
+bool JniTransitionState::publish_bootstrap(
+		Ticket ticket,
+		std::shared_ptr<BridgeRuntime> runtime,
+		Token requested_class_loader,
+		Token &previous_class_loader) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (ticket == 0 || impl->phase != Impl::Phase::BOOTSTRAP ||
+			impl->active_ticket != ticket || impl->runtime != nullptr ||
+			runtime == nullptr || requested_class_loader == 0) {
+		return false;
+	}
+	previous_class_loader = std::exchange(
+			impl->class_loader, requested_class_loader);
+	impl->runtime = std::move(runtime);
+	impl->phase = Impl::Phase::IDLE;
+	impl->active_ticket = 0;
+	return true;
+}
+
+bool JniTransitionState::cancel_bootstrap(Ticket ticket) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (ticket == 0 || impl->phase != Impl::Phase::BOOTSTRAP ||
+			impl->active_ticket != ticket) {
+		return false;
+	}
+	impl->phase = Impl::Phase::IDLE;
+	impl->active_ticket = 0;
+	return true;
+}
+
+JniTransitionState::Ticket JniTransitionState::reserve_shutdown(
+		std::shared_ptr<BridgeRuntime> &runtime) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (impl->phase != Impl::Phase::IDLE || impl->next_ticket == 0 ||
+			impl->next_ticket == std::numeric_limits<Ticket>::max()) {
+		return 0;
+	}
+	impl->phase = Impl::Phase::SHUTDOWN;
+	impl->active_ticket = impl->next_ticket++;
+	runtime = impl->runtime;
+	return impl->active_ticket;
+}
+
+bool JniTransitionState::finish_shutdown(
+		Ticket ticket,
+		const std::shared_ptr<BridgeRuntime> &runtime,
+		Token &java_vm,
+		Token &class_loader) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (ticket == 0 || impl->phase != Impl::Phase::SHUTDOWN ||
+			impl->active_ticket != ticket || impl->runtime != runtime) {
+		return false;
+	}
+	impl->runtime.reset();
+	java_vm = impl->java_vm;
+	class_loader = std::exchange(impl->class_loader, 0);
+	impl->phase = Impl::Phase::IDLE;
+	impl->active_ticket = 0;
+	return true;
+}
+
+bool JniTransitionState::cancel_shutdown(
+		Ticket ticket,
+		const std::shared_ptr<BridgeRuntime> &runtime) noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (ticket == 0 || impl->phase != Impl::Phase::SHUTDOWN ||
+			impl->active_ticket != ticket || impl->runtime != runtime) {
+		return false;
+	}
+	impl->phase = Impl::Phase::IDLE;
+	impl->active_ticket = 0;
+	return true;
+}
+
+std::shared_ptr<BridgeRuntime> JniTransitionState::runtime() const noexcept {
+	std::lock_guard lock(impl->mutex);
+	return impl->runtime;
+}
+
+JniTransitionState::Token JniTransitionState::java_vm() const noexcept {
+	std::lock_guard lock(impl->mutex);
+	return impl->java_vm;
+}
+
+JniTransitionState::Token JniTransitionState::pin_class_loader(
+		const std::function<Token(Token)> &pin) const {
+	std::lock_guard lock(impl->mutex);
+	return impl->class_loader == 0 ? 0 : pin(impl->class_loader);
+}
+
+bool JniTransitionState::ready() const noexcept {
+	std::lock_guard lock(impl->mutex);
+	return impl->java_vm != 0 && impl->class_loader != 0 &&
+			impl->runtime != nullptr && impl->phase == Impl::Phase::IDLE;
+}
+
+void JniTransitionState::clear_java_vm() noexcept {
+	std::lock_guard lock(impl->mutex);
+	if (impl->phase == Impl::Phase::IDLE && impl->runtime == nullptr &&
+			impl->class_loader == 0) {
+		impl->java_vm = 0;
+	}
+}
+
 struct ContextOperationLease::Impl {
 	std::shared_ptr<Context> context;
 	ActiveContextScope active_scope;

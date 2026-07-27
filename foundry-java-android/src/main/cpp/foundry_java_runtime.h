@@ -93,6 +93,50 @@ private:
 	std::unique_ptr<Impl> impl;
 };
 
+/**
+ * JNI-agnostic reservation state for the process bootstrap/shutdown handoff.
+ *
+ * Loader and VM values are opaque tokens; JNI reference creation/deletion stays in the JNI layer.
+ */
+class JniTransitionState final {
+public:
+	using Token = std::uintptr_t;
+	using Ticket = std::uint64_t;
+
+	JniTransitionState();
+	~JniTransitionState();
+
+	JniTransitionState(const JniTransitionState &) = delete;
+	JniTransitionState &operator=(const JniTransitionState &) = delete;
+
+	bool install(Token java_vm, Token class_loader) noexcept;
+	Ticket reserve_bootstrap(Token &java_vm) noexcept;
+	bool publish_bootstrap(
+			Ticket ticket,
+			std::shared_ptr<BridgeRuntime> runtime,
+			Token requested_class_loader,
+			Token &previous_class_loader) noexcept;
+	bool cancel_bootstrap(Ticket ticket) noexcept;
+	Ticket reserve_shutdown(std::shared_ptr<BridgeRuntime> &runtime) noexcept;
+	bool finish_shutdown(
+			Ticket ticket,
+			const std::shared_ptr<BridgeRuntime> &runtime,
+			Token &java_vm,
+			Token &class_loader) noexcept;
+	bool cancel_shutdown(
+			Ticket ticket,
+			const std::shared_ptr<BridgeRuntime> &runtime) noexcept;
+	std::shared_ptr<BridgeRuntime> runtime() const noexcept;
+	Token java_vm() const noexcept;
+	Token pin_class_loader(const std::function<Token(Token)> &pin) const;
+	bool ready() const noexcept;
+	void clear_java_vm() noexcept;
+
+private:
+	struct Impl;
+	std::unique_ptr<Impl> impl;
+};
+
 bool jni_bridge_is_ready() noexcept;
 ContextHandle jni_bridge_create_context() noexcept;
 bool jni_bridge_initialize(ContextHandle context, std::int32_t level) noexcept;
