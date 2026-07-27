@@ -2,119 +2,295 @@ package games.cafecito.foundry.java;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
-import games.cafecito.foundry.runtime.FoundryBridgeCallbacks;
-import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
+import android.os.Process;
+import java.io.File;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
-/** Device-side acceptance runner for the versioned JNI bridge lifecycle. */
+/** Device-side acceptance runner for the production Android startup and JNI lifecycle. */
 public final class FoundryJavaInstrumentation extends Instrumentation {
+    private static final String TARGET_PACKAGE = "games.cafecito.foundry.android.test";
+    private static final String PROVIDER_AUTHORITY = TARGET_PACKAGE + ".foundry-java-startup";
+    private Bundle arguments;
+
     @Override
     public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        this.arguments = arguments == null ? new Bundle() : new Bundle(arguments);
+        start();
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        runAcceptance(arguments);
+    }
+
+    private void runAcceptance(Bundle arguments) {
+        int runIndex = parseRunIndex(arguments);
+        Context targetContext = getTargetContext();
         Bundle result = new Bundle();
-        int resultCode = Activity.RESULT_OK;
+        Activity activity = null;
+        JSONObject lifecycle = failureLifecycle(runIndex);
+        int pidBeforeLifecycle = Process.myPid();
+        int pidAfterLifecycle = pidBeforeLifecycle;
+        Throwable failure = null;
+        File evidenceFile = null;
         try {
-            exerciseBridge();
-            result.putString("stream", "Foundry Java JNI lifecycle: PASS\n");
-        } catch (Throwable failure) {
-            resultCode = Activity.RESULT_CANCELED;
+            require(
+                    TARGET_PACKAGE.equals(targetContext.getPackageName()),
+                    "unexpected target package " + targetContext.getPackageName());
+            require(
+                    FoundryJavaStartupEvidence.providerBeforeApplication(),
+                    "provider did not prime before Application.onCreate");
+
+            Intent intent = new Intent(targetContext, FoundryJavaTestActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            activity = startActivitySync(intent);
+            require(activity != null, "test Activity did not launch");
+            require(
+                    FoundryJavaStartupEvidence.awaitActivity(10, TimeUnit.SECONDS),
+                    "test Activity startup timed out");
+            require(
+                    FoundryJavaStartupEvidence.providerBeforeActivity(),
+                    "provider did not prime before Activity.onCreate");
+
+            pidBeforeLifecycle = Process.myPid();
+            lifecycle = FoundryJavaTestHost.runLifecycle(runIndex);
+            pidAfterLifecycle = Process.myPid();
+            validateLifecycle(lifecycle, runIndex);
+            require(
+                    pidBeforeLifecycle == pidAfterLifecycle,
+                    "native lifecycle changed the process PID");
+
+            JSONObject report =
+                    FoundryJavaStartupEvidence.buildReport(
+                            runIndex,
+                            TARGET_PACKAGE,
+                            PROVIDER_AUTHORITY,
+                            pidBeforeLifecycle,
+                            pidAfterLifecycle,
+                            lifecycle,
+                            null);
+            validateReport(report);
+            evidenceFile = FoundryJavaStartupEvidence.writeAtomically(targetContext, report);
+        } catch (Throwable caught) {
+            failure = caught;
+            pidAfterLifecycle = Process.myPid();
+            try {
+                JSONObject report =
+                        FoundryJavaStartupEvidence.buildReport(
+                                runIndex,
+                                TARGET_PACKAGE,
+                                PROVIDER_AUTHORITY,
+                                pidBeforeLifecycle,
+                                pidAfterLifecycle,
+                                lifecycle,
+                                caught);
+                evidenceFile = FoundryJavaStartupEvidence.writeAtomically(targetContext, report);
+            } catch (Throwable evidenceFailure) {
+                caught.addSuppressed(evidenceFailure);
+            }
+        } finally {
+            if (activity != null) {
+                Activity launchedActivity = activity;
+                runOnMainSync(launchedActivity::finish);
+            }
+        }
+
+        if (failure == null) {
+            result.putString("stream", "Foundry Java production startup: PASS\n");
+            result.putString("evidence_file", evidenceFile.getAbsolutePath());
+            finish(Activity.RESULT_OK, result);
+        } else {
             result.putString(
                     "stream",
-                    "Foundry Java JNI lifecycle: FAIL: "
+                    "Foundry Java production startup: FAIL: "
                             + failure.getClass().getName()
                             + ": "
                             + failure.getMessage()
                             + "\n");
-        } finally {
-            FoundryJavaInitializer.shutdownBridge();
+            if (evidenceFile != null) {
+                result.putString("evidence_file", evidenceFile.getAbsolutePath());
+            }
+            finish(Activity.RESULT_CANCELED, result);
         }
-        finish(resultCode, result);
     }
 
-    private static void exerciseBridge() {
-        LifecycleCallbacks callbacks = new LifecycleCallbacks();
+    private static int parseRunIndex(Bundle arguments) {
+        String encoded = arguments == null ? null : arguments.getString("foundry_run_index");
+        if (encoded == null || encoded.isBlank()) {
+            return 1;
+        }
+        try {
+            int parsed = Integer.parseInt(encoded);
+            require(parsed > 0, "foundry_run_index must be positive");
+            return parsed;
+        } catch (NumberFormatException failure) {
+            throw new IllegalArgumentException(
+                    "foundry_run_index must be a positive integer", failure);
+        }
+    }
+
+    private static void validateLifecycle(JSONObject lifecycle, int runIndex) throws JSONException {
+        require(lifecycle.getInt("schema_version") == 1, "unexpected lifecycle schema");
+        require(lifecycle.getInt("run_index") == runIndex, "lifecycle run index mismatch");
+        require(lifecycle.getBoolean("entry_accepted"), "native entry was rejected");
+        require(lifecycle.getLong("context_handle") == 1L, "fresh process context was not 1");
+        requireArray(
+                lifecycle.getJSONArray("initialize_attempts"),
+                List.of("CORE", "CORE", "SCENE", "SCENE"),
+                "initialize attempts");
+        requireArray(
+                lifecycle.getJSONArray("registration_order"),
+                List.of("FoundryJavaTestCore", "FoundryJavaTestScene"),
+                "registration order");
+        requireExactCounts(lifecycle.getJSONObject("registration_counts"), "registration counts");
+        require(lifecycle.getLong("callback_result") == 42L, "method callback was not 42");
         require(
-                FoundryJavaInitializer.initialize(
-                        new FoundryRegistryBootstrap(List.of()), callbacks),
-                "native bootstrap was rejected");
-
-        long context = FoundryJavaInitializer.createContext();
-        require(context != 0, "native context was not created");
-        callbacks.context = context;
-
-        long reentrant =
-                FoundryJavaInitializer.invokeCallback(
-                        context, LifecycleCallbacks.REENTRANT, new long[] {11, 13});
-        require(reentrant == 42, "reentrant callback returned " + reentrant);
-
-        long attached =
-                FoundryJavaInitializer.invokeCallbackOnNativeThread(
-                        context, LifecycleCallbacks.NATIVE_THREAD, new long[] {7, 9});
-        require(attached == 16, "native-thread callback returned " + attached);
-
-        long contained =
-                FoundryJavaInitializer.invokeCallback(
-                        context, LifecycleCallbacks.THROWING, new long[0]);
-        require(contained == 0, "throwing callback crossed JNI with " + contained);
-
-        require(FoundryJavaInitializer.shutdownContext(context), "context shutdown failed");
-        require(callbacks.invalidations.get() == 1, "context was not invalidated exactly once");
+                lifecycle.getBoolean("callback_thread_attached"),
+                "native callback thread was not attached");
         require(
-                FoundryJavaInitializer.invokeCallback(
-                                context, LifecycleCallbacks.NATIVE_THREAD, new long[0])
-                        == 0,
-                "stale context accepted a callback");
+                lifecycle.getBoolean("exception_contained"),
+                "Java exception crossed the native boundary");
+        require(
+                lifecycle.getBoolean("exception_default_is_nil"),
+                "contained exception did not return NIL");
+        require(
+                lifecycle.getBoolean("stale_instance_callback_rejected"),
+                "stale instance callback was accepted");
+        requireArray(
+                lifecycle.getJSONArray("deinitialize_attempts"),
+                List.of("SCENE", "SCENE", "CORE", "CORE"),
+                "deinitialize attempts");
+        requireArray(
+                lifecycle.getJSONArray("unregistration_order"),
+                List.of("FoundryJavaTestScene", "FoundryJavaTestCore"),
+                "unregistration order");
+        requireExactCounts(
+                lifecycle.getJSONObject("unregistration_counts"), "unregistration counts");
+        require(
+                lifecycle.getInt("live_instances_after_teardown") == 0,
+                "live Java instances remained after teardown");
+        require(
+                lifecycle.getInt("live_handles_after_teardown") == 0,
+                "live Java handles remained after teardown");
+        require(
+                !lifecycle.getBoolean("entry_active_after_teardown"),
+                "native entry remained active after teardown");
+    }
+
+    private static void validateReport(JSONObject report) throws JSONException {
+        require(report.getInt("schema_version") == 1, "unexpected report schema");
+        require(
+                TARGET_PACKAGE.equals(report.getString("target_package")),
+                "evidence target package mismatch");
+        require(
+                PROVIDER_AUTHORITY.equals(report.getString("authority")),
+                "evidence provider authority mismatch");
+        int pid = report.getInt("pid");
+        require(pid > 0, "evidence PID was not positive");
+        require(report.getInt("pid_before_lifecycle") == pid, "pre-lifecycle PID changed");
+        require(report.getInt("pid_after_lifecycle") == pid, "post-lifecycle PID changed");
+        require(report.getBoolean("fresh_process"), "test did not run in a fresh process");
+        require(
+                report.getBoolean("provider_before_application"),
+                "provider ordering evidence was false for Application");
+        require(
+                report.getBoolean("provider_before_activity"),
+                "provider ordering evidence was false for Activity");
+        require(
+                report.getInt("context_count_during_priming") == 0,
+                "provider priming created a context");
+        require(
+                report.getInt("registered_class_count_during_priming") == 0,
+                "provider priming registered a class");
+        require(report.getBoolean("core_context_nonzero"), "CORE did not create a context");
+        require(report.getInt("provider_registration_count") == 1, "provider count was not 1");
+        require(
+                report.getInt("application_on_create_count") == 1,
+                "Application.onCreate count was not 1");
+        require(
+                report.getInt("activity_on_create_count") == 1,
+                "Activity.onCreate count was not 1");
+        require(report.getInt("callback_dispatch_count") == 1, "callback count was not 1");
+        require(report.getInt("invalidation_count") == 1, "invalidation count was not 1");
+        require(
+                report.getLong("callback_result_observed_in_java") == 42L,
+                "Java method callback result was not 42");
+        require(
+                report.getInt("exception_dispatch_count") == 1,
+                "throwing callback count was not 1");
+        require(
+                report.getInt("descriptor_evaluation_count") == 1,
+                "provider descriptor was not evaluated exactly once");
+        require(report.isNull("failure"), "passing evidence contained a failure");
+        require("pass".equals(report.getString("result")), "evidence result was not pass");
+        requireArray(
+                report.getJSONArray("events"),
+                List.of(
+                        "provider_primed",
+                        "application_created",
+                        "activity_created",
+                        "callback_dispatched",
+                        "exception_contained",
+                        "lease_invalidated"),
+                "startup events");
+    }
+
+    private static void requireExactCounts(JSONObject counts, String label) throws JSONException {
+        require(counts.length() == 2, label + " contained unexpected classes");
+        require(counts.getInt("FoundryJavaTestCore") == 1, label + " CORE was not 1");
+        require(counts.getInt("FoundryJavaTestScene") == 1, label + " SCENE was not 1");
+    }
+
+    private static void requireArray(JSONArray actual, List<String> expected, String label)
+            throws JSONException {
+        require(actual.length() == expected.size(), label + " length mismatch");
+        for (int index = 0; index < expected.size(); index++) {
+            require(expected.get(index).equals(actual.getString(index)), label + " mismatch");
+        }
+    }
+
+    private static JSONObject failureLifecycle(int runIndex) {
+        try {
+            JSONObject counts = new JSONObject();
+            counts.put("FoundryJavaTestCore", 0);
+            counts.put("FoundryJavaTestScene", 0);
+            JSONObject lifecycle = new JSONObject();
+            lifecycle.put("schema_version", 1);
+            lifecycle.put("run_index", runIndex);
+            lifecycle.put("entry_accepted", false);
+            lifecycle.put("context_handle", 0L);
+            lifecycle.put("initialize_attempts", new JSONArray());
+            lifecycle.put("registration_order", new JSONArray());
+            lifecycle.put("registration_counts", counts);
+            lifecycle.put("callback_result", 0L);
+            lifecycle.put("callback_thread_attached", false);
+            lifecycle.put("exception_contained", false);
+            lifecycle.put("exception_default_is_nil", false);
+            lifecycle.put("stale_instance_callback_rejected", false);
+            lifecycle.put("deinitialize_attempts", new JSONArray());
+            lifecycle.put("unregistration_order", new JSONArray());
+            lifecycle.put("unregistration_counts", new JSONObject(counts.toString()));
+            lifecycle.put("live_instances_after_teardown", -1);
+            lifecycle.put("live_handles_after_teardown", -1);
+            lifecycle.put("entry_active_after_teardown", false);
+            return lifecycle;
+        } catch (JSONException failure) {
+            throw new AssertionError("Could not construct fallback evidence.", failure);
+        }
     }
 
     private static void require(boolean condition, String message) {
         if (!condition) {
             throw new AssertionError(message);
-        }
-    }
-
-    private static final class LifecycleCallbacks implements FoundryBridgeCallbacks {
-        private static final long REENTRANT = 1;
-        private static final long INNER = 2;
-        private static final long NATIVE_THREAD = 3;
-        private static final long THROWING = 4;
-
-        private final AtomicInteger invalidations = new AtomicInteger();
-        private volatile long context;
-
-        @Override
-        public boolean initialize(long contextHandle, int level) {
-            return contextHandle == context && level >= 0;
-        }
-
-        @Override
-        public void deinitialize(long contextHandle, int level) {}
-
-        @Override
-        public long invoke(long contextHandle, long callbackHandle, long[] arguments) {
-            require(contextHandle == context, "callback received the wrong context");
-            if (callbackHandle == REENTRANT) {
-                return FoundryJavaInitializer.invokeCallback(contextHandle, INNER, arguments);
-            }
-            if (callbackHandle == INNER) {
-                require(arguments.length == 2, "reentrant arguments were not preserved");
-                return arguments[0] + arguments[1] + 18;
-            }
-            if (callbackHandle == NATIVE_THREAD) {
-                require(arguments.length == 2, "native-thread arguments were not preserved");
-                return arguments[0] + arguments[1];
-            }
-            if (callbackHandle == THROWING) {
-                throw new IllegalStateException("contained instrumentation exception");
-            }
-            return 0;
-        }
-
-        @Override
-        public void invalidate(long contextHandle) {
-            require(contextHandle == context, "invalidation received the wrong context");
-            invalidations.incrementAndGet();
         }
     }
 }
