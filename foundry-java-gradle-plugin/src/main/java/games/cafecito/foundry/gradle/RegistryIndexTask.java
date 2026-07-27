@@ -242,7 +242,7 @@ public abstract class RegistryIndexTask extends DefaultTask {
                 if (bindingClaimant && !forbiddenHostEntries.isEmpty()) {
                     throw new GradleException(
                             artifact
-                                    + ": forbidden host payloads "
+                                    + ": forbidden host payload "
                                     + String.join(", ", forbiddenHostEntries)
                                     + ".");
                 }
