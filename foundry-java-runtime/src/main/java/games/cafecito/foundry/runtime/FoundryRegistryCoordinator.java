@@ -49,14 +49,11 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         if (requestedContextHandle == 0 || level == null) {
             return false;
         }
-        Transition transition = reserveInitialize(requestedContextHandle, level);
-        if (transition == null) {
-            synchronized (lifecycleLock) {
-                return !terminal
-                        && contextHandle == requestedContextHandle
-                        && registered.containsKey(level);
-            }
+        InitializeReservation reservation = reserveInitialize(requestedContextHandle, level);
+        if (reservation.transition() == null) {
+            return reservation.alreadyInitialized();
         }
+        Transition transition = reservation.transition();
 
         List<FoundryClassDescriptor> completed = new ArrayList<>();
         FoundryEngine activeEngine = transition.engine();
@@ -80,7 +77,9 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             publishInitialize(activeEngine, activeContext, level, completed);
             return true;
         } catch (Throwable failure) {
+            markTerminal();
             rollback(requestedContextHandle, activeEngine, completed);
+            rollback(requestedContextHandle, activeEngine, transition.registered());
             terminate(requestedContextHandle, activeContext, true);
             return false;
         }
@@ -97,13 +96,16 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         if (transition == null) {
             return;
         }
+        if (transition.terminal()) {
+            rollback(requestedContextHandle, transition.engine(), transition.registered());
+            callbacks.deinitialize(requestedContextHandle, levelCode);
+            finishTerminal();
+            terminalObserver.accept(requestedContextHandle);
+            return;
+        }
         rollback(requestedContextHandle, transition.engine(), transition.descriptors());
         callbacks.deinitialize(requestedContextHandle, levelCode);
-        boolean core = level == FoundryInitializationLevel.CORE;
-        finishDeinitialize(level, core);
-        if (core) {
-            terminalObserver.accept(requestedContextHandle);
-        }
+        finishDeinitialize();
     }
 
     @Override
@@ -122,61 +124,85 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         if (transition == null) {
             return;
         }
-        for (FoundryInitializationLevel level : reverseLevels()) {
-            rollback(
-                    requestedContextHandle,
-                    transition.engine(),
-                    transition.registered().getOrDefault(level, List.of()));
-        }
+        rollback(requestedContextHandle, transition.engine(), transition.registered());
         callbacks.invalidate(requestedContextHandle);
         finishTerminal();
         terminalObserver.accept(requestedContextHandle);
     }
 
-    private Transition reserveInitialize(
+    private InitializeReservation reserveInitialize(
             long requestedContextHandle, FoundryInitializationLevel level) {
         synchronized (lifecycleLock) {
-            waitForTransition();
-            if (terminal || registered.containsKey(level)) {
-                return null;
+            if (transitionInProgress || terminal) {
+                return InitializeReservation.rejected();
             }
             if (contextHandle != 0 && contextHandle != requestedContextHandle) {
-                return null;
+                return InitializeReservation.rejected();
+            }
+            if (registered.containsKey(level)) {
+                return new InitializeReservation(null, true);
+            }
+            FoundryInitializationLevel expected =
+                    FoundryInitializationLevel.values()[registered.size()];
+            if (level != expected) {
+                return InitializeReservation.rejected();
             }
             if (contextHandle == 0 && level != FoundryInitializationLevel.CORE) {
-                return null;
+                return InitializeReservation.rejected();
             }
             transitionInProgress = true;
             contextHandle = requestedContextHandle;
-            return new Transition(engine, context, List.of(), MapSnapshot.empty());
+            return new InitializeReservation(
+                    new Transition(
+                            engine,
+                            context,
+                            List.of(),
+                            new MapSnapshot(registered),
+                            false),
+                    false);
         }
     }
 
     private Transition reserveDeinitialize(
             long requestedContextHandle, FoundryInitializationLevel level) {
         synchronized (lifecycleLock) {
-            waitForTransition();
-            if (terminal || contextHandle != requestedContextHandle) {
+            if (transitionInProgress || terminal || contextHandle != requestedContextHandle) {
                 return null;
             }
-            List<FoundryClassDescriptor> descriptors = registered.remove(level);
-            if (descriptors == null) {
+            if (!registered.containsKey(level)) {
                 return null;
             }
             transitionInProgress = true;
-            return new Transition(engine, context, descriptors, MapSnapshot.empty());
+            if (level == FoundryInitializationLevel.CORE) {
+                terminal = true;
+                return new Transition(
+                        engine,
+                        context,
+                        List.of(),
+                        new MapSnapshot(registered),
+                        true);
+            }
+            FoundryInitializationLevel highest =
+                    FoundryInitializationLevel.values()[registered.size() - 1];
+            if (level != highest) {
+                transitionInProgress = false;
+                return null;
+            }
+            List<FoundryClassDescriptor> descriptors = registered.remove(level);
+            return new Transition(
+                    engine, context, descriptors, MapSnapshot.empty(), false);
         }
     }
 
     private Transition reserveTerminal(long requestedContextHandle) {
         synchronized (lifecycleLock) {
-            waitForTransition();
-            if (terminal || contextHandle != requestedContextHandle) {
+            if (transitionInProgress || terminal || contextHandle != requestedContextHandle) {
                 return null;
             }
             transitionInProgress = true;
             terminal = true;
-            return new Transition(engine, context, List.of(), new MapSnapshot(registered));
+            return new Transition(
+                    engine, context, List.of(), new MapSnapshot(registered), true);
         }
     }
 
@@ -194,15 +220,8 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         }
     }
 
-    private void finishDeinitialize(FoundryInitializationLevel level, boolean core) {
+    private void finishDeinitialize() {
         synchronized (lifecycleLock) {
-            if (core) {
-                terminal = true;
-                engine = null;
-                context = null;
-                contextHandle = 0;
-                registered.clear();
-            }
             transitionInProgress = false;
             lifecycleLock.notifyAll();
         }
@@ -216,6 +235,12 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             registered.clear();
             transitionInProgress = false;
             lifecycleLock.notifyAll();
+        }
+    }
+
+    private void markTerminal() {
+        synchronized (lifecycleLock) {
+            terminal = true;
         }
     }
 
@@ -255,17 +280,15 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         }
     }
 
-    private void waitForTransition() {
-        boolean interrupted = false;
-        while (transitionInProgress) {
-            try {
-                lifecycleLock.wait();
-            } catch (InterruptedException failure) {
-                interrupted = true;
-            }
-        }
-        if (interrupted) {
-            Thread.currentThread().interrupt();
+    private void rollback(
+            long requestedContextHandle,
+            FoundryEngine activeEngine,
+            MapSnapshot registeredSnapshot) {
+        for (FoundryInitializationLevel level : reverseLevels()) {
+            rollback(
+                    requestedContextHandle,
+                    activeEngine,
+                    registeredSnapshot.getOrDefault(level, List.of()));
         }
     }
 
@@ -281,7 +304,15 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             FoundryEngine engine,
             FoundryBindingContext context,
             List<FoundryClassDescriptor> descriptors,
-            MapSnapshot registered) {}
+            MapSnapshot registered,
+            boolean terminal) {}
+
+    private record InitializeReservation(
+            Transition transition, boolean alreadyInitialized) {
+        static InitializeReservation rejected() {
+            return new InitializeReservation(null, false);
+        }
+    }
 
     private static final class MapSnapshot {
         private final EnumMap<FoundryInitializationLevel, List<FoundryClassDescriptor>> values;

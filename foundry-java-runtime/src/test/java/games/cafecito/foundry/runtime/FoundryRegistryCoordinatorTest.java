@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class FoundryRegistryCoordinatorTest {
@@ -90,6 +91,7 @@ class FoundryRegistryCoordinatorTest {
 
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
 
         assertEquals(
@@ -106,9 +108,11 @@ class FoundryRegistryCoordinatorTest {
                         type("example.B", "B", "CORE", "example.A"),
                         type("example.C", "C", "SCENE"));
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
 
         coordinator.deinitialize(41, FoundryInitializationLevel.SCENE.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.SERVERS.code());
         coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
 
         assertEquals(
@@ -120,6 +124,207 @@ class FoundryRegistryCoordinatorTest {
                         "unregister:B",
                         "unregister:A"),
                 engine.events);
+    }
+
+    @Test
+    void laterLevelFailureRollsBackEveryLiveLevelInGlobalReverseOrder() {
+        RecordingEngine engine = new RecordingEngine();
+        engine.failRegistration = "D";
+        FoundryRegistryCoordinator coordinator =
+                coordinator(
+                        engine,
+                        type("example.A", "A", "CORE"),
+                        type("example.B", "B", "CORE", "example.A"),
+                        type("example.C", "C", "SERVERS"),
+                        type("example.D", "D", "SCENE"));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
+
+        assertFalse(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
+
+        assertEquals(
+                List.of(
+                        "register:A",
+                        "register:B",
+                        "register:C",
+                        "register:D",
+                        "unregister:C",
+                        "unregister:B",
+                        "unregister:A"),
+                engine.events);
+        assertEquals(1, engine.contextCloses.get());
+    }
+
+    @Test
+    void prematureCoreDeinitializeRollsBackEveryLiveLevelInGlobalReverseOrder() {
+        RecordingEngine engine = new RecordingEngine();
+        FoundryRegistryCoordinator coordinator =
+                coordinator(
+                        engine,
+                        type("example.A", "A", "CORE"),
+                        type("example.B", "B", "SERVERS"),
+                        type("example.C", "C", "SCENE"),
+                        type("example.D", "D", "EDITOR"));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.EDITOR.code()));
+
+        coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
+        coordinator.invalidate(41);
+
+        assertEquals(
+                List.of(
+                        "register:A",
+                        "register:B",
+                        "register:C",
+                        "register:D",
+                        "unregister:D",
+                        "unregister:C",
+                        "unregister:B",
+                        "unregister:A"),
+                engine.events);
+        assertEquals(1, engine.contextCloses.get());
+    }
+
+    @Test
+    void initializationAndNonCoreTeardownRejectSkippedOrOutOfOrderLevels() {
+        RecordingEngine engine = new RecordingEngine();
+        FoundryRegistryCoordinator coordinator =
+                coordinator(
+                        engine,
+                        type("example.A", "A", "CORE"),
+                        type("example.B", "B", "SERVERS"),
+                        type("example.C", "C", "SCENE"),
+                        type("example.D", "D", "EDITOR"));
+
+        assertFalse(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertFalse(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
+        assertFalse(coordinator.initialize(41, FoundryInitializationLevel.EDITOR.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.EDITOR.code()));
+
+        coordinator.deinitialize(41, FoundryInitializationLevel.SERVERS.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.EDITOR.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.SERVERS.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.SCENE.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.SERVERS.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
+
+        assertEquals(
+                List.of(
+                        "register:A",
+                        "register:B",
+                        "register:C",
+                        "register:D",
+                        "unregister:D",
+                        "unregister:C",
+                        "unregister:B",
+                        "unregister:A"),
+                engine.events);
+    }
+
+    @Test
+    void lifecycleReentryFromEngineOperationsFailsFastWithoutDeadlock() throws Exception {
+        RecordingEngine engine = new RecordingEngine();
+        AtomicReference<FoundryRegistryCoordinator> reference = new AtomicReference<>();
+        FoundryRegistryCoordinator coordinator =
+                new FoundryRegistryCoordinator(
+                        bootstrap(
+                                provider(
+                                        "demo",
+                                        type("example.A", "A", "CORE"),
+                                        type("example.B", "B", "SERVERS"))),
+                        context -> {
+                            reference.get().invalidate(context);
+                            reference
+                                    .get()
+                                    .deinitialize(
+                                            context, FoundryInitializationLevel.CORE.code());
+                            engine.contextHandle = context;
+                            return engine;
+                        },
+                        context -> engine.contextCloses.incrementAndGet());
+        reference.set(coordinator);
+        engine.registerReentry =
+                () -> {
+                    coordinator.invalidate(41);
+                    coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
+                };
+        engine.unregisterReentry =
+                () -> {
+                    coordinator.invalidate(41);
+                    coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
+                };
+
+        AtomicReference<Boolean> result = new AtomicReference<>();
+        Thread initialize =
+                new Thread(
+                        () ->
+                                result.set(
+                                        coordinator.initialize(
+                                                41, FoundryInitializationLevel.CORE.code())));
+        initialize.setDaemon(true);
+        initialize.start();
+        initialize.join(TimeUnit.SECONDS.toMillis(2));
+
+        assertFalse(initialize.isAlive());
+        assertEquals(Boolean.TRUE, result.get());
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
+        coordinator.deinitialize(41, FoundryInitializationLevel.SERVERS.code());
+        coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
+        assertEquals(1, engine.contextCloses.get());
+    }
+
+    @Test
+    void concurrentLifecycleContendersReturnWithoutWaitingForRegistration() throws Exception {
+        RecordingEngine engine = new RecordingEngine();
+        CountDownLatch registrationStarted = new CountDownLatch(1);
+        CountDownLatch releaseRegistration = new CountDownLatch(1);
+        engine.registerReentry =
+                () -> {
+                    registrationStarted.countDown();
+                    await(releaseRegistration);
+                };
+        FoundryRegistryCoordinator coordinator =
+                coordinator(engine, type("example.A", "A", "CORE"));
+        AtomicReference<Boolean> initialization = new AtomicReference<>();
+        Thread initialize =
+                new Thread(
+                        () ->
+                                initialization.set(
+                                        coordinator.initialize(
+                                                41, FoundryInitializationLevel.CORE.code())));
+        initialize.start();
+        assertTrue(registrationStarted.await(2, TimeUnit.SECONDS));
+
+        AtomicReference<Boolean> contenderInitialization = new AtomicReference<>();
+        Thread contender =
+                new Thread(
+                        () -> {
+                            contenderInitialization.set(
+                                    coordinator.initialize(
+                                            41, FoundryInitializationLevel.CORE.code()));
+                            coordinator.deinitialize(
+                                    41, FoundryInitializationLevel.CORE.code());
+                            coordinator.invalidate(41);
+                        });
+        contender.setDaemon(true);
+        contender.start();
+        contender.join(500);
+        boolean contenderReturnedWhileRegistrationBlocked = !contender.isAlive();
+        releaseRegistration.countDown();
+        initialize.join(TimeUnit.SECONDS.toMillis(2));
+        contender.join(TimeUnit.SECONDS.toMillis(2));
+
+        assertTrue(contenderReturnedWhileRegistrationBlocked);
+        assertFalse(initialize.isAlive());
+        assertEquals(Boolean.TRUE, initialization.get());
+        assertEquals(Boolean.FALSE, contenderInitialization.get());
+        coordinator.invalidate(41);
+        assertEquals(1, engine.contextCloses.get());
     }
 
     @Test
@@ -246,12 +451,15 @@ class FoundryRegistryCoordinatorTest {
         private final AtomicInteger contextCloses = new AtomicInteger();
         private String failRegistration;
         private long contextHandle;
+        private Runnable registerReentry = () -> {};
+        private Runnable unregisterReentry = () -> {};
 
         @Override
         public void registerExtensionClass(
                 long contextHandle, FoundryClassDescriptor descriptor) {
             assertEquals(this.contextHandle, contextHandle);
             events.add("register:" + descriptor.foundryName());
+            registerReentry.run();
             if (descriptor.foundryName().equals(failRegistration)) {
                 throw new IllegalStateException("registration failed");
             }
@@ -261,6 +469,7 @@ class FoundryRegistryCoordinatorTest {
         public void unregisterExtensionClass(long contextHandle, String foundryName) {
             assertEquals(this.contextHandle, contextHandle);
             events.add("unregister:" + foundryName);
+            unregisterReentry.run();
         }
 
         @Override
