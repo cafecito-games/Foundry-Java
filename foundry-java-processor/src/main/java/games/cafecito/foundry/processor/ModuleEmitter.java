@@ -2,7 +2,9 @@ package games.cafecito.foundry.processor;
 
 import java.io.IOException;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
@@ -104,6 +106,19 @@ final class ModuleEmitter {
                         .map(this::classDescriptorExpression)
                         .reduce((left, right) -> left + ",\n" + right)
                         .orElse("");
+        String decoder =
+                models.stream()
+                                .anyMatch(
+                                        model ->
+                                                !model.constants().isEmpty()
+                                                        || !model.properties().isEmpty())
+                        ? "\n"
+                                + "    private static String decode(String value) {\n"
+                                + "        return new String(\n"
+                                + "                java.util.Base64.getUrlDecoder().decode(value),\n"
+                                + "                java.nio.charset.StandardCharsets.UTF_8);\n"
+                                + "    }\n"
+                        : "";
         return """
                 package %s;
 
@@ -114,7 +129,7 @@ final class ModuleEmitter {
                             new %s();
 
                     private %s() {}
-
+                %s
                     private static final games.cafecito.foundry.runtime.FoundryModuleDescriptor DESCRIPTOR =
                             new games.cafecito.foundry.runtime.FoundryModuleDescriptor(
                                     2,
@@ -139,6 +154,7 @@ final class ModuleEmitter {
                         className,
                         className,
                         className,
+                        decoder,
                         moduleName,
                         qualifiedName,
                         provenance.apiSha256(),
@@ -258,8 +274,11 @@ final class ModuleEmitter {
                         .append('|')
                         .append(member.javaName())
                         .append('|')
-                        .append(member.signature())
-                        .append('\n');
+                        .append(member.signature());
+                if (member.details() != null) {
+                    descriptor.append('|').append(member.details().descriptorFields());
+                }
+                descriptor.append('\n');
             }
         }
         return descriptor.toString();
@@ -311,6 +330,19 @@ final class ModuleEmitter {
                                                 signature(
                                                         method.returnType(),
                                                         method.parameters()))));
+        model.constants()
+                .forEach(
+                        constant ->
+                                members.add(
+                                        new Member(
+                                                "constant",
+                                                constant.exportedName(),
+                                                constant.fieldName(),
+                                                constant.type(),
+                                                new ConstantMemberDetails(
+                                                        constant.enumName(),
+                                                        constant.value(),
+                                                        constant.bitfield()))));
         model.properties()
                 .forEach(
                         property ->
@@ -319,7 +351,15 @@ final class ModuleEmitter {
                                                 "property",
                                                 property.exportedName(),
                                                 property.fieldName(),
-                                                property.type())));
+                                                property.type(),
+                                                new PropertyMemberDetails(
+                                                        property.getter(),
+                                                        property.setter(),
+                                                        property.index(),
+                                                        property.groupName(),
+                                                        property.groupPrefix(),
+                                                        property.subgroupName(),
+                                                        property.subgroupPrefix()))));
         model.signals()
                 .forEach(
                         signal ->
@@ -331,10 +371,27 @@ final class ModuleEmitter {
                                                 signature("void", signal.parameters()))));
         return members.stream()
                 .sorted(
-                        Comparator.comparing(Member::foundryName)
-                                .thenComparing(Member::kind)
-                                .thenComparing(Member::javaName))
+                        Comparator.comparingInt((Member member) -> memberRank(member.kind()))
+                                .thenComparing(Member::foundryName)
+                                .thenComparing(Member::javaName)
+                                .thenComparing(Member::signature)
+                                .thenComparing(
+                                        member ->
+                                                member.details() == null
+                                                        ? ""
+                                                        : member.details().descriptorFields()))
                 .toList();
+    }
+
+    private static int memberRank(String kind) {
+        return switch (kind) {
+            case "constant" -> 0;
+            case "method" -> 1;
+            case "override" -> 2;
+            case "property" -> 3;
+            case "signal" -> 4;
+            default -> throw new IllegalArgumentException("unknown member kind " + kind);
+        };
     }
 
     private String signature(String returnType, List<ExtensionModel.ParameterModel> parameters) {
@@ -350,6 +407,29 @@ final class ModuleEmitter {
     private String memberExpression(Member member) {
         String indentation = "                                            ";
         String continuation = "                                                    ";
+        if (member.details() != null) {
+            return indentation
+                    + "new games.cafecito.foundry.runtime.FoundryMemberDescriptor(\n"
+                    + continuation
+                    + "\""
+                    + member.kind()
+                    + "\",\n"
+                    + continuation
+                    + "\""
+                    + member.foundryName()
+                    + "\",\n"
+                    + continuation
+                    + "\""
+                    + member.javaName()
+                    + "\",\n"
+                    + continuation
+                    + "\""
+                    + member.signature()
+                    + "\",\n"
+                    + continuation
+                    + detailsExpression(member.details(), continuation)
+                    + ")";
+        }
         String arguments =
                 "\""
                         + member.kind()
@@ -384,6 +464,62 @@ final class ModuleEmitter {
                 + "\""
                 + member.signature()
                 + "\")";
+    }
+
+    private String detailsExpression(MemberDetails details, String continuation) {
+        String nested = continuation + "        ";
+        if (details instanceof ConstantMemberDetails constant) {
+            return "new games.cafecito.foundry.runtime.FoundryConstantDetails(\n"
+                    + nested
+                    + "decode(\""
+                    + encode(constant.enumName())
+                    + "\"),\n"
+                    + nested
+                    + longLiteral(constant.value())
+                    + ",\n"
+                    + nested
+                    + constant.bitfield()
+                    + ")";
+        }
+        PropertyMemberDetails property = (PropertyMemberDetails) details;
+        return "new games.cafecito.foundry.runtime.FoundryPropertyDetails(\n"
+                + nested
+                + "decode(\""
+                + encode(property.getter())
+                + "\"),\n"
+                + nested
+                + "decode(\""
+                + encode(property.setter())
+                + "\"),\n"
+                + nested
+                + property.index()
+                + ",\n"
+                + nested
+                + "decode(\""
+                + encode(property.groupName())
+                + "\"),\n"
+                + nested
+                + "decode(\""
+                + encode(property.groupPrefix())
+                + "\"),\n"
+                + nested
+                + "decode(\""
+                + encode(property.subgroupName())
+                + "\"),\n"
+                + nested
+                + "decode(\""
+                + encode(property.subgroupPrefix())
+                + "\"))";
+    }
+
+    private static String encode(String value) {
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String longLiteral(long value) {
+        return value == Long.MIN_VALUE ? "Long.MIN_VALUE" : value + "L";
     }
 
     private static String registryPackage(String moduleName) {
@@ -428,5 +564,54 @@ final class ModuleEmitter {
             String runtimeContractVersion,
             String bridgeContractVersion) {}
 
-    private record Member(String kind, String foundryName, String javaName, String signature) {}
+    private sealed interface MemberDetails permits ConstantMemberDetails, PropertyMemberDetails {
+        String descriptorFields();
+    }
+
+    private record ConstantMemberDetails(String enumName, long value, boolean bitfield)
+            implements MemberDetails {
+        @Override
+        public String descriptorFields() {
+            return "d1|" + encode(enumName) + "|" + value + "|" + (bitfield ? "1" : "0");
+        }
+    }
+
+    private record PropertyMemberDetails(
+            String getter,
+            String setter,
+            int index,
+            String groupName,
+            String groupPrefix,
+            String subgroupName,
+            String subgroupPrefix)
+            implements MemberDetails {
+        @Override
+        public String descriptorFields() {
+            return "d1|"
+                    + encode(getter)
+                    + "|"
+                    + encode(setter)
+                    + "|"
+                    + index
+                    + "|"
+                    + encode(groupName)
+                    + "|"
+                    + encode(groupPrefix)
+                    + "|"
+                    + encode(subgroupName)
+                    + "|"
+                    + encode(subgroupPrefix);
+        }
+    }
+
+    private record Member(
+            String kind,
+            String foundryName,
+            String javaName,
+            String signature,
+            MemberDetails details) {
+        Member(String kind, String foundryName, String javaName, String signature) {
+            this(kind, foundryName, javaName, signature, null);
+        }
+    }
 }
