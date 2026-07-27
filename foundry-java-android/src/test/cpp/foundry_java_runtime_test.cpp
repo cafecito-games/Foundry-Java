@@ -27,6 +27,17 @@ bool jni_shutdown_context_result = true;
 bool jni_shutdown_result = true;
 FoundryExtensionInterfacePrintError installed_print_error = nullptr;
 std::string missing_interface_name;
+int native_string_name_construct_count = 0;
+int native_string_name_destroy_count = 0;
+int native_object_destroy_count = 0;
+std::uint64_t requested_object_id = 0;
+int ref_method_lookup_count = 0;
+int ref_reference_count = 0;
+int ref_unreference_count = 0;
+bool ref_hashes_valid = true;
+FoundryExtensionVariantType copied_variant_type = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
+int variant_copy_count = 0;
+int variant_destroy_count = 0;
 
 void fake_print_error(const char *, const char *, const char *, std::int32_t, FoundryExtensionBool) {
 }
@@ -51,6 +62,89 @@ FoundryExtensionPtrDestructor fake_variant_destructor(FoundryExtensionVariantTyp
 }
 
 void fake_untyped_interface() {
+}
+
+void fake_string_name_from_utf8_and_len(
+		FoundryExtensionUninitializedStringNamePtr,
+		const char *,
+		FoundryExtensionInt) {
+	native_string_name_construct_count++;
+}
+
+void fake_string_name_destroy(FoundryExtensionTypePtr) {
+	native_string_name_destroy_count++;
+}
+
+FoundryExtensionPtrDestructor fake_transport_variant_destructor(FoundryExtensionVariantType type) {
+	return type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME ? &fake_string_name_destroy : nullptr;
+}
+
+std::uint64_t fake_native_struct_size(FoundryExtensionConstStringNamePtr) {
+	return 128;
+}
+
+GDObjectInstanceID fake_object_instance_id(FoundryExtensionConstObjectPtr object) {
+	return object == reinterpret_cast<FoundryExtensionConstObjectPtr>(0x1234) ? 91 : 0;
+}
+
+FoundryExtensionObjectPtr fake_object_from_id(GDObjectInstanceID id) {
+	requested_object_id = id;
+	return id == 91 ? reinterpret_cast<FoundryExtensionObjectPtr>(0x1234) : nullptr;
+}
+
+void fake_object_destroy(FoundryExtensionObjectPtr object) {
+	if (object == reinterpret_cast<FoundryExtensionObjectPtr>(0x1234)) {
+		native_object_destroy_count++;
+	}
+}
+
+void *fake_ref_counted_class_tag(FoundryExtensionConstStringNamePtr) {
+	return reinterpret_cast<void *>(0x55);
+}
+
+FoundryExtensionObjectPtr fake_object_cast_to(FoundryExtensionConstObjectPtr object, void *class_tag) {
+	return class_tag == reinterpret_cast<void *>(0x55) ?
+			const_cast<FoundryExtensionObjectPtr>(object) :
+			nullptr;
+}
+
+FoundryExtensionMethodBindPtr fake_ref_method_bind(
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionInt hash) {
+	ref_hashes_valid = ref_hashes_valid && hash == 2240911060;
+	ref_method_lookup_count++;
+	return reinterpret_cast<FoundryExtensionMethodBindPtr>(
+			static_cast<std::uintptr_t>(ref_method_lookup_count));
+}
+
+void fake_ref_ptrcall(
+		FoundryExtensionMethodBindPtr method,
+		FoundryExtensionObjectPtr,
+		const FoundryExtensionConstTypePtr *,
+		FoundryExtensionTypePtr result) {
+	const auto index = reinterpret_cast<std::uintptr_t>(method);
+	if (index == 1) {
+		ref_reference_count++;
+		*static_cast<FoundryExtensionBool *>(result) = 1;
+	} else if (index == 2) {
+		ref_unreference_count++;
+		*static_cast<FoundryExtensionBool *>(result) = 1;
+	}
+}
+
+FoundryExtensionVariantType fake_variant_get_type(FoundryExtensionConstVariantPtr) {
+	return copied_variant_type;
+}
+
+void fake_variant_new_copy(
+		FoundryExtensionUninitializedVariantPtr,
+		FoundryExtensionConstVariantPtr) {
+	variant_copy_count++;
+}
+
+void fake_variant_destroy(FoundryExtensionVariantPtr) {
+	variant_destroy_count++;
 }
 
 template <typename Function>
@@ -525,6 +619,215 @@ void test_handle_teardown_waits_for_active_lease() {
 	expect(destroy_count == 1, "teardown must destroy owned storage exactly once");
 }
 
+void test_variant_inventory_and_dispatch_validation() {
+	const auto &categories = foundry_java::variant_categories();
+	expect(categories.size() == 39, "transport must freeze all 39 public Variant categories");
+	for (std::size_t index = 0; index < categories.size(); index++) {
+		expect(
+				static_cast<std::size_t>(categories[index].abi_type) == index,
+				"Variant categories must preserve ABI enum order");
+		expect(!categories[index].java_name.empty(), "every Variant category needs a stable Java name");
+	}
+
+	foundry_java::NativeDispatch dispatch;
+	dispatch.kind = foundry_java::DispatchKind::CLASS_METHOD;
+	dispatch.minimum_argument_count = 1;
+	dispatch.argument_native_types = { "int", "String" };
+	expect(foundry_java::validate_dispatch(dispatch, 1, {}).valid, "minimum fixed arity must pass");
+	expect(foundry_java::validate_dispatch(dispatch, 2, {}).valid, "maximum fixed arity must pass");
+	expect(!foundry_java::validate_dispatch(dispatch, 0, {}).valid, "below-minimum arity must fail");
+	expect(!foundry_java::validate_dispatch(dispatch, 3, {}).valid, "above-maximum fixed arity must fail");
+	dispatch.vararg = true;
+	expect(foundry_java::validate_dispatch(dispatch, 9, {}).valid, "vararg extras must remain valid");
+
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_METHOD;
+	dispatch.owner_native_type = "Vector2";
+	dispatch.static_call = true;
+	expect(
+			!foundry_java::validate_dispatch(dispatch, 1, {}).valid,
+			"built-in methods require a separate receiver even when static");
+	expect(
+			!foundry_java::validate_dispatch(dispatch, 1, "Vector3").valid,
+			"built-in receiver type must match the owner");
+	expect(
+			foundry_java::validate_dispatch(dispatch, 1, "Vector2").valid,
+			"matching built-in receiver must pass");
+	dispatch.kind = foundry_java::DispatchKind::UTILITY_FUNCTION;
+	expect(
+			!foundry_java::validate_dispatch(dispatch, 1, "Vector2").valid,
+			"utility functions must reject an implicit receiver");
+
+	expect(static_cast<int>(foundry_java::DispatchKind::CLASS_METHOD) == 1, "class method wire code");
+	expect(static_cast<int>(foundry_java::DispatchKind::UTILITY_FUNCTION) == 9, "utility wire code");
+}
+
+void test_native_structure_and_object_transport() {
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->string_name_new_with_utf8_chars_and_len = &fake_string_name_from_utf8_and_len;
+	services->variant_get_ptr_destructor = &fake_transport_variant_destructor;
+	services->get_native_struct_size = &fake_native_struct_size;
+	services->object_get_instance_id = &fake_object_instance_id;
+	services->object_get_instance_from_id = &fake_object_from_id;
+	services->object_destroy = &fake_object_destroy;
+	foundry_java::NativeTransport transport(services);
+
+	native_string_name_construct_count = 0;
+	native_string_name_destroy_count = 0;
+	const auto structure = transport.create_native_structure(
+			31,
+			5,
+			"PhysicsServer3DExtensionMotionResult");
+	expect(structure != 0, "native structure allocation must produce an opaque handle");
+	auto structure_lease = transport.handles().acquire(
+			structure,
+			31,
+			5,
+			foundry_java::HandleKind::NATIVE_STRUCTURE,
+			"PhysicsServer3DExtensionMotionResult");
+	expect(static_cast<bool>(structure_lease), "native structure handle must preserve its exact type token");
+	expect(structure_lease.record().value.byte_size == 128, "native structure must use interface-reported size");
+	expect(native_string_name_construct_count == 1, "type lookup must construct one StringName");
+	expect(native_string_name_destroy_count == 1, "type lookup must destroy its StringName on success");
+	structure_lease = {};
+	expect(
+			transport.handles().release(
+					structure,
+					31,
+					5,
+					foundry_java::HandleKind::NATIVE_STRUCTURE,
+					"PhysicsServer3DExtensionMotionResult"),
+			"native structure must release");
+
+	native_object_destroy_count = 0;
+	requested_object_id = 0;
+	const auto object = transport.track_object(
+			31,
+			5,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"Resource",
+			true);
+	expect(object != 0, "object transport must return an opaque instance-ID handle");
+	auto object_lease = transport.acquire_object(object, 31, 5, "Resource");
+	expect(
+			object_lease.object == reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"object lookup must reacquire the pointer from its instance ID");
+	expect(requested_object_id == 91, "object lookup must use the stored unsigned instance ID");
+	object_lease = {};
+	expect(
+			transport.handles().release(object, 31, 5, foundry_java::HandleKind::OBJECT, "Resource"),
+			"owned object handle must release");
+	expect(native_object_destroy_count == 1, "owned object release must destroy exactly once");
+}
+
+void test_dispatch_families_and_ref_counted_ownership() {
+	foundry_java::NativeDispatch dispatch;
+	dispatch.kind = foundry_java::DispatchKind::CLASS_METHOD;
+	dispatch.argument_native_types = { "Variant" };
+	dispatch.return_native_type = "Variant";
+	expect(
+			foundry_java::dispatch_family(dispatch) == foundry_java::DispatchFamily::CLASS_VARIANT_CALL,
+			"Variant-only class methods must use object_method_bind_call");
+	dispatch.argument_native_types = { "Vector3" };
+	expect(
+			foundry_java::dispatch_family(dispatch) == foundry_java::DispatchFamily::CLASS_PTRCALL,
+			"typed class methods must use object_method_bind_ptrcall");
+	dispatch.vararg = true;
+	expect(
+			foundry_java::dispatch_family(dispatch) == foundry_java::DispatchFamily::CLASS_VARIANT_CALL,
+			"vararg class methods must use Variant call semantics");
+	dispatch.vararg = false;
+	for (int wire_code = 2; wire_code <= 9; wire_code++) {
+		dispatch.kind = static_cast<foundry_java::DispatchKind>(wire_code);
+		expect(
+				foundry_java::dispatch_family(dispatch) != foundry_java::DispatchFamily::INVALID,
+				"every frozen dispatch kind must map to a native family");
+	}
+	expect(
+			foundry_java::validate_value_backend(
+					FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE,
+					foundry_java::ValueBackend::JAVA_LOCAL)
+					.valid,
+			"Java-local Callable must be supported through callable_custom_create2");
+	expect(
+			!foundry_java::validate_value_backend(
+					 FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL,
+					 foundry_java::ValueBackend::JAVA_LOCAL)
+					 .valid,
+			"Java-local Signal must fail because the ABI has no custom constructor");
+	expect(
+			foundry_java::validate_value_backend(
+					FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL,
+					foundry_java::ValueBackend::NATIVE)
+					.valid,
+			"native-backed Signal must round-trip");
+
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->string_name_new_with_utf8_chars_and_len = &fake_string_name_from_utf8_and_len;
+	services->variant_get_ptr_destructor = &fake_transport_variant_destructor;
+	services->classdb_get_class_tag = &fake_ref_counted_class_tag;
+	services->object_cast_to = &fake_object_cast_to;
+	services->classdb_get_method_bind = &fake_ref_method_bind;
+	services->object_method_bind_ptrcall = &fake_ref_ptrcall;
+	services->object_get_instance_id = &fake_object_instance_id;
+	services->object_get_instance_from_id = &fake_object_from_id;
+	services->object_destroy = &fake_object_destroy;
+	foundry_java::NativeTransport transport(services);
+	ref_method_lookup_count = 0;
+	ref_reference_count = 0;
+	ref_unreference_count = 0;
+	ref_hashes_valid = true;
+	native_object_destroy_count = 0;
+	const auto ref_handle = transport.retain_ref_counted(
+			44,
+			2,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"Resource");
+	expect(ref_handle != 0, "validated RefCounted object must retain");
+	expect(ref_method_lookup_count == 2, "reference and unreference MethodBinds must resolve exactly once");
+	expect(ref_hashes_valid, "reference MethodBinds must use compatibility hash 2240911060");
+	expect(ref_reference_count == 1, "retain must invoke RefCounted.reference");
+	expect(
+			transport.handles().release(
+					ref_handle,
+					44,
+					2,
+					foundry_java::HandleKind::OBJECT,
+					"Resource"),
+			"retained RefCounted handle must release");
+	expect(ref_unreference_count == 1, "release must invoke RefCounted.unreference exactly once");
+	expect(native_object_destroy_count == 1, "true unreference result must destroy the object exactly once");
+}
+
+void test_all_variant_categories_copy_and_destroy_through_public_abi() {
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->variant_get_type = &fake_variant_get_type;
+	services->variant_new_copy = &fake_variant_new_copy;
+	services->variant_destroy = &fake_variant_destroy;
+	foundry_java::NativeTransport transport(services);
+	variant_copy_count = 0;
+	variant_destroy_count = 0;
+	std::max_align_t source_storage[4]{};
+	for (const auto &category : foundry_java::variant_categories()) {
+		copied_variant_type = category.abi_type;
+		const auto handle = transport.copy_variant(
+				70,
+				9,
+				source_storage,
+				category.abi_type);
+		expect(handle != 0, "every public Variant category must copy into opaque storage");
+		expect(
+				transport.handles().release(
+						handle,
+						70,
+						9,
+						foundry_java::HandleKind::VARIANT,
+						std::string(category.java_name)),
+				"copied Variant category must release");
+	}
+	expect(variant_copy_count == 39, "all 39 Variant categories must use variant_new_copy");
+	expect(variant_destroy_count == 39, "all 39 copied Variants must destroy exactly once");
+}
+
 } // namespace
 
 namespace foundry_java {
@@ -578,6 +881,10 @@ int main() {
 	test_bridge_services_resolve_all_or_nothing();
 	test_typed_handles_reject_wrong_identity_and_destroy_once();
 	test_handle_teardown_waits_for_active_lease();
+	test_variant_inventory_and_dispatch_validation();
+	test_native_structure_and_object_transport();
+	test_dispatch_families_and_ref_counted_ownership();
+	test_all_variant_categories_copy_and_destroy_through_public_abi();
 	std::cout << "Foundry Java native runtime tests passed\n";
 	return 0;
 }

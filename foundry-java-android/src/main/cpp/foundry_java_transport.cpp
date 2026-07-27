@@ -1,5 +1,9 @@
 #include "foundry_java_transport.h"
 
+#include "foundry_java_abi_layout.h"
+
+#include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
@@ -8,6 +12,126 @@
 #include <utility>
 
 namespace foundry_java {
+
+const std::array<VariantCategoryInfo, 39> &variant_categories() {
+	static constexpr std::array<VariantCategoryInfo, 39> categories = { {
+		{ "NIL", FOUNDRY_EXTENSION_VARIANT_TYPE_NIL },
+		{ "BOOLEAN", FOUNDRY_EXTENSION_VARIANT_TYPE_BOOL },
+		{ "INTEGER", FOUNDRY_EXTENSION_VARIANT_TYPE_INT },
+		{ "FLOAT", FOUNDRY_EXTENSION_VARIANT_TYPE_FLOAT },
+		{ "STRING", FOUNDRY_EXTENSION_VARIANT_TYPE_STRING },
+		{ "VECTOR2", FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR2 },
+		{ "VECTOR2I", FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR2I },
+		{ "RECT2", FOUNDRY_EXTENSION_VARIANT_TYPE_RECT2 },
+		{ "RECT2I", FOUNDRY_EXTENSION_VARIANT_TYPE_RECT2I },
+		{ "VECTOR3", FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3 },
+		{ "VECTOR3I", FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3I },
+		{ "TRANSFORM2D", FOUNDRY_EXTENSION_VARIANT_TYPE_TRANSFORM2D },
+		{ "VECTOR4", FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR4 },
+		{ "VECTOR4I", FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR4I },
+		{ "PLANE", FOUNDRY_EXTENSION_VARIANT_TYPE_PLANE },
+		{ "QUATERNION", FOUNDRY_EXTENSION_VARIANT_TYPE_QUATERNION },
+		{ "AABB", FOUNDRY_EXTENSION_VARIANT_TYPE_AABB },
+		{ "BASIS", FOUNDRY_EXTENSION_VARIANT_TYPE_BASIS },
+		{ "TRANSFORM3D", FOUNDRY_EXTENSION_VARIANT_TYPE_TRANSFORM3D },
+		{ "PROJECTION", FOUNDRY_EXTENSION_VARIANT_TYPE_PROJECTION },
+		{ "COLOR", FOUNDRY_EXTENSION_VARIANT_TYPE_COLOR },
+		{ "STRING_NAME", FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME },
+		{ "NODE_PATH", FOUNDRY_EXTENSION_VARIANT_TYPE_NODE_PATH },
+		{ "RID", FOUNDRY_EXTENSION_VARIANT_TYPE_RID },
+		{ "OBJECT", FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT },
+		{ "CALLABLE", FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE },
+		{ "SIGNAL", FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL },
+		{ "DICTIONARY", FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY },
+		{ "ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_ARRAY },
+		{ "PACKED_BYTE_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_BYTE_ARRAY },
+		{ "PACKED_INT32_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_INT32_ARRAY },
+		{ "PACKED_INT64_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_INT64_ARRAY },
+		{ "PACKED_FLOAT32_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_FLOAT32_ARRAY },
+		{ "PACKED_FLOAT64_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_FLOAT64_ARRAY },
+		{ "PACKED_STRING_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_STRING_ARRAY },
+		{ "PACKED_VECTOR2_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_VECTOR2_ARRAY },
+		{ "PACKED_VECTOR3_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_VECTOR3_ARRAY },
+		{ "PACKED_COLOR_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_COLOR_ARRAY },
+		{ "PACKED_VECTOR4_ARRAY", FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_VECTOR4_ARRAY },
+	} };
+	return categories;
+}
+
+DispatchValidation validate_dispatch(
+		const NativeDispatch &dispatch,
+		std::size_t formal_argument_count,
+		std::string_view receiver_native_type) {
+	if (dispatch.minimum_argument_count > dispatch.argument_native_types.size()) {
+		return { false, "invalid_dispatch_metadata" };
+	}
+	if (formal_argument_count < dispatch.minimum_argument_count) {
+		return { false, "argument_count_below_minimum" };
+	}
+	if (!dispatch.vararg && formal_argument_count > dispatch.argument_native_types.size()) {
+		return { false, "argument_count_above_maximum" };
+	}
+
+	const bool receiver_required =
+			dispatch.kind == DispatchKind::BUILTIN_METHOD ||
+			dispatch.kind == DispatchKind::BUILTIN_OPERATOR ||
+			dispatch.kind == DispatchKind::BUILTIN_MEMBER;
+	if (receiver_required) {
+		if (receiver_native_type.empty()) {
+			return { false, "missing_builtin_receiver" };
+		}
+		if (receiver_native_type != dispatch.owner_native_type) {
+			return { false, "builtin_receiver_type_mismatch" };
+		}
+	} else if (!receiver_native_type.empty()) {
+		return { false, "unexpected_receiver" };
+	}
+	return { true, {} };
+}
+
+DispatchFamily dispatch_family(const NativeDispatch &dispatch) {
+	switch (dispatch.kind) {
+		case DispatchKind::CLASS_METHOD: {
+			if (dispatch.vararg) {
+				return DispatchFamily::CLASS_VARIANT_CALL;
+			}
+			const bool variant_arguments =
+					std::all_of(
+							dispatch.argument_native_types.begin(),
+							dispatch.argument_native_types.end(),
+							[](const std::string &type) { return type == "Variant"; });
+			return variant_arguments && (dispatch.return_native_type.empty() || dispatch.return_native_type == "Variant") ?
+					DispatchFamily::CLASS_VARIANT_CALL :
+					DispatchFamily::CLASS_PTRCALL;
+		}
+		case DispatchKind::CLASS_PROPERTY:
+			return DispatchFamily::CLASS_PROPERTY;
+		case DispatchKind::CLASS_SIGNAL:
+			return DispatchFamily::CLASS_SIGNAL;
+		case DispatchKind::BUILTIN_METHOD:
+			return DispatchFamily::BUILTIN_METHOD;
+		case DispatchKind::BUILTIN_CONSTRUCTOR:
+			return DispatchFamily::BUILTIN_CONSTRUCTOR;
+		case DispatchKind::BUILTIN_OPERATOR:
+			return DispatchFamily::BUILTIN_OPERATOR;
+		case DispatchKind::BUILTIN_MEMBER:
+			return DispatchFamily::BUILTIN_MEMBER;
+		case DispatchKind::BUILTIN_CONSTANT:
+			return DispatchFamily::BUILTIN_CONSTANT;
+		case DispatchKind::UTILITY_FUNCTION:
+			return DispatchFamily::UTILITY_FUNCTION;
+	}
+	return DispatchFamily::INVALID;
+}
+
+DispatchValidation validate_value_backend(
+		FoundryExtensionVariantType type,
+		ValueBackend backend) {
+	if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL && backend == ValueBackend::JAVA_LOCAL) {
+		return { false, "java_local_signal_unsupported" };
+	}
+	return { true, {} };
+}
 
 NativeValue NativeValue::storage(std::size_t size) {
 	NativeValue value;
@@ -162,9 +286,6 @@ NativeHandle NativeHandleStore::insert(
 		NativeValue value,
 		bool owned,
 		Destroy destroy) {
-	if (context == 0 || generation == 0 || expected_type.empty()) {
-		return 0;
-	}
 	auto shared = std::make_shared<SharedHandleRecord>();
 	shared->record.context = context;
 	shared->record.generation = generation;
@@ -174,13 +295,22 @@ NativeHandle NativeHandleStore::insert(
 	shared->record.owned = owned;
 	shared->record.live = true;
 	shared->destroy = std::move(destroy);
-
-	std::lock_guard lock(impl->mutex);
-	if (impl->next_handle == 0 || impl->next_handle == std::numeric_limits<NativeHandle>::max()) {
+	if (context == 0 || generation == 0 || shared->record.expected_type.empty()) {
+		drain_and_destroy(shared);
 		return 0;
 	}
-	const NativeHandle handle = impl->next_handle++;
-	impl->records.emplace(handle, std::move(shared));
+
+	NativeHandle handle = 0;
+	{
+		std::lock_guard lock(impl->mutex);
+		if (impl->next_handle != 0 && impl->next_handle != std::numeric_limits<NativeHandle>::max()) {
+			handle = impl->next_handle++;
+			impl->records.emplace(handle, shared);
+		}
+	}
+	if (handle == 0) {
+		drain_and_destroy(shared);
+	}
 	return handle;
 }
 
@@ -256,6 +386,276 @@ std::size_t NativeHandleStore::teardown(ContextHandle context, std::uint64_t gen
 std::size_t NativeHandleStore::size() const noexcept {
 	std::lock_guard lock(impl->mutex);
 	return impl->records.size();
+}
+
+namespace {
+
+class ScopedStringName final {
+public:
+	ScopedStringName(const BridgeServices &services, const std::string &text) :
+			services(services),
+			value(NativeValue::storage(abi_layout_size("StringName"))) {
+		if (value.data() == nullptr ||
+				services.string_name_new_with_utf8_chars_and_len == nullptr ||
+				services.variant_get_ptr_destructor == nullptr) {
+			return;
+		}
+		services.string_name_new_with_utf8_chars_and_len(
+				value.data(),
+				text.data(),
+				static_cast<FoundryExtensionInt>(text.size()));
+		value.constructed = true;
+	}
+
+	~ScopedStringName() {
+		if (!value.constructed) {
+			return;
+		}
+		const FoundryExtensionPtrDestructor destructor =
+				services.variant_get_ptr_destructor(FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME);
+		if (destructor != nullptr) {
+			destructor(value.data());
+		}
+		value.constructed = false;
+	}
+
+	explicit operator bool() const noexcept {
+		return value.constructed;
+	}
+
+	FoundryExtensionConstStringNamePtr get() const noexcept {
+		return value.data();
+	}
+
+private:
+	const BridgeServices &services;
+	NativeValue value;
+};
+
+} // namespace
+
+NativeTransport::NativeTransport(std::shared_ptr<const BridgeServices> services) :
+		services(std::move(services)) {
+}
+
+NativeHandleStore &NativeTransport::handles() noexcept {
+	return handle_store;
+}
+
+const NativeHandleStore &NativeTransport::handles() const noexcept {
+	return handle_store;
+}
+
+NativeHandle NativeTransport::create_native_structure(
+		ContextHandle context,
+		std::uint64_t generation,
+		const std::string &expected_type) {
+	if (services == nullptr || services->get_native_struct_size == nullptr) {
+		return 0;
+	}
+	ScopedStringName native_type(*services, expected_type);
+	if (!native_type) {
+		return 0;
+	}
+	const std::uint64_t byte_size = services->get_native_struct_size(native_type.get());
+	if (byte_size == 0 || byte_size > std::numeric_limits<std::size_t>::max()) {
+		return 0;
+	}
+	return handle_store.insert(
+			context,
+			generation,
+			HandleKind::NATIVE_STRUCTURE,
+			expected_type,
+			NativeValue::storage(static_cast<std::size_t>(byte_size)),
+			true,
+			{});
+}
+
+NativeHandle NativeTransport::track_object(
+		ContextHandle context,
+		std::uint64_t generation,
+		FoundryExtensionObjectPtr object,
+		std::string expected_type,
+		bool owned) {
+	if (services == nullptr || services->object_get_instance_id == nullptr || object == nullptr) {
+		return 0;
+	}
+	const GDObjectInstanceID instance_id = services->object_get_instance_id(object);
+	if (instance_id == 0) {
+		return 0;
+	}
+	NativeValue value;
+	value.object_instance_id = static_cast<std::uint64_t>(instance_id);
+	auto captured_services = services;
+	return handle_store.insert(
+			context,
+			generation,
+			HandleKind::OBJECT,
+			std::move(expected_type),
+			std::move(value),
+			owned,
+			[captured_services](HandleRecord &record) {
+				if (captured_services->object_get_instance_from_id == nullptr ||
+						captured_services->object_destroy == nullptr) {
+					return;
+				}
+				FoundryExtensionObjectPtr live_object =
+						captured_services->object_get_instance_from_id(record.value.object_instance_id);
+				if (live_object != nullptr) {
+					captured_services->object_destroy(live_object);
+				}
+			});
+}
+
+ObjectLease NativeTransport::acquire_object(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation,
+		const std::string &expected_type) {
+	if (services == nullptr || services->object_get_instance_from_id == nullptr) {
+		return {};
+	}
+	HandleLease lease = handle_store.acquire(handle, context, generation, HandleKind::OBJECT, expected_type);
+	if (!lease) {
+		return {};
+	}
+	FoundryExtensionObjectPtr object =
+			services->object_get_instance_from_id(lease.record().value.object_instance_id);
+	if (object == nullptr) {
+		return {};
+	}
+	return { std::move(lease), object };
+}
+
+NativeHandle NativeTransport::retain_ref_counted(
+		ContextHandle context,
+		std::uint64_t generation,
+		FoundryExtensionObjectPtr object,
+		std::string expected_type) {
+	if (services == nullptr ||
+			services->classdb_get_class_tag == nullptr ||
+			services->object_cast_to == nullptr ||
+			services->classdb_get_method_bind == nullptr ||
+			services->object_method_bind_ptrcall == nullptr ||
+			services->object_get_instance_id == nullptr ||
+			services->object_get_instance_from_id == nullptr ||
+			services->object_destroy == nullptr ||
+			object == nullptr) {
+		return 0;
+	}
+	ScopedStringName ref_counted_name(*services, "RefCounted");
+	ScopedStringName reference_name(*services, "reference");
+	ScopedStringName unreference_name(*services, "unreference");
+	if (!ref_counted_name || !reference_name || !unreference_name) {
+		return 0;
+	}
+	void *class_tag = services->classdb_get_class_tag(ref_counted_name.get());
+	if (class_tag == nullptr) {
+		return 0;
+	}
+	FoundryExtensionObjectPtr ref_counted = services->object_cast_to(object, class_tag);
+	if (ref_counted == nullptr) {
+		return 0;
+	}
+	constexpr FoundryExtensionInt reference_hash = 2240911060;
+	const FoundryExtensionMethodBindPtr reference =
+			services->classdb_get_method_bind(ref_counted_name.get(), reference_name.get(), reference_hash);
+	const FoundryExtensionMethodBindPtr unreference =
+			services->classdb_get_method_bind(ref_counted_name.get(), unreference_name.get(), reference_hash);
+	if (reference == nullptr || unreference == nullptr) {
+		return 0;
+	}
+	FoundryExtensionBool retained = 0;
+	services->object_method_bind_ptrcall(reference, ref_counted, nullptr, &retained);
+	if (!retained) {
+		return 0;
+	}
+	const GDObjectInstanceID instance_id = services->object_get_instance_id(ref_counted);
+	if (instance_id == 0) {
+		FoundryExtensionBool destroy = 0;
+		services->object_method_bind_ptrcall(unreference, ref_counted, nullptr, &destroy);
+		if (destroy) {
+			services->object_destroy(ref_counted);
+		}
+		return 0;
+	}
+
+	NativeValue value;
+	value.object_instance_id = static_cast<std::uint64_t>(instance_id);
+	auto captured_services = services;
+	const NativeHandle handle = handle_store.insert(
+			context,
+			generation,
+			HandleKind::OBJECT,
+			std::move(expected_type),
+			std::move(value),
+			true,
+			[captured_services, unreference](HandleRecord &record) {
+				FoundryExtensionObjectPtr live_object =
+						captured_services->object_get_instance_from_id(record.value.object_instance_id);
+				if (live_object == nullptr) {
+					return;
+				}
+				FoundryExtensionBool destroy = 0;
+				captured_services->object_method_bind_ptrcall(unreference, live_object, nullptr, &destroy);
+				if (destroy) {
+					captured_services->object_destroy(live_object);
+				}
+			});
+	if (handle == 0) {
+		FoundryExtensionBool destroy = 0;
+		services->object_method_bind_ptrcall(unreference, ref_counted, nullptr, &destroy);
+		if (destroy) {
+			services->object_destroy(ref_counted);
+		}
+	}
+	return handle;
+}
+
+NativeHandle NativeTransport::copy_variant(
+		ContextHandle context,
+		std::uint64_t generation,
+		FoundryExtensionConstVariantPtr source,
+		FoundryExtensionVariantType expected_type) {
+	if (services == nullptr ||
+			services->variant_get_type == nullptr ||
+			services->variant_new_copy == nullptr ||
+			services->variant_destroy == nullptr ||
+			source == nullptr ||
+			context == 0 ||
+			generation == 0 ||
+			services->variant_get_type(source) != expected_type) {
+		return 0;
+	}
+	const auto category = std::find_if(
+			variant_categories().begin(),
+			variant_categories().end(),
+			[expected_type](const VariantCategoryInfo &candidate) {
+				return candidate.abi_type == expected_type;
+			});
+	if (category == variant_categories().end()) {
+		return 0;
+	}
+	NativeValue value = NativeValue::storage(abi_layout_size("Variant"));
+	if (value.data() == nullptr) {
+		return 0;
+	}
+	services->variant_new_copy(value.data(), source);
+	value.constructed = true;
+	auto captured_services = services;
+	return handle_store.insert(
+			context,
+			generation,
+			HandleKind::VARIANT,
+			std::string(category->java_name),
+			std::move(value),
+			true,
+			[captured_services](HandleRecord &record) {
+				if (record.value.constructed) {
+					captured_services->variant_destroy(record.value.data());
+					record.value.constructed = false;
+				}
+			});
 }
 
 } // namespace foundry_java
