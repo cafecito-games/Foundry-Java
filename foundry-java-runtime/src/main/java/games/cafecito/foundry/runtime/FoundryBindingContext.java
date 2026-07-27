@@ -185,9 +185,7 @@ public final class FoundryBindingContext implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!callbackRegistry.disable()) {
-            return;
-        }
+        callbackRegistry.disableAndDrain();
         List<ObjectLease.Transition> transitions = new ArrayList<>();
         synchronized (lifecycleLock) {
             if (!alive) {
@@ -201,6 +199,10 @@ public final class FoundryBindingContext implements AutoCloseable {
             leases.clear();
         }
         transitions.forEach(ObjectLease.Transition::run);
+    }
+
+    boolean quiesceCallbacks() {
+        return callbackRegistry.disableAndDrain();
     }
 
     private void requireAlive(long objectHandle) {

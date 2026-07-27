@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BiFunction;
 import java.util.function.LongConsumer;
 import java.util.function.LongFunction;
 
@@ -17,6 +18,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
     private final Object lifecycleLock = new Object();
     private final FoundryRegistrationPlan plan;
     private final LongFunction<? extends FoundryEngine> engineFactory;
+    private final BiFunction<Long, FoundryEngine, FoundryBindingContext> contextFactory;
     private final LongConsumer terminalObserver;
     private final FoundryRuntimeCallbacks callbacks = new FoundryRuntimeCallbacks();
     private final EnumMap<FoundryInitializationLevel, List<FoundryClassDescriptor>> registered =
@@ -26,6 +28,9 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
     private FoundryBindingContext context;
     private boolean transitionInProgress;
     private boolean terminal;
+    private boolean terminalRequested;
+    private Completion pendingCompletion = Completion.INVALIDATE;
+    private TerminalCleanup pendingCleanup;
 
     public FoundryRegistryCoordinator(
             FoundryRegistryBootstrap bootstrap,
@@ -37,8 +42,21 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             FoundryRegistryBootstrap bootstrap,
             LongFunction<? extends FoundryEngine> engineFactory,
             LongConsumer terminalObserver) {
+        this(
+                bootstrap,
+                engineFactory,
+                (handle, activeEngine) -> new FoundryBindingContext(handle, activeEngine),
+                terminalObserver);
+    }
+
+    FoundryRegistryCoordinator(
+            FoundryRegistryBootstrap bootstrap,
+            LongFunction<? extends FoundryEngine> engineFactory,
+            BiFunction<Long, FoundryEngine, FoundryBindingContext> contextFactory,
+            LongConsumer terminalObserver) {
         plan = FoundryRegistrationPlan.create(Objects.requireNonNull(bootstrap, "bootstrap"));
         this.engineFactory = Objects.requireNonNull(engineFactory, "engineFactory");
+        this.contextFactory = Objects.requireNonNull(contextFactory, "contextFactory");
         this.terminalObserver = Objects.requireNonNull(terminalObserver, "terminalObserver");
     }
 
@@ -53,7 +71,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         if (reservation.transition() == null) {
             return reservation.alreadyInitialized();
         }
-        Transition transition = reservation.transition();
+        ActiveTransition transition = reservation.transition();
 
         List<FoundryClassDescriptor> completed = new ArrayList<>();
         FoundryEngine activeEngine = transition.engine();
@@ -63,7 +81,10 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                 activeEngine =
                         Objects.requireNonNull(
                                 engineFactory.apply(requestedContextHandle), "engineFactory result");
-                activeContext = new FoundryBindingContext(requestedContextHandle, activeEngine);
+                activeContext =
+                        Objects.requireNonNull(
+                                contextFactory.apply(requestedContextHandle, activeEngine),
+                                "contextFactory result");
                 callbacks.register(activeContext);
             }
             for (FoundryClassDescriptor descriptor : plan.classes(level)) {
@@ -74,13 +95,18 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                 throw new IllegalStateException(
                         "Foundry runtime callback rejected initialization level " + level + ".");
             }
-            publishInitialize(activeEngine, activeContext, level, completed);
+            TerminalCleanup cleanup =
+                    publishInitialize(activeEngine, activeContext, level, completed);
+            if (cleanup != null) {
+                performTerminalCleanup(requestedContextHandle, cleanup);
+                return false;
+            }
             return true;
         } catch (Throwable failure) {
-            markTerminal();
-            rollback(requestedContextHandle, activeEngine, completed);
-            rollback(requestedContextHandle, activeEngine, transition.registered());
-            terminate(requestedContextHandle, activeContext, true);
+            TerminalCleanup cleanup =
+                    prepareFailedInitialization(
+                            activeEngine, activeContext, level, completed, failure);
+            performTerminalCleanup(requestedContextHandle, cleanup);
             return false;
         }
     }
@@ -92,20 +118,40 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         if (level == null) {
             return;
         }
-        Transition transition = reserveDeinitialize(requestedContextHandle, level);
+        if (level == FoundryInitializationLevel.CORE) {
+            TerminalCleanup cleanup =
+                    reserveTerminal(requestedContextHandle, Completion.CORE_DEINITIALIZE);
+            if (cleanup != null) {
+                performTerminalCleanup(requestedContextHandle, cleanup);
+            }
+            return;
+        }
+        DeinitializeTransition transition = reserveDeinitialize(requestedContextHandle, level);
         if (transition == null) {
             return;
         }
-        if (transition.terminal()) {
-            rollback(requestedContextHandle, transition.engine(), transition.registered());
-            callbacks.deinitialize(requestedContextHandle, levelCode);
-            finishTerminal();
-            terminalObserver.accept(requestedContextHandle);
+        UnregisterResult unregister =
+                unregisterLevel(
+                        requestedContextHandle, transition.engine(), transition.descriptors());
+        if (unregister.failure() != null) {
+            TerminalCleanup cleanup =
+                    promoteDeinitializeFailure(
+                            transition, unregister.remainingCleanupOrder(), unregister.failure());
+            performTerminalCleanup(requestedContextHandle, cleanup);
             return;
         }
-        rollback(requestedContextHandle, transition.engine(), transition.descriptors());
-        callbacks.deinitialize(requestedContextHandle, levelCode);
-        finishDeinitialize();
+        try {
+            callbacks.deinitialize(requestedContextHandle, levelCode);
+        } catch (Throwable failure) {
+            TerminalCleanup cleanup =
+                    promoteDeinitializeFailure(transition, List.of(), failure);
+            performTerminalCleanup(requestedContextHandle, cleanup);
+            return;
+        }
+        TerminalCleanup cleanup = finishDeinitialize();
+        if (cleanup != null) {
+            performTerminalCleanup(requestedContextHandle, cleanup);
+        }
     }
 
     @Override
@@ -115,19 +161,19 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                 return 0;
             }
         }
-        return callbacks.invoke(requestedContextHandle, callbackHandle, argumentHandles);
+        try {
+            return callbacks.invoke(requestedContextHandle, callbackHandle, argumentHandles);
+        } finally {
+            retryPendingCleanup(requestedContextHandle);
+        }
     }
 
     @Override
     public void invalidate(long requestedContextHandle) {
-        Transition transition = reserveTerminal(requestedContextHandle);
-        if (transition == null) {
-            return;
+        TerminalCleanup cleanup = reserveTerminal(requestedContextHandle, Completion.INVALIDATE);
+        if (cleanup != null) {
+            performTerminalCleanup(requestedContextHandle, cleanup);
         }
-        rollback(requestedContextHandle, transition.engine(), transition.registered());
-        callbacks.invalidate(requestedContextHandle);
-        finishTerminal();
-        terminalObserver.accept(requestedContextHandle);
     }
 
     private InitializeReservation reserveInitialize(
@@ -152,18 +198,11 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             }
             transitionInProgress = true;
             contextHandle = requestedContextHandle;
-            return new InitializeReservation(
-                    new Transition(
-                            engine,
-                            context,
-                            List.of(),
-                            new MapSnapshot(registered),
-                            false),
-                    false);
+            return new InitializeReservation(new ActiveTransition(engine, context), false);
         }
     }
 
-    private Transition reserveDeinitialize(
+    private DeinitializeTransition reserveDeinitialize(
             long requestedContextHandle, FoundryInitializationLevel level) {
         synchronized (lifecycleLock) {
             if (transitionInProgress || terminal || contextHandle != requestedContextHandle) {
@@ -172,41 +211,47 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             if (!registered.containsKey(level)) {
                 return null;
             }
-            transitionInProgress = true;
-            if (level == FoundryInitializationLevel.CORE) {
-                terminal = true;
-                return new Transition(
-                        engine,
-                        context,
-                        List.of(),
-                        new MapSnapshot(registered),
-                        true);
-            }
             FoundryInitializationLevel highest =
                     FoundryInitializationLevel.values()[registered.size() - 1];
             if (level != highest) {
-                transitionInProgress = false;
                 return null;
             }
+            transitionInProgress = true;
             List<FoundryClassDescriptor> descriptors = registered.remove(level);
-            return new Transition(
-                    engine, context, descriptors, MapSnapshot.empty(), false);
+            return new DeinitializeTransition(engine, context, descriptors);
         }
     }
 
-    private Transition reserveTerminal(long requestedContextHandle) {
+    private TerminalCleanup reserveTerminal(
+            long requestedContextHandle, Completion completion) {
         synchronized (lifecycleLock) {
-            if (transitionInProgress || terminal || contextHandle != requestedContextHandle) {
+            if (contextHandle != requestedContextHandle) {
+                return null;
+            }
+            if (transitionInProgress) {
+                if (!terminal) {
+                    terminal = true;
+                    terminalRequested = true;
+                    pendingCompletion = completion;
+                }
+                return null;
+            }
+            if (pendingCleanup != null) {
+                transitionInProgress = true;
+                TerminalCleanup cleanup = pendingCleanup;
+                pendingCleanup = null;
+                return cleanup;
+            }
+            if (terminal) {
                 return null;
             }
             transitionInProgress = true;
             terminal = true;
-            return new Transition(
-                    engine, context, List.of(), new MapSnapshot(registered), true);
+            return cleanupFromRegistered(completion, null);
         }
     }
 
-    private void publishInitialize(
+    private TerminalCleanup publishInitialize(
             FoundryEngine activeEngine,
             FoundryBindingContext activeContext,
             FoundryInitializationLevel level,
@@ -215,13 +260,162 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             engine = activeEngine;
             context = activeContext;
             registered.put(level, List.copyOf(completed));
+            if (terminalRequested) {
+                terminalRequested = false;
+                return cleanupFromRegistered(pendingCompletion, null);
+            }
             transitionInProgress = false;
             lifecycleLock.notifyAll();
+            return null;
         }
     }
 
-    private void finishDeinitialize() {
+    private TerminalCleanup prepareFailedInitialization(
+            FoundryEngine activeEngine,
+            FoundryBindingContext activeContext,
+            FoundryInitializationLevel level,
+            List<FoundryClassDescriptor> completed,
+            Throwable failure) {
         synchronized (lifecycleLock) {
+            engine = activeEngine;
+            context = activeContext;
+            registered.put(level, List.copyOf(completed));
+            terminal = true;
+            terminalRequested = false;
+            return cleanupFromRegistered(Completion.INVALIDATE, failure);
+        }
+    }
+
+    private TerminalCleanup finishDeinitialize() {
+        synchronized (lifecycleLock) {
+            if (terminalRequested) {
+                terminalRequested = false;
+                return cleanupFromRegistered(pendingCompletion, null);
+            }
+            transitionInProgress = false;
+            lifecycleLock.notifyAll();
+            return null;
+        }
+    }
+
+    private TerminalCleanup promoteDeinitializeFailure(
+            DeinitializeTransition transition,
+            List<FoundryClassDescriptor> failedLevelCleanup,
+            Throwable failure) {
+        synchronized (lifecycleLock) {
+            terminal = true;
+            terminalRequested = false;
+            List<FoundryClassDescriptor> cleanupOrder = new ArrayList<>(failedLevelCleanup);
+            cleanupOrder.addAll(new MapSnapshot(registered).reverseOrder());
+            return new TerminalCleanup(
+                    transition.engine(),
+                    transition.context(),
+                    List.copyOf(cleanupOrder),
+                    Completion.INVALIDATE,
+                    failure,
+                    false);
+        }
+    }
+
+    private TerminalCleanup cleanupFromRegistered(
+            Completion completion, Throwable failureEvidence) {
+        return new TerminalCleanup(
+                engine,
+                context,
+                new MapSnapshot(registered).reverseOrder(),
+                completion,
+                failureEvidence,
+                false);
+    }
+
+    private void performTerminalCleanup(
+            long requestedContextHandle, TerminalCleanup cleanup) {
+        if (cleanup.context() != null && !cleanup.context().quiesceCallbacks()) {
+            retainPendingCleanup(cleanup);
+            return;
+        }
+        if (cleanup.failureEvidence() != null && !cleanup.failureReported()) {
+            reportCleanupFailure(
+                    requestedContextHandle, cleanup.engine(), cleanup.failureEvidence());
+            cleanup =
+                    new TerminalCleanup(
+                            cleanup.engine(),
+                            cleanup.context(),
+                            cleanup.cleanupOrder(),
+                            cleanup.completion(),
+                            cleanup.failureEvidence(),
+                            true);
+        }
+        for (int index = 0; index < cleanup.cleanupOrder().size(); index++) {
+            FoundryClassDescriptor descriptor = cleanup.cleanupOrder().get(index);
+            try {
+                cleanup.engine()
+                        .unregisterExtensionClass(
+                                requestedContextHandle, descriptor.foundryName());
+            } catch (Throwable failure) {
+                Throwable evidence = combineEvidence(cleanup.failureEvidence(), failure);
+                reportCleanupFailure(requestedContextHandle, cleanup.engine(), failure);
+                retainPendingCleanup(
+                        new TerminalCleanup(
+                                cleanup.engine(),
+                                cleanup.context(),
+                                List.copyOf(
+                                        cleanup.cleanupOrder()
+                                                .subList(index, cleanup.cleanupOrder().size())),
+                                cleanup.completion(),
+                                evidence,
+                                true));
+                return;
+            }
+        }
+        try {
+            if (cleanup.completion() == Completion.CORE_DEINITIALIZE) {
+                callbacks.deinitialize(
+                        requestedContextHandle, FoundryInitializationLevel.CORE.code());
+            } else {
+                callbacks.invalidate(requestedContextHandle);
+            }
+        } catch (Throwable failure) {
+            Throwable evidence = combineEvidence(cleanup.failureEvidence(), failure);
+            reportCleanupFailure(requestedContextHandle, cleanup.engine(), failure);
+            retainPendingCleanup(
+                    new TerminalCleanup(
+                            cleanup.engine(),
+                            cleanup.context(),
+                            List.of(),
+                            cleanup.completion(),
+                            evidence,
+                            true));
+            return;
+        }
+        finishTerminal();
+        try {
+            terminalObserver.accept(requestedContextHandle);
+        } catch (Throwable failure) {
+            reportCleanupFailure(requestedContextHandle, cleanup.engine(), failure);
+        }
+    }
+
+    private void retryPendingCleanup(long requestedContextHandle) {
+        TerminalCleanup cleanup;
+        synchronized (lifecycleLock) {
+            if (transitionInProgress
+                    || pendingCleanup == null
+                    || contextHandle != requestedContextHandle) {
+                return;
+            }
+            transitionInProgress = true;
+            cleanup = pendingCleanup;
+            pendingCleanup = null;
+        }
+        performTerminalCleanup(requestedContextHandle, cleanup);
+    }
+
+    private void retainPendingCleanup(TerminalCleanup cleanup) {
+        synchronized (lifecycleLock) {
+            terminal = true;
+            terminalRequested = false;
+            pendingCleanup = cleanup;
             transitionInProgress = false;
             lifecycleLock.notifyAll();
         }
@@ -233,62 +427,56 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             context = null;
             contextHandle = 0;
             registered.clear();
+            pendingCleanup = null;
+            terminalRequested = false;
             transitionInProgress = false;
             lifecycleLock.notifyAll();
         }
     }
 
-    private void markTerminal() {
-        synchronized (lifecycleLock) {
-            terminal = true;
-        }
-    }
-
-    private void terminate(
-            long requestedContextHandle, FoundryBindingContext activeContext, boolean invalidate) {
-        if (invalidate) {
-            callbacks.invalidate(requestedContextHandle);
-        } else if (activeContext != null) {
-            activeContext.close();
-        }
-        synchronized (lifecycleLock) {
-            terminal = true;
-            engine = null;
-            context = null;
-            contextHandle = 0;
-            registered.clear();
-            transitionInProgress = false;
-            lifecycleLock.notifyAll();
-        }
-        terminalObserver.accept(requestedContextHandle);
-    }
-
-    private void rollback(
+    private UnregisterResult unregisterLevel(
             long requestedContextHandle,
             FoundryEngine activeEngine,
             List<FoundryClassDescriptor> descriptors) {
         if (activeEngine == null) {
-            return;
+            return new UnregisterResult(List.of(), null);
         }
         for (int index = descriptors.size() - 1; index >= 0; index--) {
             try {
                 activeEngine.unregisterExtensionClass(
                         requestedContextHandle, descriptors.get(index).foundryName());
-            } catch (Throwable ignored) {
-                // Continue rollback so later resources are never stranded.
+            } catch (Throwable failure) {
+                List<FoundryClassDescriptor> remaining = new ArrayList<>(index + 1);
+                for (int remainingIndex = index; remainingIndex >= 0; remainingIndex--) {
+                    remaining.add(descriptors.get(remainingIndex));
+                }
+                return new UnregisterResult(List.copyOf(remaining), failure);
             }
         }
+        return new UnregisterResult(List.of(), null);
     }
 
-    private void rollback(
-            long requestedContextHandle,
-            FoundryEngine activeEngine,
-            MapSnapshot registeredSnapshot) {
-        for (FoundryInitializationLevel level : reverseLevels()) {
-            rollback(
-                    requestedContextHandle,
-                    activeEngine,
-                    registeredSnapshot.getOrDefault(level, List.of()));
+    private static Throwable combineEvidence(Throwable existing, Throwable failure) {
+        if (existing == null) {
+            return failure;
+        }
+        if (existing != failure) {
+            existing.addSuppressed(failure);
+        }
+        return existing;
+    }
+
+    private static void reportCleanupFailure(
+            long requestedContextHandle, FoundryEngine activeEngine, Throwable failure) {
+        if (activeEngine == null) {
+            return;
+        }
+        try {
+            activeEngine.reportCallbackException(requestedContextHandle, 0, failure);
+        } catch (Throwable reportingFailure) {
+            if (reportingFailure != failure) {
+                failure.addSuppressed(reportingFailure);
+            }
         }
     }
 
@@ -300,19 +488,35 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                 FoundryInitializationLevel.CORE);
     }
 
-    private record Transition(
-            FoundryEngine engine,
-            FoundryBindingContext context,
-            List<FoundryClassDescriptor> descriptors,
-            MapSnapshot registered,
-            boolean terminal) {}
+    private enum Completion {
+        INVALIDATE,
+        CORE_DEINITIALIZE
+    }
+
+    private record ActiveTransition(FoundryEngine engine, FoundryBindingContext context) {}
 
     private record InitializeReservation(
-            Transition transition, boolean alreadyInitialized) {
+            ActiveTransition transition, boolean alreadyInitialized) {
         static InitializeReservation rejected() {
             return new InitializeReservation(null, false);
         }
     }
+
+    private record DeinitializeTransition(
+            FoundryEngine engine,
+            FoundryBindingContext context,
+            List<FoundryClassDescriptor> descriptors) {}
+
+    private record TerminalCleanup(
+            FoundryEngine engine,
+            FoundryBindingContext context,
+            List<FoundryClassDescriptor> cleanupOrder,
+            Completion completion,
+            Throwable failureEvidence,
+            boolean failureReported) {}
+
+    private record UnregisterResult(
+            List<FoundryClassDescriptor> remainingCleanupOrder, Throwable failure) {}
 
     private static final class MapSnapshot {
         private final EnumMap<FoundryInitializationLevel, List<FoundryClassDescriptor>> values;
@@ -322,13 +526,16 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             values = copy(source);
         }
 
-        static MapSnapshot empty() {
-            return new MapSnapshot(new EnumMap<>(FoundryInitializationLevel.class));
-        }
-
-        List<FoundryClassDescriptor> getOrDefault(
-                FoundryInitializationLevel level, List<FoundryClassDescriptor> fallback) {
-            return values.getOrDefault(level, fallback);
+        List<FoundryClassDescriptor> reverseOrder() {
+            List<FoundryClassDescriptor> result = new ArrayList<>();
+            for (FoundryInitializationLevel level : reverseLevels()) {
+                List<FoundryClassDescriptor> descriptors =
+                        values.getOrDefault(level, List.of());
+                for (int index = descriptors.size() - 1; index >= 0; index--) {
+                    result.add(descriptors.get(index));
+                }
+            }
+            return List.copyOf(result);
         }
 
         private static EnumMap<FoundryInitializationLevel, List<FoundryClassDescriptor>> copy(
