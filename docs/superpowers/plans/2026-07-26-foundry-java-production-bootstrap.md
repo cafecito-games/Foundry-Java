@@ -249,6 +249,15 @@ git commit -m "Generate the pre-Activity startup provider"
 
 ### Task 3: Split provider priming from engine initialization
 
+**2026-07-26 API-23 amendment:** The Java-17 runtime intentionally depends on
+desugarable `java.util.function`, stream, and recent collection APIs. Do not
+replace one functional interface while leaving the rest of that graph
+unsupported. Preserve the public `LongFunction<? extends FoundryEngine>`
+coordinator constructor. The application plugin must enable core-library
+desugaring and add a strict `com.android.tools:desugar_jdk_libs:2.1.5`
+dependency; the Android library must use the same dependency for lint/tests.
+The base AAR manifest must remain provider-free.
+
 **Files:**
 - Create:
   `foundry-java-android/src/main/java/games/cafecito/foundry/java/FoundryJavaStartupProvider.java`
@@ -260,6 +269,16 @@ git commit -m "Generate the pre-Activity startup provider"
 - Modify: `foundry-java-android/src/main/consumer-rules.pro`
 - Modify:
   `foundry-java-android/src/test/java/games/cafecito/foundry/java/FoundryJavaInitializerTest.java`
+- Modify: `foundry-java-android/build.gradle.kts`
+- Modify: `foundry-java-gradle-plugin/build.gradle.kts`
+- Modify:
+  `foundry-java-gradle-plugin/src/main/java/games/cafecito/foundry/gradle/FoundryAndroidApplicationIntegration.java`
+- Modify:
+  `foundry-java-gradle-plugin/src/test/java/games/cafecito/foundry/gradle/FoundryJavaPluginTest.java`
+- Modify: `gradle/libs.versions.toml`
+- Modify: `build.gradle.kts`
+- Modify:
+  `src/test/java/games/cafecito/foundry/build/RepositoryContractTest.java`
 
 - [ ] **Step 1: Write provider/phase RED tests**
 
@@ -271,6 +290,16 @@ Test a provider hook with an injected bridge seam so `onCreate()` proves:
 - different bootstrap/restart-like stale state fails with
   `failure_phase=provider_pre_entry`;
 - the manifest has the exact placeholders/flags.
+
+Add repository and real-consumer RED cases requiring:
+
+- exact provider-free packaged base manifest;
+- strict desugar 2.1.5 resolution even when the consumer requests 2.0.3;
+- a minSdk-23 minified application consuming the actual release AAR and
+  runtime JAR;
+- packaged `j$/util` DEX rewriting and exact stable/generated
+  provider/bootstrap/registry retention;
+- configuration-cache reuse.
 
 - [ ] **Step 2: Run RED**
 
@@ -297,11 +326,21 @@ classloader, calls the abstract typed `bootstrap()` hook, primes once, and
 implements unused CRUD methods as deterministic unsupported/no-op operations.
 The manifest contains the exact placeholders and flags from the spec.
 
+Enable core-library desugaring through the public Android application DSL and
+add one strict 2.1.5 dependency from the Foundry plugin. Configure the Android
+library with the same version-catalog pin. Revert any interim
+`FoundryEngineFactory` API change to the approved `LongFunction` constructor.
+Extend AAR verification to reject an application/provider in the packaged base
+manifest.
+
 - [ ] **Step 5: Run GREEN, lint, and AAR tests**
 
 Run focused unit tests, `lintDebug`, `bundleReleaseAar`, and
-`verifyAndroidAar`. Expected: provider/manifest/AAR assertions pass with no
-minSdk or shrinker finding.
+`verifyAndroidAar`, then the actual-AAR minSdk-23 minified TestKit fixture
+twice. Expected: provider/manifest/AAR assertions pass, dependency insight
+selects strict 2.1.5, DEX contains desugared `j$/util` references, direct
+startup symbols survive R8, configuration cache is reused, and lint reports no
+minSdk finding.
 
 - [ ] **Step 6: Commit**
 

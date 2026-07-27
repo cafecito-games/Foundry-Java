@@ -165,6 +165,18 @@ class RepositoryContractTest {
         assertEquals("36", compileSdkMatcher.group(1));
         assertEquals("35.0.0", buildToolsMatcher.group(1));
         assertTrue(catalog.contains("android-gradle-plugin = \"8.10.0\""));
+        assertTrue(catalog.contains("desugar-jdk-libs = \"2.1.5\""));
+        assertTrue(
+                catalog.contains(
+                        "desugar-jdk-libs = { module = \"com.android.tools:desugar_jdk_libs\""));
+        assertTrue(androidBuild.contains("isCoreLibraryDesugaringEnabled = true"));
+        assertTrue(androidBuild.contains("coreLibraryDesugaring(libs.desugar.jdk.libs)"));
+        String androidLock = read("foundry-java-android/gradle.lockfile");
+        assertTrue(
+                androidLock.contains(
+                        "com.android.tools:desugar_jdk_libs:2.1.5=coreLibraryDesugaring"));
+        assertFalse(
+                Pattern.compile("empty=.*\\bcoreLibraryDesugaring\\b").matcher(androidLock).find());
         assertTrue(
                 Pattern.compile(
                                 "buildToolsVersion\\s*=\\s*"
@@ -308,12 +320,26 @@ class RepositoryContractTest {
                                 + "        \"games/cafecito/foundry/java/"
                                 + "FoundryJavaInitializer\\$DiagnosticSink.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$NativeBootstrap.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
                                 + "FoundryJavaInitializer\\$NativeLibrary.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$NativeLoader.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$PrimingState\\$Phase.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer\\$PrimingState.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
                                 + "FoundryJavaInitializer.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaStartupProvider\\$Primer.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryJavaStartupProvider.class\",\n"
                                 + "    )"));
         assertTrue(rootBuild.contains("expectedFixedConfiguration"));
         assertTrue(rootBuild.contains("expectedConsumerRules"));
+        assertTrue(rootBuild.contains("Release AAR manifest must not declare an application"));
+        assertTrue(rootBuild.contains("Release AAR manifest must not declare a provider"));
         assertFalse(rootBuild.contains("substringAfterLast('/').contains(\"Host\")"));
         assertTrue(rootBuild.contains("libfoundry_android.so"));
     }

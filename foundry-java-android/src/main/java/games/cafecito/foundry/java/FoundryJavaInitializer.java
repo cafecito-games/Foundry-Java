@@ -1,18 +1,31 @@
 package games.cafecito.foundry.java;
 
 import games.cafecito.foundry.runtime.FoundryBridgeCallbacks;
+import games.cafecito.foundry.runtime.FoundryEngine;
 import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
+import games.cafecito.foundry.runtime.FoundryRegistryCoordinator;
 import games.cafecito.foundry.runtime.FoundryRuntime;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.LongFunction;
 
 /** Versioned Java entry point for the native FoundryExtension bridge. */
 public final class FoundryJavaInitializer {
     private static final FoundryRegistryBootstrap EMPTY_BOOTSTRAP =
             new FoundryRegistryBootstrap(List.of());
     private static final String LOG_PREFIX = "FOUNDRY_JAVA_BOOTSTRAP ";
+    private static final PrimingState PROCESS_PRIMING =
+            new PrimingState(
+                    FoundryJavaInitializer::ensureNativeLibraryLoaded,
+                    FoundryJavaInitializer::bootstrapPrimedCallbacks,
+                    FoundryJavaInitializer::createProductionEngine,
+                    json -> System.out.println(LOG_PREFIX + json));
 
     private FoundryJavaInitializer() {}
+
+    static void prime(ClassLoader loader, FoundryRegistryBootstrap bootstrap) {
+        PROCESS_PRIMING.prime(loader, bootstrap);
+    }
 
     /**
      * Validates the generated API and runtime contracts, then installs the callback target.
@@ -171,6 +184,32 @@ public final class FoundryJavaInitializer {
         }
     }
 
+    private static boolean bootstrapPrimedCallbacks(
+            ClassLoader classLoader, FoundryBridgeCallbacks callbacks) {
+        return nativeBootstrapV1(
+                classLoader,
+                callbacks,
+                FoundryRuntime.API_SHA256,
+                FoundryRuntime.GENERATOR_VERSION,
+                FoundryRuntime.RUNTIME_CONTRACT_VERSION,
+                FoundryRuntime.BRIDGE_CONTRACT_VERSION);
+    }
+
+    private static FoundryEngine createProductionEngine(long contextHandle) {
+        throw new IllegalStateException(
+                "Foundry native engine transport is unavailable for context "
+                        + contextHandle
+                        + ".");
+    }
+
+    static IllegalStateException providerFailure(String message, Throwable cause) {
+        String qualified =
+                "Foundry Java startup failed: failure_phase=provider_pre_entry; " + message;
+        return cause == null
+                ? new IllegalStateException(qualified)
+                : new IllegalStateException(qualified, cause);
+    }
+
     private static native boolean nativeBootstrapV1(
             ClassLoader classLoader,
             FoundryBridgeCallbacks callbacks,
@@ -194,6 +233,94 @@ public final class FoundryJavaInitializer {
     @FunctionalInterface
     interface DiagnosticSink {
         void write(String diagnostic);
+    }
+
+    @FunctionalInterface
+    interface NativeLoader {
+        void load();
+    }
+
+    @FunctionalInterface
+    interface NativeBootstrap {
+        boolean bootstrap(ClassLoader loader, FoundryBridgeCallbacks callbacks);
+    }
+
+    static final class PrimingState {
+        private final Object lock = new Object();
+        private final NativeLoader nativeLoader;
+        private final NativeBootstrap nativeBootstrap;
+        private final LongFunction<? extends FoundryEngine> engineFactory;
+        private final DiagnosticSink diagnostics;
+        private Phase phase = Phase.EMPTY;
+        private ClassLoader classLoader;
+        private FoundryRegistryBootstrap bootstrap;
+
+        PrimingState(
+                NativeLoader nativeLoader,
+                NativeBootstrap nativeBootstrap,
+                LongFunction<? extends FoundryEngine> engineFactory,
+                DiagnosticSink diagnostics) {
+            this.nativeLoader = Objects.requireNonNull(nativeLoader, "nativeLoader");
+            this.nativeBootstrap = Objects.requireNonNull(nativeBootstrap, "nativeBootstrap");
+            this.engineFactory = Objects.requireNonNull(engineFactory, "engineFactory");
+            this.diagnostics = Objects.requireNonNull(diagnostics, "diagnostics");
+        }
+
+        void prime(ClassLoader requestedLoader, FoundryRegistryBootstrap requestedBootstrap) {
+            if (requestedLoader == null || requestedBootstrap == null) {
+                throw providerFailure("The class loader and typed bootstrap are required.", null);
+            }
+            String rejection = null;
+            synchronized (lock) {
+                if (phase == Phase.PRIMED
+                        && classLoader == requestedLoader
+                        && bootstrap == requestedBootstrap) {
+                    return;
+                }
+                if (phase != Phase.EMPTY) {
+                    rejection =
+                            "Foundry Java startup is already "
+                                    + phase.name().toLowerCase(java.util.Locale.ROOT)
+                                    + ".";
+                } else {
+                    phase = Phase.ACTIVE;
+                }
+            }
+            if (rejection != null) {
+                diagnostics.write(diagnosticJson(requestedBootstrap, -1, "provider_pre_entry"));
+                throw providerFailure(rejection, null);
+            }
+
+            try {
+                FoundryRegistryCoordinator coordinator =
+                        new FoundryRegistryCoordinator(requestedBootstrap, engineFactory);
+                nativeLoader.load();
+                if (!nativeBootstrap.bootstrap(
+                        requestedLoader,
+                        diagnosticCallbacks(requestedBootstrap, coordinator, diagnostics))) {
+                    throw new IllegalStateException("The native bridge rejected primed callbacks.");
+                }
+                synchronized (lock) {
+                    classLoader = requestedLoader;
+                    bootstrap = requestedBootstrap;
+                    phase = Phase.PRIMED;
+                }
+            } catch (RuntimeException | LinkageError failure) {
+                synchronized (lock) {
+                    phase = Phase.STALE;
+                }
+                String diagnostic = diagnosticJson(requestedBootstrap, -1, "provider_pre_entry");
+                diagnostics.write(diagnostic);
+                throw providerFailure("Provider priming did not complete.", failure);
+            }
+        }
+
+        private enum Phase {
+            EMPTY,
+            ACTIVE,
+            PRIMED,
+            STALE
+        }
     }
 
     private static final class NativeLibrary {

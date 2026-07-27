@@ -1,6 +1,6 @@
 # Foundry-Java Production Bootstrap and Transport Design
 
-**Status:** Approved
+**Status:** Approved; API-23 packaging amendment approved 2026-07-26
 
 ## Context
 
@@ -19,6 +19,35 @@ after Workstream 11.
 
 Foundry-Android remains a read-only source donor. This work neither modifies it
 nor packages, links, loads, or republishes `libfoundry_android.so`.
+
+## 2026-07-26 API-23 and Base-Manifest Amendment
+
+The host-neutral Java-17 runtime intentionally uses `java.util.function`,
+streams, and recent `java.util` APIs. Rewriting every runtime path to avoid
+those APIs would duplicate collection logic, alter the public coordinator
+constructor, and contradict the selected Java-17 runtime design. The
+application plugin therefore enables core-library desugaring and adds a strict
+`com.android.tools:desugar_jdk_libs:2.1.5` dependency for every Android
+application consumer. The Android library uses the same pin for isolated lint
+and test builds. A conflicting consumer request must still resolve exactly
+2.1.5.
+
+This is a consumer build invariant, not a new runtime API.
+`FoundryRegistryCoordinator` retains its approved
+`LongFunction<? extends FoundryEngine>` constructor; no Android-only factory
+type is added to the host-neutral public surface.
+
+The base Android AAR manifest remains provider-free so zero-module consumers
+stay inert. Only the application variant's generated manifest declares the
+literal generated provider and `<applicationId>.foundry-java-startup`
+authority. Repository verification rejects an `<application>` or `<provider>`
+in the packaged base manifest.
+
+Compatibility proof must build a minSdk-23 minified application from the actual
+release AAR and runtime JAR, challenge the strict pin with an older requested
+desugar version, prove `j$/util` rewriting in packaged DEX, and prove the stable
+provider, generated provider/bootstrap, and module registry retain their direct
+names and entry points. The same fixture must reuse configuration cache.
 
 ## Approaches
 
@@ -65,7 +94,7 @@ The generated provider extends
 `games.cafecito.foundry.java.FoundryJavaStartupProvider`. Its only bootstrap
 hook is a direct call to `FoundryGeneratedBootstrap.bootstrap()`.
 
-The AAR manifest declares the placeholder provider with:
+The generated application manifest declares the provider with:
 
 - `android:exported="false"`;
 - no custom `android:process`;
@@ -75,9 +104,9 @@ The AAR manifest declares the placeholder provider with:
 Zero-module and non-opted variants emit no startup provider or manifest entry.
 The registry task therefore emits a small variant manifest directory alongside
 generated Java/assets, and the plugin wires it through the public AGP Variant
-API. Custom application IDs produce distinct authorities. A duplicate
-authority or incompatible pre-existing placeholder fails the build with the
-variant and authority in the diagnostic.
+API. The base AAR manifest stays provider-free. Custom application IDs produce
+distinct authorities. A duplicate authority or incompatible final provider
+contract fails the build with the variant and authority in the diagnostic.
 
 `FoundryJavaStartupProvider.onCreate()` is process-idempotent. Reentrant calls
 with the same bootstrap return the existing primed state. A second different
@@ -221,6 +250,9 @@ Repository/AAR/publication contracts require:
 - one fixed FoundryExtension configuration;
 - opt-in startup manifest/provider output only for module-bearing application
   variants;
+- a provider-free packaged base manifest;
+- strict core-library desugaring 2.1.5 for minSdk-23 application consumers and
+  Android-library lint/test builds;
 - no reflection/discovery APIs or broad keep rules;
 - no Android host-runtime classes.
 
@@ -245,6 +277,8 @@ Repository/AAR/publication contracts require:
   `initOrder`, and authority collision diagnostics;
 - debug/minified release, shrinker retention, configuration-cache reuse, and
   byte-for-byte reproducibility.
+- actual release-AAR/runtime-JAR minSdk-23 DEX rewriting through `j$/util` and
+  direct provider/bootstrap/registry retention.
 
 ### Native
 

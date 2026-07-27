@@ -9,6 +9,12 @@
     public static games.cafecito.foundry.runtime.FoundryRegistryBootstrap bootstrap();
 }
 
+# Android instantiates the generated provider, whose typed hook is implemented on the stable base.
+-keep,allowoptimization class games.cafecito.foundry.generated.FoundryGeneratedStartupProvider
+-keep,allowoptimization class games.cafecito.foundry.java.FoundryJavaStartupProvider {
+    protected games.cafecito.foundry.runtime.FoundryRegistryBootstrap bootstrap();
+}
+
 # Processor-emitted providers expose one direct, typed descriptor entry point.
 -keepclasseswithmembers,allowoptimization,includedescriptorclasses class * implements games.cafecito.foundry.runtime.FoundryModuleProvider {
     public static games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER;
