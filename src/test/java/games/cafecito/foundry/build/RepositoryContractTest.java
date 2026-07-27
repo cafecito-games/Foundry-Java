@@ -7,13 +7,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class RepositoryContractTest {
     private static final String LOCK_COMMAND = "./gradlew --write-locks resolveAndLockAll";
+    private static final String UPLOAD_ARTIFACT_COMMIT =
+            "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02";
     private static final Path ROOT = Path.of("").toAbsolutePath();
+    private static final Set<String> DEBUG_FIXTURE_CLASSES =
+            Set.of(
+                    "FoundryJavaStartupEvidence",
+                    "FoundryJavaTestActivity",
+                    "FoundryJavaTestApplication",
+                    "FoundryJavaTestHost",
+                    "FoundryJavaTestRegistry",
+                    "FoundryJavaTestStartupProvider");
     private static final List<String> MODULES =
             List.of(
                     "foundry-java-api-model",
@@ -373,6 +386,182 @@ class RepositoryContractTest {
     }
 
     @Test
+    void productionStartupAcceptanceScriptFreezesTwoFreshProcessRuns() throws IOException {
+        String script = read("gradle/run-android-production-startup-acceptance.sh");
+
+        assertTrue(script.startsWith("#!/usr/bin/env bash\nset -euo pipefail\n"));
+        assertTrue(script.contains("${1:-emulator-5554}"));
+        assertTrue(script.contains("/platform-tools/adb"));
+        assertTrue(script.contains("ro.build.version.sdk"));
+        assertTrue(script.contains("\"36\""));
+        assertTrue(
+                script.contains(
+                        "./gradlew --no-daemon :foundry-java-android:assembleDebugAndroidTest"));
+        assertEquals(1, occurrences(script, "build/outputs/apk/androidTest/debug/"));
+        assertEquals(1, occurrences(script, "adb\" install"));
+        assertTrue(script.contains("target_package=\"games.cafecito.foundry.android.test\""));
+        assertTrue(
+                script.contains(
+                        "instrumentation_component=\"games.cafecito.foundry.android.test/"
+                                + "games.cafecito.foundry.java.FoundryJavaInstrumentation\""));
+        assertTrue(script.contains("force-stop"));
+        assertTrue(script.contains("pidof"));
+        assertTrue(script.contains("-e foundry_run_index \"$run_index\""));
+        assertTrue(
+                script.contains(
+                        "/data/user/0/games.cafecito.foundry.android.test/files/"
+                                + "foundry-java-production-startup-evidence.json"));
+        assertTrue(script.contains(".target_package == \"games.cafecito.foundry.android.test\""));
+        assertTrue(
+                script.contains(
+                        ".authority == \"games.cafecito.foundry.android.test."
+                                + "foundry-java-startup\""));
+        assertTrue(
+                script.contains("foundry-java-production-startup/run-${run_index}/evidence.json"));
+        assertTrue(script.contains("instrumentation.txt"));
+        assertTrue(script.contains("logcat.txt"));
+        assertTrue(script.contains("emulator-diagnostics.txt"));
+        assertTrue(script.contains("trap capture_diagnostics EXIT"));
+        for (String field :
+                List.of(
+                        "schema_version",
+                        "run_index",
+                        "pid",
+                        "pid_before_lifecycle",
+                        "pid_after_lifecycle",
+                        "target_package",
+                        "authority",
+                        "fresh_process",
+                        "provider_before_application",
+                        "provider_before_activity",
+                        "context_count_during_priming",
+                        "core_context_nonzero",
+                        "provider_registration_count",
+                        "application_on_create_count",
+                        "activity_on_create_count",
+                        "callback_dispatch_count",
+                        "callback_result",
+                        "callback_thread_attached",
+                        "exception_contained",
+                        "stale_instance_callback_rejected",
+                        "invalidation_count",
+                        "registration_order",
+                        "teardown_order",
+                        "events",
+                        "result",
+                        "failure")) {
+            assertTrue(script.contains("." + field), field);
+        }
+        for (String event :
+                List.of(
+                        "provider_on_create",
+                        "application_on_create",
+                        "activity_on_create",
+                        "foundry_extension_entry",
+                        "core_initialize",
+                        "scene_initialize",
+                        "callback_dispatch",
+                        "scene_deinitialize",
+                        "core_deinitialize",
+                        "context_invalidate")) {
+            assertTrue(script.contains(event), event);
+        }
+        assertTrue(script.contains("summary.json"));
+        assertTrue(script.contains("distinct_pids"));
+        assertTrue(script.contains("jq"));
+    }
+
+    @Test
+    void ciPublishesImmutableCheckAndProductionStartupEvidence() throws IOException {
+        String workflow = read(".github/workflows/ci.yml");
+
+        assertTrue(workflow.contains("bash gradle/run-android-production-startup-acceptance.sh"));
+        assertFalse(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
+        assertEquals(2, occurrences(workflow, UPLOAD_ARTIFACT_COMMIT));
+        assertTrue(workflow.contains("name: foundry-java-check-evidence"));
+        assertTrue(workflow.contains("name: foundry-java-api36-production-startup-evidence"));
+        assertEquals(2, occurrences(workflow, "if: always()"));
+        assertTrue(workflow.contains("foundry-java-android/build/native-host"));
+        assertTrue(workflow.contains("foundry-java-android/build/native-host-sanitized"));
+        assertTrue(workflow.contains("foundry-java-android/build/outputs/aar"));
+        assertTrue(workflow.contains("merged_manifest"));
+        assertTrue(workflow.contains("foundry-java-production-startup"));
+        assertTrue(workflow.contains("foundry-java-emulator.log"));
+    }
+
+    @Test
+    void releaseContractsExcludeEveryProductionStartupFixture() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+        int classStart = rootBuild.indexOf("val allowedBootstrapAndroidClasses =");
+        int nativeStart = rootBuild.indexOf("val requiredAndroidNativeLibraries =", classStart);
+        int nativeEnd = rootBuild.indexOf("val resolveLockTasks =", nativeStart);
+        String classAllowlist = rootBuild.substring(classStart, nativeStart);
+        String nativeAllowlist = rootBuild.substring(nativeStart, nativeEnd);
+        String mainManifest = read("foundry-java-android/src/main/AndroidManifest.xml");
+        String exports = read("foundry-java-android/src/main/cpp/foundry_java_exports.map");
+        String consumerRules = read("foundry-java-android/src/main/consumer-rules.pro");
+        String runtimeApi = read("foundry-java-runtime/api/foundry-java-runtime.api");
+
+        for (String fixtureClass : DEBUG_FIXTURE_CLASSES) {
+            assertFalse(classAllowlist.contains(fixtureClass), fixtureClass);
+            assertFalse(exports.contains(fixtureClass), fixtureClass);
+            assertFalse(consumerRules.contains(fixtureClass), fixtureClass);
+            assertFalse(runtimeApi.contains(fixtureClass), fixtureClass);
+        }
+        assertEquals(
+                """
+                val requiredAndroidNativeLibraries =
+                    setOf(
+                        "jni/armeabi-v7a/libfoundry_java.so",
+                        "jni/arm64-v8a/libfoundry_java.so",
+                        "jni/x86/libfoundry_java.so",
+                        "jni/x86_64/libfoundry_java.so",
+                    )
+                """
+                        .trim(),
+                nativeAllowlist.trim());
+        assertFalse(nativeAllowlist.contains("libfoundry_java_test_host.so"));
+        assertFalse(nativeAllowlist.contains("libfoundry_android.so"));
+        assertEquals(
+                "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\" />",
+                mainManifest.trim());
+        assertEquals(
+                "7487bcff4a8ab4affd0ea43f4f19bbb7de4b556c6b4f769f2a7e5af6771f9633",
+                sha256("foundry-java-android/src/main/cpp/foundry_java_exports.map"));
+        assertEquals(
+                "be69b76a9fb1b5bd9968db1c5bbca8d64e0ef9bb5a881ac3cd37e4f0e1e9dd89",
+                sha256("foundry-java-android/src/main/consumer-rules.pro"));
+        assertEquals(
+                "f13b6869087ce8ddd7d47a826e808375b0b92bff328301e15009cf34e9ab9826",
+                sha256("foundry-java-runtime/api/foundry-java-runtime.api"));
+    }
+
+    @Test
+    void lifecycleDocumentationSeparatesProviderPrimingFromNativeCore() throws IOException {
+        String documentation =
+                (read("docs/android-integration.md")
+                                + read("docs/android.md")
+                                + read("docs/architecture.md")
+                                + read("docs/memory-and-threading.md"))
+                        .replaceAll("\\s+", " ");
+
+        for (String statement :
+                List.of(
+                        "Provider priming runs before `Application.onCreate()` and creates no "
+                                + "binding context.",
+                        "`foundry_java_library_init` and the native CORE callback create the "
+                                + "production context.",
+                        "Direct `FoundryJavaInitializer.initialize` is a compatibility and test "
+                                + "entry only.",
+                        "Registration follows the exact deterministic topological order.",
+                        "Teardown unregisters in exact reverse topological order.",
+                        "Bridge shutdown is process-terminal; restart requires a fresh Android "
+                                + "process.")) {
+            assertTrue(documentation.contains(statement), statement);
+        }
+    }
+
+    @Test
     void nativeDispatchSourceOwnershipIsExplicitAndNonReflective() throws IOException {
         String generator =
                 read(
@@ -400,6 +589,21 @@ class RepositoryContractTest {
 
     private static String read(String relativePath) throws IOException {
         return Files.readString(ROOT.resolve(relativePath));
+    }
+
+    private static String sha256(String relativePath) throws IOException {
+        try {
+            return HexFormat.of()
+                    .formatHex(
+                            MessageDigest.getInstance("SHA-256")
+                                    .digest(Files.readAllBytes(ROOT.resolve(relativePath))));
+        } catch (java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
+    }
+
+    private static int occurrences(String value, String needle) {
+        return value.split(Pattern.quote(needle), -1).length - 1;
     }
 
     private static boolean containsAndroidSourceDeclaration(String relativePath)

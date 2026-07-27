@@ -11,6 +11,24 @@ The separate native/Android bridge workstream owns JNI transport, native structu
 reference-transfer mechanics, library loading, and Android initialization. The host-neutral runtime
 described here does not implement or infer any of those details.
 
+## Android process lifecycle
+
+Provider priming retains the typed bootstrap, application class loader, and coordinator callback
+target but creates no `FoundryBindingContext`, engine object, native context, handle table, or class
+record. Those resources begin only after the public extension entry has resolved the complete
+interface table and native CORE supplies a nonzero context handle.
+
+The coordinator registers one context before exposing CORE descriptors. Whole-graph validation
+precedes native mutation; registration uses deterministic topological order. On deinitialization,
+new callbacks are rejected before active leases drain, completed classes unregister in reverse
+topological order, and invalidation closes the Java context once. Instance references, class access
+references, transport handles, the library pointer, and the interface table remain live until the
+operations that consume them have completed.
+
+Process shutdown releases the retained class loader and callback target only after rollback and
+invalidation. The stopped bridge cannot be primed again safely in the same process; restart means a
+fresh Android process with empty static and native lifecycle state.
+
 ## Object identity and ownership
 
 A live binding context returns one wrapper for a given object handle and generated wrapper class.

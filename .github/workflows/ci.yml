@@ -50,6 +50,18 @@ jobs:
             printf '%s\n' "$lock_status"
             exit 1
           fi
+      - name: Upload build and native verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: foundry-java-check-evidence
+          if-no-files-found: warn
+          path: |
+            **/build/reports/**
+            foundry-java-android/build/native-host/**
+            foundry-java-android/build/native-host-sanitized/**
+            foundry-java-android/build/outputs/aar/**
+            foundry-java-android/build/intermediates/merged_manifest/**
 
   device:
     name: JNI lifecycle on API 36
@@ -106,11 +118,15 @@ jobs:
           done
           "${ANDROID_HOME}/platform-tools/adb" devices -l
           exit 1
-      - name: Run the real JNI lifecycle on the emulator
-        run: ./gradlew --no-daemon :foundry-java-android:connectedDebugAndroidTest
-      - name: Print emulator diagnostics after failure
-        if: failure()
+      - name: Run production startup twice in fresh processes
         shell: bash
-        run: |
-          "${ANDROID_HOME}/platform-tools/adb" logcat -d || true
-          cat "${RUNNER_TEMP}/foundry-java-emulator.log" || true
+        run: bash gradle/run-android-production-startup-acceptance.sh emulator-5554
+      - name: Upload API 36 production startup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: foundry-java-api36-production-startup-evidence
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/foundry-java-production-startup/**
+            ${{ runner.temp }}/foundry-java-emulator.log
