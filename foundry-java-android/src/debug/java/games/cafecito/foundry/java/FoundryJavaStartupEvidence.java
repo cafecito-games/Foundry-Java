@@ -163,6 +163,16 @@ public final class FoundryJavaStartupEvidence {
             Throwable failure)
             throws JSONException {
         synchronized (LOCK) {
+            if (failure != null) {
+                return buildFailureReport(
+                        runIndex,
+                        targetPackage,
+                        authority,
+                        pidBeforeLifecycle,
+                        pidAfterLifecycle,
+                        lifecycle,
+                        failure);
+            }
             JSONObject preEntry =
                     applicationPreEntry != null ? applicationPreEntry : activityPreEntry;
             int contextCountDuringPriming =
@@ -234,6 +244,86 @@ public final class FoundryJavaStartupEvidence {
         }
     }
 
+    private static JSONObject buildFailureReport(
+            int runIndex,
+            String targetPackage,
+            String authority,
+            int pidBeforeLifecycle,
+            int pidAfterLifecycle,
+            JSONObject lifecycle,
+            Throwable failure)
+            throws JSONException {
+        JSONObject nativeLifecycle = lifecycle == null ? new JSONObject() : lifecycle;
+        JSONObject preEntry = applicationPreEntry != null ? applicationPreEntry : activityPreEntry;
+        JSONObject report = new JSONObject();
+        report.put("schema_version", 1);
+        report.put("run_index", runIndex);
+        report.put("pid", processId);
+        report.put("pid_before_lifecycle", pidBeforeLifecycle);
+        report.put("pid_after_lifecycle", pidAfterLifecycle);
+        report.put("target_package", targetPackage);
+        report.put("authority", authority);
+        report.put(
+                "fresh_process",
+                providerRegistrationCount == 1
+                        && applicationOnCreateCount == 1
+                        && activityOnCreateCount == 1);
+        report.put("provider_before_application", providerBeforeApplication());
+        report.put("provider_before_activity", providerBeforeActivity());
+        report.put("context_count_during_priming", optionalInt(preEntry, "live_contexts", -1));
+        report.put(
+                "registered_class_count_during_priming",
+                optionalInt(preEntry, "registered_classes", -1));
+        report.put(
+                "core_context_nonzero", optionalLong(nativeLifecycle, "context_handle", 0L) != 0L);
+        report.put("provider_registration_count", providerRegistrationCount);
+        report.put("application_on_create_count", applicationOnCreateCount);
+        report.put("activity_on_create_count", activityOnCreateCount);
+        report.put("callback_dispatch_count", callbackDispatchCount);
+        report.put("invalidation_count", invalidationCount);
+        report.put("callback_result", optionalLong(nativeLifecycle, "callback_result", 0L));
+        report.put(
+                "callback_thread_attached",
+                optionalBoolean(nativeLifecycle, "callback_thread_attached", false));
+        report.put(
+                "exception_contained",
+                optionalBoolean(nativeLifecycle, "exception_contained", false));
+        report.put(
+                "stale_instance_callback_rejected",
+                optionalBoolean(nativeLifecycle, "stale_instance_callback_rejected", false));
+        report.put("registration_order", optionalArray(nativeLifecycle, "registration_order"));
+        report.put("registration_counts", optionalObject(nativeLifecycle, "registration_counts"));
+        report.put("teardown_order", optionalArray(nativeLifecycle, "unregistration_order"));
+        report.put(
+                "unregistration_counts", optionalObject(nativeLifecycle, "unregistration_counts"));
+        report.put(
+                "events",
+                new JSONArray(mergeLifecycleEvents(optionalStrings(nativeLifecycle, "events"))));
+        report.put("result", "fail");
+        report.put("failure", failureDescription(failure));
+        report.put("descriptor_evaluation_count", FoundryJavaTestRegistry.descriptorEvaluations());
+        report.put("callback_result_observed_in_java", callbackResult);
+        report.put("callback_thread", callbackThread);
+        report.put("exception_dispatch_count", exceptionDispatchCount);
+        report.put(
+                "exception_default_is_nil",
+                optionalBoolean(nativeLifecycle, "exception_default_is_nil", false));
+        report.put("initialize_attempts", optionalArray(nativeLifecycle, "initialize_attempts"));
+        report.put(
+                "deinitialize_attempts", optionalArray(nativeLifecycle, "deinitialize_attempts"));
+        report.put(
+                "live_instances_after_teardown",
+                optionalInt(nativeLifecycle, "live_instances_after_teardown", -1));
+        report.put(
+                "live_handles_after_teardown",
+                optionalInt(nativeLifecycle, "live_handles_after_teardown", -1));
+        report.put(
+                "entry_active_after_teardown",
+                optionalBoolean(nativeLifecycle, "entry_active_after_teardown", false));
+        report.put("native_lifecycle", copy(nativeLifecycle));
+        return report;
+    }
+
     public static File writeAtomically(Context context, JSONObject report) throws IOException {
         File output = new File(context.getFilesDir(), FILE_NAME);
         AtomicFile atomicFile = new AtomicFile(output);
@@ -261,6 +351,43 @@ public final class FoundryJavaStartupEvidence {
         ArrayList<String> strings = new ArrayList<>(values.length());
         for (int index = 0; index < values.length(); index++) {
             strings.add(values.getString(index));
+        }
+        return List.copyOf(strings);
+    }
+
+    private static int optionalInt(JSONObject value, String name, int fallback) {
+        Object raw = value == null ? null : value.opt(name);
+        return raw instanceof Number number ? number.intValue() : fallback;
+    }
+
+    private static long optionalLong(JSONObject value, String name, long fallback) {
+        Object raw = value == null ? null : value.opt(name);
+        return raw instanceof Number number ? number.longValue() : fallback;
+    }
+
+    private static boolean optionalBoolean(JSONObject value, String name, boolean fallback) {
+        Object raw = value == null ? null : value.opt(name);
+        return raw instanceof Boolean bool ? bool : fallback;
+    }
+
+    private static JSONArray optionalArray(JSONObject value, String name) {
+        Object raw = value == null ? null : value.opt(name);
+        return raw instanceof JSONArray array ? array : new JSONArray();
+    }
+
+    private static JSONObject optionalObject(JSONObject value, String name) {
+        Object raw = value == null ? null : value.opt(name);
+        return raw instanceof JSONObject object ? object : new JSONObject();
+    }
+
+    private static List<String> optionalStrings(JSONObject value, String name) {
+        JSONArray values = optionalArray(value, name);
+        ArrayList<String> strings = new ArrayList<>(values.length());
+        for (int index = 0; index < values.length(); index++) {
+            Object raw = values.opt(index);
+            if (raw instanceof String string) {
+                strings.add(string);
+            }
         }
         return List.copyOf(strings);
     }

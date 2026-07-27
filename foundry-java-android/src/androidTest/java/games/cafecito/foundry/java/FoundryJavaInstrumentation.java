@@ -54,7 +54,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
     }
 
     private void runAcceptance(Bundle arguments) {
-        int runIndex = parseRunIndex(arguments);
+        int runIndex = 0;
         Context targetContext = getTargetContext();
         Bundle result = new Bundle();
         Activity activity = null;
@@ -64,9 +64,12 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
         Throwable failure = null;
         File evidenceFile = null;
         try {
+            runIndex = parseRunIndex(arguments);
+            lifecycle = failureLifecycle(runIndex);
             require(
                     TARGET_PACKAGE.equals(targetContext.getPackageName()),
                     "unexpected target package " + targetContext.getPackageName());
+            validatePreEntryJsonContract();
             require(
                     FoundryJavaStartupEvidence.providerBeforeApplication(),
                     "provider did not prime before Application.onCreate");
@@ -81,6 +84,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
             require(
                     FoundryJavaStartupEvidence.providerBeforeActivity(),
                     "provider did not prime before Activity.onCreate");
+            validateFailureReportContract(runIndex);
 
             pidBeforeLifecycle = Process.myPid();
             lifecycle = FoundryJavaTestHost.runLifecycle(runIndex);
@@ -142,6 +146,48 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
             }
             finish(Activity.RESULT_CANCELED, result);
         }
+    }
+
+    private static void validatePreEntryJsonContract() throws JSONException {
+        JSONObject authoritative = new JSONObject();
+        authoritative.put("schema_version", 1);
+        authoritative.put("bridge_ready", true);
+        authoritative.put("entry_active", false);
+        authoritative.put("live_contexts", 0);
+        authoritative.put("registered_classes", 0);
+        FoundryJavaTestHost.requirePrimedPreEntry(authoritative);
+
+        JSONObject wrongType = new JSONObject(authoritative.toString());
+        wrongType.put("registered_classes", new JSONArray());
+        boolean rejected = false;
+        try {
+            FoundryJavaTestHost.requirePrimedPreEntry(wrongType);
+        } catch (IllegalStateException expected) {
+            rejected = true;
+        }
+        require(rejected, "registered_classes array was accepted");
+    }
+
+    private static void validateFailureReportContract(int runIndex) throws JSONException {
+        JSONObject partialLifecycle =
+                new JSONObject().put("schema_version", 1).put("run_index", runIndex);
+        int pid = Process.myPid();
+        JSONObject report =
+                FoundryJavaStartupEvidence.buildReport(
+                        runIndex,
+                        TARGET_PACKAGE,
+                        PROVIDER_AUTHORITY,
+                        pid,
+                        pid,
+                        partialLifecycle,
+                        new IllegalStateException("partial lifecycle contract probe"));
+        require("fail".equals(report.getString("result")), "partial lifecycle report was not fail");
+        JSONObject rawLifecycle = report.getJSONObject("native_lifecycle");
+        require(rawLifecycle.length() == 2, "partial lifecycle evidence was not preserved");
+        require(rawLifecycle.getInt("schema_version") == 1, "partial lifecycle schema was lost");
+        require(
+                rawLifecycle.getInt("run_index") == runIndex,
+                "partial lifecycle run index was lost");
     }
 
     private static int parseRunIndex(Bundle arguments) {

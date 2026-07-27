@@ -1,6 +1,7 @@
 package games.cafecito.foundry.java;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -15,9 +16,13 @@ import games.cafecito.foundry.runtime.FoundryPropertyDetails;
 import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
+/** Debug-variant contract tests for the Android production-startup fixture. */
 class FoundryJavaTestRegistryTest {
     private static final String FIXTURE_PACKAGE = "games.cafecito.foundry.java.";
     private static final String CORE_JAVA_NAME =
@@ -163,6 +168,73 @@ class FoundryJavaTestRegistryTest {
         assertIllegalRunIndex(parser, "0");
         assertIllegalRunIndex(parser, "-1");
         assertIllegalRunIndex(parser, "not-a-number");
+    }
+
+    @Test
+    void preEntryJsonContractAcceptsIntegerZeroAndRejectsArrayOnDevice() throws Exception {
+        String host =
+                fixtureSource(
+                        "src/debug/java/games/cafecito/foundry/java/FoundryJavaTestHost.java");
+        String instrumentation =
+                fixtureSource(
+                        "src/androidTest/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaInstrumentation.java");
+
+        assertTrue(host.contains("evidence.getInt(\"registered_classes\") == 0"));
+        assertFalse(host.contains("evidence.getJSONArray(\"registered_classes\")"));
+        assertTrue(instrumentation.contains("validatePreEntryJsonContract();"));
+        assertTrue(instrumentation.contains("authoritative.put(\"registered_classes\", 0);"));
+        assertTrue(
+                instrumentation.contains(
+                        "wrongType.put(\"registered_classes\", new JSONArray());"));
+    }
+
+    @Test
+    void partialNativeLifecycleUsesTolerantFailureReportAndPreservesRawJson() throws Exception {
+        String evidence =
+                fixtureSource(
+                        "src/debug/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaStartupEvidence.java");
+        String instrumentation =
+                fixtureSource(
+                        "src/androidTest/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaInstrumentation.java");
+        int failureBranch = evidence.indexOf("if (failure != null)");
+        int strictLifecycleRead =
+                evidence.indexOf("lifecycle.getJSONArray(\"registration_order\")");
+
+        assertTrue(failureBranch >= 0, "buildReport has no tolerant failure branch");
+        assertTrue(
+                failureBranch < strictLifecycleRead,
+                "strict lifecycle fields are read before the failure branch");
+        assertTrue(evidence.contains("buildFailureReport("));
+        assertTrue(evidence.contains("report.put(\"native_lifecycle\", copy(nativeLifecycle));"));
+        assertTrue(instrumentation.contains("validateFailureReportContract(runIndex);"));
+        assertTrue(
+                instrumentation.contains(
+                        "new JSONObject().put(\"schema_version\", 1).put(\"run_index\", runIndex)"));
+    }
+
+    @Test
+    void runIndexParsingOccursInsideTheFailureReportingBoundary() throws Exception {
+        String source =
+                fixtureSource(
+                        "src/androidTest/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaInstrumentation.java");
+        int acceptance = source.indexOf("private void runAcceptance");
+        int reportingTry = source.indexOf("try {", acceptance);
+        int parsing = source.indexOf("parseRunIndex(arguments)", acceptance);
+
+        assertTrue(acceptance >= 0, "missing acceptance runner");
+        assertTrue(reportingTry > acceptance, "missing failure reporting boundary");
+        assertTrue(parsing > reportingTry, "run index parsing occurs before failure reporting");
+        assertTrue(
+                source.substring(acceptance, parsing).contains("int runIndex = 0;"),
+                "invalid input has no deterministic fallback run index");
+    }
+
+    private static String fixtureSource(String relativePath) throws Exception {
+        return new String(Files.readAllBytes(Path.of(relativePath)), StandardCharsets.UTF_8);
     }
 
     private static void assertIllegalRunIndex(Method parser, String encoded) {
