@@ -19,6 +19,8 @@ public final class FoundryBindingContext implements AutoCloseable {
     private final Object lifecycleLock = new Object();
     private final Map<Long, WeakReference<FoundryObject>> wrappers = new HashMap<>();
     private final Map<String, WrapperRegistration<?>> wrapperRegistrations = new HashMap<>();
+    private final Map<String, String> foundryTypesByJavaName = new HashMap<>();
+    private Map<String, String> extensionFoundryTypesByJavaName = Map.of();
     private final Set<ObjectLease> leases = new HashSet<>();
     private final Set<Long> invalidatedObjects = new HashSet<>();
     private volatile boolean alive = true;
@@ -90,14 +92,56 @@ public final class FoundryBindingContext implements AutoCloseable {
         Objects.requireNonNull(factory, "factory");
         synchronized (lifecycleLock) {
             requireAlive(0);
-            WrapperRegistration<?> previous =
-                    wrapperRegistrations.putIfAbsent(
-                            foundryType,
-                            new WrapperRegistration<>(ownership, wrapperClass, factory));
+            WrapperRegistration<?> previous = wrapperRegistrations.get(foundryType);
             if (previous != null && previous.wrapperClass() != wrapperClass) {
                 throw new IllegalStateException(
                         "Foundry object type " + foundryType + " is already registered.");
             }
+            String javaName = wrapperClass.getName();
+            String previousFoundryType = foundryTypesByJavaName.get(javaName);
+            if (previousFoundryType != null && !previousFoundryType.equals(foundryType)) {
+                throw new IllegalStateException(
+                        "Java object type " + javaName + " is already registered.");
+            }
+            wrapperRegistrations.putIfAbsent(
+                    foundryType, new WrapperRegistration<>(ownership, wrapperClass, factory));
+            foundryTypesByJavaName.putIfAbsent(javaName, foundryType);
+        }
+    }
+
+    public String foundryTypeForJavaName(String javaName) {
+        if (javaName == null || javaName.isBlank()) {
+            return null;
+        }
+        synchronized (lifecycleLock) {
+            requireAlive(0);
+            String extensionType = extensionFoundryTypesByJavaName.get(javaName);
+            return extensionType == null ? foundryTypesByJavaName.get(javaName) : extensionType;
+        }
+    }
+
+    void publishRegistrationCatalog(List<FoundryClassDescriptor> descriptors) {
+        Objects.requireNonNull(descriptors, "descriptors");
+        Map<String, String> catalog = new HashMap<>();
+        for (FoundryClassDescriptor descriptor : descriptors) {
+            FoundryClassDescriptor checked = Objects.requireNonNull(descriptor, "descriptor");
+            String previous = catalog.putIfAbsent(checked.javaName(), checked.foundryName());
+            if (previous != null && !previous.equals(checked.foundryName())) {
+                throw new IllegalArgumentException(
+                        "Java extension type "
+                                + checked.javaName()
+                                + " has ambiguous Foundry names.");
+            }
+        }
+        Map<String, String> immutableCatalog = Map.copyOf(catalog);
+        synchronized (lifecycleLock) {
+            requireAlive(0);
+            if (!extensionFoundryTypesByJavaName.isEmpty()
+                    && !extensionFoundryTypesByJavaName.equals(immutableCatalog)) {
+                throw new IllegalStateException(
+                        "Foundry extension registration catalog is already published.");
+            }
+            extensionFoundryTypesByJavaName = immutableCatalog;
         }
     }
 
@@ -215,6 +259,9 @@ public final class FoundryBindingContext implements AutoCloseable {
             }
             alive = false;
             wrappers.clear();
+            wrapperRegistrations.clear();
+            foundryTypesByJavaName.clear();
+            extensionFoundryTypesByJavaName = Map.of();
             for (ObjectLease lease : leases) {
                 transitions.add(lease.transitionToInvalid(true));
             }

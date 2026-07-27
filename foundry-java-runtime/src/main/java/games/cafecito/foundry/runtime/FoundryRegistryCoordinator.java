@@ -102,6 +102,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                         Objects.requireNonNull(
                                 contextFactory.apply(requestedContextHandle, activeEngine),
                                 "contextFactory result");
+                activeContext.publishRegistrationCatalog(plan.orderedClasses());
                 callbacks.register(activeContext);
             }
             for (FoundryClassDescriptor descriptor : plan.classes(level)) {

@@ -62,9 +62,32 @@ class FoundryJavaInitializerTest {
         assertTrue(rules.contains("FoundryJavaStartupProvider"));
         assertTrue(rules.contains("FoundryModuleProvider"));
         assertTrue(rules.contains("FoundryBridgeCallbacks"));
+        for (String exactEntry :
+                List.of(
+                        "nativeRegistrationMembersV1",
+                        "nativeRegistrationAccessV1",
+                        "nativeRegistrationDetailsV1",
+                        "nativeRegistrationFoundryTypeV1",
+                        "nativeConstructExtensionV1",
+                        "nativeInvokeExtensionV1",
+                        "nativeGetExtensionPropertyV1",
+                        "nativeSetExtensionPropertyV1",
+                        "nativeExtensionToStringV1",
+                        "class games.cafecito.foundry.runtime.FoundryClassDescriptor",
+                        "class games.cafecito.foundry.runtime.FoundryMemberDescriptor",
+                        "interface games.cafecito.foundry.runtime.FoundryExtensionAccess",
+                        "interface games.cafecito.foundry.runtime.FoundryMemberDetails",
+                        "class games.cafecito.foundry.runtime.FoundryConstantDetails",
+                        "class games.cafecito.foundry.runtime.FoundryPropertyDetails")) {
+            assertTrue(rules.contains(exactEntry), exactEntry);
+        }
         assertFalse(rules.contains("games.cafecito.foundry.**"));
+        assertFalse(rules.contains("games.cafecito.foundry.runtime.**"));
         assertFalse(rules.contains("-keep class *"));
         assertFalse(rules.contains("FoundryPlugin"));
+        assertTrue(
+                rules.contains(
+                        "-dontwarn games.cafecito.foundry.annotations.GeneratedByFoundry"));
     }
 
     @Test

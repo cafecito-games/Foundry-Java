@@ -701,21 +701,21 @@ class FoundryNativeEngineTest {
     }
 
     @Test
-    void freezesRegistrationAsUnavailableBeforeTaskFiveWithoutGatewayMutation() {
+    void rejectsNullRegistrationBeforeGatewayAndPropagatesGatewayUnavailability() {
         RecordingGateway gateway = new RecordingGateway();
         FoundryNativeEngine engine =
                 new FoundryNativeEngine(11, ignored -> utility("Variant", 0, true), gateway);
 
-        UnsupportedOperationException register =
+        NullPointerException register =
                 assertThrows(
-                        UnsupportedOperationException.class,
+                        NullPointerException.class,
                         () -> engine.registerExtensionClass(11, null));
         UnsupportedOperationException unregister =
                 assertThrows(
                         UnsupportedOperationException.class,
                         () -> engine.unregisterExtensionClass(11, "Demo"));
 
-        assertTrue(register.getMessage().contains("registration_unavailable_before_task5"));
+        assertEquals("descriptor", register.getMessage());
         assertTrue(unregister.getMessage().contains("registration_unavailable_before_task5"));
         assertEquals(0, gateway.registrations);
     }
