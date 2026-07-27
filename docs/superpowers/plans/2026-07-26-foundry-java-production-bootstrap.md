@@ -365,6 +365,13 @@ git commit -m "Prime Foundry Java before application startup"
 - Create: `foundry-java-android/src/main/cpp/foundry_java_interface.cpp`
 - Create: `foundry-java-android/src/main/cpp/foundry_java_transport.h`
 - Create: `foundry-java-android/src/main/cpp/foundry_java_transport.cpp`
+- Create:
+  `foundry-java-android/src/main/cpp/cmake/GenerateFoundryJavaAbiLayout.cmake`
+- Create:
+  `foundry-java-android/src/main/cpp/foundry_java_abi_layout.h.in`
+- Create: `gradle/verify-native-abi-layout.sh`
+- Generate:
+  `${CMAKE_CURRENT_BINARY_DIR}/generated/foundry_java_abi_layout.h`
 - Modify:
   `foundry-java-android/src/main/java/games/cafecito/foundry/java/FoundryJavaInitializer.java`
 - Modify:
@@ -408,17 +415,24 @@ Require the generator to emit deterministic
 `games.cafecito.foundry.generated.GeneratedNativeDispatch` metadata keyed by
 the existing structural call identity. Freeze and test the literal stable
 runtime `FoundryNativeDispatch` record and `Kind` enum from the design; the
-generated table instantiates that record and never crosses JNI as its own
-consumer-generated type. For every callable/property identity, assert kind,
+API-generated table instantiates that record and never crosses JNI as its own
+generated type. For every callable/property identity, assert kind,
 owner, native name, compatibility hash or constructor index, getter/setter
 structural identities/native names/hashes, exact argument/return native type
-tokens, arity (`argumentNativeTypes.size()`, minimum fixed arity for varargs),
-vararg, and static flags. Include `BUILTIN_CONSTANT` rows for every
-non-integer `FoundryConstant.get()` identity. Require both `float_32` and
-`float_64` built-in size tables and exact
-32-/64-bit `String`, `StringName`, `Object`, and 24-byte `Variant` layouts. Add
-API-baseline and repository-inventory expectations for the stable/generated
-classes and new native source/header files.
+tokens, `minimumArgumentCount`, vararg, and static flags. Non-vararg formal
+arity must be within `[minimumArgumentCount, argumentNativeTypes.size()]`;
+vararg formal arity must be at least the minimum and extra values remain
+`Variant`. Formal tokens exclude an implicit built-in receiver, which is
+validated separately against the owner type only for receiver-bearing built-in
+method/operator/member kinds, including current static built-in methods whose
+native base is null; constructors, constants, and utility functions have no
+receiver. Freeze `Kind` JNI wire codes `1..9`. Include `BUILTIN_CONSTANT` rows
+for every non-integer `FoundryConstant.get()` identity. Separately require the
+native CMake layout generator to parse both `float_32` and `float_64` tables,
+validate their 40-name identity/order/size contract and provenance SHA, and
+emit byte-identical native headers. Add API-baseline and repository-inventory
+expectations for the stable/generated classes and new native source/header
+files.
 
 - [ ] **Step 2: Write pure-C++ transport RED tests before JNI**
 
@@ -455,7 +469,9 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   :foundry-java-runtime:verifyRuntimeApi
 
 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
-  ./gradlew --no-daemon :foundry-java-android:nativeHostTest
+  ./gradlew --no-daemon \
+  :foundry-java-android:nativeAbiLayoutTest \
+  :foundry-java-android:nativeHostTest
 ```
 
 Expected: missing `GeneratedNativeDispatch`, missing generated layout data, and
@@ -470,8 +486,24 @@ emitting an immutable table of stable runtime `FoundryNativeDispatch` records.
 `call(long, long, String, List<Variant>)` signature unchanged. Unknown
 identity/kind/arity/type-token failures never enter JNI.
 
-Generate both precision layouts from `api/current/extension_api.json`. On
-Android single precision assert:
+Generate dispatch metadata only through `FoundrySourceGenerator`. Generate
+native layouts separately through the checked-in CMake script/template. The
+CMake generator must:
+
+- verify the actual `extension_api.json` SHA against `provenance.json`;
+- freeze bridge precision to `float` and select exactly the accepted
+  `float_32` and `float_64` configurations without selecting `double_*`;
+- require 40 unique names in identical order, with first-row `Nil == 0` and
+  strictly positive integer sizes for the other 39 rows;
+- reject missing, duplicate, reordered, malformed, or wrong-sentinel rows;
+- configure `${CMAKE_CURRENT_BINARY_DIR}/generated/foundry_java_abi_layout.h`;
+  and
+- expose that binary generated directory as a PUBLIC include of
+  `foundry_java_runtime`, selected by `sizeof(void *)`.
+
+Declare the CMake script, template, API JSON, and provenance as configure
+dependencies. Do not pass layout data through JNI or couple CMake to an AGP
+cross-module generated-source task. On Android single precision assert:
 
 ```text
 32-bit: String=4 StringName=4 Object=4 Variant=24
@@ -481,6 +513,14 @@ Android single precision assert:
 Use max-aligned storage with explicit constructed bits. Destroy constructed
 `String`/`StringName` through the destructor returned by
 `variant_get_ptr_destructor`; there is no `string_name_destroy`.
+
+Add `verify-native-abi-layout.sh` and `nativeAbiLayoutTest`. Generate twice and
+compare bytes, then exercise malformed SHA, missing configuration, duplicate,
+order/name mismatch, invalid size, and sentinel fixtures including nonzero or
+misplaced `Nil`. Native host tests include the generated header and assert
+`Nil == 0` plus every positive selected row. Wire
+`nativeAbiLayoutTest` into Android `check` and the root verification/check
+contract.
 
 - [ ] **Step 5: Resolve and publish immutable BridgeServices**
 
@@ -569,7 +609,12 @@ points in consumer rules. Freeze the exact design descriptors for
 `nativeCallV1`, decode/encode, object validity/type, instantiate,
 retain/release, singleton, callback reporting, and the Task 5
 register/unregister seam. JNI accepts the stable runtime
-`FoundryNativeDispatch`, never `Object` or the consumer-generated table class.
+`FoundryNativeDispatch`, never `Object` or the API-generated runtime table
+class.
+Before Task 5, the two versioned register/unregister JNI bodies throw
+`UnsupportedOperationException` with phase
+`registration_unavailable_before_task5` before descriptor reads or any native
+mutation; focused tests assert all registration counters remain zero.
 
 - [ ] **Step 9: Run GREEN plus sanitizers**
 
@@ -593,6 +638,7 @@ JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
 
 JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home \
   ./gradlew --no-daemon \
+  :foundry-java-android:nativeAbiLayoutTest \
   :foundry-java-android:nativeHostTest \
   :foundry-java-android:nativeSanitizerTest
 

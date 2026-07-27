@@ -114,6 +114,7 @@ public record FoundryNativeDispatch(
         long compatibilityHash,
         int constructorIndex,
         List<String> argumentNativeTypes,
+        int minimumArgumentCount,
         String returnNativeType,
         String getterIdentity,
         String getterNativeName,
@@ -124,32 +125,56 @@ public record FoundryNativeDispatch(
         boolean vararg,
         boolean staticCall) {
     public enum Kind {
-        CLASS_METHOD,
-        CLASS_PROPERTY,
-        CLASS_SIGNAL,
-        BUILTIN_METHOD,
-        BUILTIN_CONSTRUCTOR,
-        BUILTIN_OPERATOR,
-        BUILTIN_MEMBER,
-        BUILTIN_CONSTANT,
-        UTILITY_FUNCTION
+        CLASS_METHOD(1),
+        CLASS_PROPERTY(2),
+        CLASS_SIGNAL(3),
+        BUILTIN_METHOD(4),
+        BUILTIN_CONSTRUCTOR(5),
+        BUILTIN_OPERATOR(6),
+        BUILTIN_MEMBER(7),
+        BUILTIN_CONSTANT(8),
+        UTILITY_FUNCTION(9);
+
+        private final int wireCode;
+
+        Kind(int wireCode) {
+            this.wireCode = wireCode;
+        }
+
+        public int wireCode() {
+            return wireCode;
+        }
     }
 }
 ```
 
 Empty accessor identity/name values and `-1` hash/index values mean not
 applicable; the record constructor validates the legal fields for each kind.
-`argumentNativeTypes.size()` is the exact arity for fixed calls and the minimum
-fixed arity for varargs. The API generator emits one immutable
-`GeneratedNativeDispatch` table keyed by the exact structural identity already
-passed to `FoundryEngine.call`, and instantiates only this stable runtime record.
-A consumer-generated class never appears in an Android AAR native method
-descriptor. Property entries preserve exact structural accessor identities,
-native names, and compatibility hashes so overloads cannot alias. Unknown
-identities, kinds, arities, and typed native-handle mismatches fail in Java
-before JNI. `FoundryEngine.call(long, long, String, List<Variant>)` remains
-unchanged; `FoundryNativeEngine` performs the generated lookup behind that
-stable signature.
+`minimumArgumentCount` is the number of required formal arguments.
+Non-vararg calls accept formal arities in the inclusive range
+`[minimumArgumentCount, argumentNativeTypes.size()]`; vararg calls accept every
+formal arity greater than or equal to `minimumArgumentCount`, and extra values
+are untyped `Variant` arguments. Formal argument tokens exclude an implicit
+built-in receiver. Receiver-bearing `BUILTIN_METHOD`, `BUILTIN_OPERATOR`, and
+`BUILTIN_MEMBER` dispatch consumes the first Java argument as that receiver and
+validates it separately against `ownerNativeType` before applying the formal
+arity rule. This remains true for current static built-in methods, whose native
+base pointer is null after the Java receiver value is converted.
+`BUILTIN_CONSTRUCTOR`, `BUILTIN_CONSTANT`, and `UTILITY_FUNCTION` have no
+implicit receiver. The kind wire codes `1..9` are stable JNI/native protocol
+values and unknown codes fail before dispatch. The API generator emits one
+immutable `GeneratedNativeDispatch` table keyed by the exact structural
+identity already passed to `FoundryEngine.call`, and instantiates only this
+stable runtime record. `GeneratedNativeDispatch` is produced from the accepted
+API while the runtime artifact is built, compiled into that runtime artifact,
+and therefore exists before the Android AAR compiles. It is not application- or
+plugin-generated. The Android AAR's JNI descriptor still uses only
+`FoundryNativeDispatch`, never the generated table class. Property entries
+preserve exact structural accessor identities, native names, and compatibility
+hashes so overloads cannot alias. Unknown identities, kinds, arities, and typed
+native-handle mismatches fail in Java before JNI. `FoundryEngine.call(long,
+long, String, List<Variant>)` remains unchanged; `FoundryNativeEngine` performs
+the generated lookup behind that stable signature.
 
 `FoundryNativeEngine` freezes these private static versioned native methods and
 descriptors:
@@ -189,7 +214,11 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeUnregisterExtensionCl
 ```
 
 The register and unregister seams are frozen in Task 4 even though Task 5
-supplies their descriptor-registration bodies.
+supplies their descriptor-registration bodies. Until Task 5, both exported JNI
+functions throw `UnsupportedOperationException` with a stable
+`registration_unavailable_before_task5` phase before reading descriptor fields
+or mutating class/interface/handle state. Task 4 tests require zero native
+registration mutations on those stubs.
 
 Dispatch follows the public ABI:
 
@@ -206,8 +235,34 @@ Dispatch follows the public ABI:
   hash `4023243586`; and
 - object bridge handles are unsigned 64-bit instance IDs, never addresses.
 
-Generated ABI layout data includes both `float_32` and `float_64`
-`builtin_class_sizes`. Current Android single-precision storage is checked as:
+Native ABI layout generation remains native-only. Checked-in
+`foundry-java-android/src/main/cpp/cmake/GenerateFoundryJavaAbiLayout.cmake`
+parses `api/current/extension_api.json`, verifies that file's actual SHA-256
+against `files.extension_api_json.sha256` in `api/current/provenance.json`, and
+configures checked-in `foundry_java_abi_layout.h.in` to
+`${CMAKE_CURRENT_BINARY_DIR}/generated/foundry_java_abi_layout.h`. It rejects
+a configured bridge precision other than `float`, reads exactly the
+`float_32`/`float_64` configurations without selecting the present `double_*`
+rows, and rejects missing selected configurations, duplicate names, any
+selected order or name mismatch, a row count other than 40,
+`Nil` as anything other than the first row with size zero, any nonpositive or
+non-integer size for the other 39 rows, and incorrect sentinel sizes.
+
+The generated header contains immutable `constexpr` layout rows for all 40
+accepted built-ins in the exact `float_32` and `float_64` order and selects the
+active row set with `sizeof(void *)`. `foundry_java_runtime` exposes the binary
+generated include directory as a PUBLIC include so the interface, transport,
+and native tests consume the same header. CMake declares the script, template,
+API JSON, and provenance as configure dependencies. Layout values never cross
+JNI as an `Object`, map, or unfrozen DTO.
+
+`gradle/verify-native-abi-layout.sh` generates twice and requires byte-identical
+output, exercises malformed SHA/configuration/order/duplicate/size fixtures,
+including a nonzero/misplaced `Nil` sentinel, and checks the generated
+inventory. The Gradle `nativeAbiLayoutTest` task, native host/sanitizer tasks,
+repository contracts, and root `check` freeze that verification.
+
+Current Android single-precision storage is checked as:
 32-bit `String`/`StringName`/`Object` = 4 bytes and `Variant` = 24 bytes;
 64-bit `String`/`StringName`/`Object` = 8 bytes and `Variant` = 24 bytes.
 All constructed values use max-aligned generated storage and a constructed-bit
