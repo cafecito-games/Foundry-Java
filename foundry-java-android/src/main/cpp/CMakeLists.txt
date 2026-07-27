@@ -67,6 +67,7 @@ add_library(
     STATIC
         foundry_java_handles.cpp
         foundry_java_interface.cpp
+        foundry_java_registration.cpp
         foundry_java_transport.cpp
 )
 target_compile_features(foundry_java_runtime PUBLIC cxx_std_17)
@@ -100,6 +101,13 @@ endif()
 if(FOUNDRY_JAVA_BUILD_TESTS)
     enable_testing()
     add_executable(
+        foundry_java_registration_test
+        "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_registration_test.cpp"
+    )
+    target_link_libraries(foundry_java_registration_test PRIVATE foundry_java_runtime Threads::Threads)
+    target_compile_features(foundry_java_registration_test PRIVATE cxx_std_17)
+    target_compile_options(foundry_java_registration_test PRIVATE -Wall -Wextra -Werror)
+    add_executable(
         foundry_java_runtime_test
         foundry_java_entry.cpp
         "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_runtime_test.cpp"
@@ -109,8 +117,11 @@ if(FOUNDRY_JAVA_BUILD_TESTS)
     target_compile_options(foundry_java_runtime_test PRIVATE -Wall -Wextra -Werror)
     if(FOUNDRY_JAVA_ENABLE_SANITIZERS)
         target_compile_options(foundry_java_runtime PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_compile_options(foundry_java_registration_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_compile_options(foundry_java_runtime_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(foundry_java_registration_test PRIVATE -fsanitize=address,undefined)
         target_link_options(foundry_java_runtime_test PRIVATE -fsanitize=address,undefined)
     endif()
+    add_test(NAME foundry_java_registration_test COMMAND foundry_java_registration_test)
     add_test(NAME foundry_java_runtime_test COMMAND foundry_java_runtime_test)
 endif()
