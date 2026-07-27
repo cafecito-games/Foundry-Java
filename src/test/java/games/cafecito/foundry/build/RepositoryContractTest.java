@@ -338,9 +338,17 @@ class RepositoryContractTest {
                                 + "        \"games/cafecito/foundry/java/"
                                 + "FoundryNativeEngine\\$1.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$2.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
                                 + "FoundryNativeEngine\\$JniNativeGateway.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$NativeDecodedObject.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
                                 + "FoundryNativeEngine\\$NativeGateway.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$NativeVariantSnapshot.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$SignalBackend\\$ConnectedCallable.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
                                 + "FoundryNativeEngine\\$SignalBackend.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
@@ -353,6 +361,9 @@ class RepositoryContractTest {
         assertFalse(allowlist.contains("games/cafecito/foundry/generated/"));
         assertFalse(allowlist.contains("games/cafecito/foundry/runtime/"));
         assertFalse(allowlist.contains("FoundryGenerated"));
+        assertFalse(allowlist.contains("*"));
+        assertTrue(rootBuild.contains("dependsOn(\":foundry-java-android:bundleReleaseAar\")"));
+        assertTrue(rootBuild.contains("check(actualClasses == allowedClasses.get())"));
         assertTrue(rootBuild.contains("expectedFixedConfiguration"));
         assertTrue(rootBuild.contains("expectedConsumerRules"));
         assertTrue(rootBuild.contains("Release AAR manifest must not declare an application"));
