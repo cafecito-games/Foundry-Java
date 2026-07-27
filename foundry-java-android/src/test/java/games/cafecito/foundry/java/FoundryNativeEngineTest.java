@@ -2,6 +2,7 @@ package games.cafecito.foundry.java;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,7 @@ import games.cafecito.foundry.types.FoundryDictionary;
 import games.cafecito.foundry.types.Rid;
 import games.cafecito.foundry.types.Variant;
 import games.cafecito.foundry.types.VariantCodec;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -472,6 +474,68 @@ class FoundryNativeEngineTest {
     }
 
     @Test
+    void concurrentNativeDisconnectWaitsThenRetriesAfterTheOwnerFails() throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        new FoundryNativeEngine(11, signalDispatches()::get, gateway);
+        FoundryCallable callable = FoundryNativeEngine.nativeCallableFromBridge(11, 81, 0);
+        FoundrySignal signal = FoundryNativeEngine.nativeSignalFromBridge(11, 82);
+        gateway.callResults.add(FoundryEngine.CallResult.success(Variant.of(0L)));
+        FoundrySignal.Connection connection = signal.connect(callable);
+        FoundrySignal.NativeBackend backend = nativeBackend(signal);
+        long connectionHandle = connectionHandle(connection);
+        gateway.callFailures.add(new IllegalStateException("disconnect failed"));
+        gateway.blockCall("builtin_classes/Signal/methods/disconnect#3470848906");
+        AtomicReference<Throwable> firstFailure = new AtomicReference<>();
+        AtomicReference<Throwable> secondFailure = new AtomicReference<>();
+        Thread first =
+                new Thread(
+                        () -> {
+                            try {
+                                backend.disconnect(11, 82, connectionHandle);
+                            } catch (Throwable failure) {
+                                firstFailure.set(failure);
+                            }
+                        });
+        Thread second =
+                new Thread(
+                        () -> {
+                            try {
+                                backend.disconnect(11, 82, connectionHandle);
+                            } catch (Throwable failure) {
+                                secondFailure.set(failure);
+                            }
+                        });
+
+        first.start();
+        assertTrue(gateway.callEntered.await(5, TimeUnit.SECONDS));
+        second.start();
+        second.join(250);
+        boolean secondWaitedForOwner = second.isAlive();
+        long callsBeforeOwnerFinished =
+                gateway.dispatchIdentities.stream()
+                        .filter("builtin_classes/Signal/methods/disconnect#3470848906"::equals)
+                        .count();
+        gateway.allowCall.countDown();
+        first.join(5_000);
+        second.join(5_000);
+
+        assertTrue(secondWaitedForOwner);
+        assertEquals(1, callsBeforeOwnerFinished);
+        assertFalse(first.isAlive());
+        assertFalse(second.isAlive());
+        assertTrue(firstFailure.get() instanceof IllegalStateException);
+        assertEquals("disconnect failed", firstFailure.get().getMessage());
+        assertNull(secondFailure.get());
+        assertEquals(
+                2,
+                gateway.dispatchIdentities.stream()
+                        .filter("builtin_classes/Signal/methods/disconnect#3470848906"::equals)
+                        .count());
+        callable.close();
+        signal.close();
+    }
+
+    @Test
     void failedConnectPreservesRetryableNativeCallableCleanupForSignalClose() {
         RecordingGateway gateway = new RecordingGateway();
         new FoundryNativeEngine(11, signalDispatches()::get, gateway);
@@ -753,6 +817,23 @@ class FoundryNativeEngineTest {
                 builtinMethod(
                         "Signal", "disconnect", 3470848906L, List.of("Callable"), 1, false, "Nil");
         return Map.of(connect.identity(), connect, disconnect.identity(), disconnect);
+    }
+
+    private static FoundrySignal.NativeBackend nativeBackend(FoundrySignal signal)
+            throws ReflectiveOperationException {
+        Field identityField = FoundrySignal.class.getDeclaredField("nativeIdentity");
+        identityField.setAccessible(true);
+        Object identity = identityField.get(signal);
+        Field backendField = identity.getClass().getDeclaredField("backend");
+        backendField.setAccessible(true);
+        return (FoundrySignal.NativeBackend) backendField.get(identity);
+    }
+
+    private static long connectionHandle(FoundrySignal.Connection connection)
+            throws ReflectiveOperationException {
+        Field idField = connection.getClass().getDeclaredField("id");
+        idField.setAccessible(true);
+        return idField.getLong(connection);
     }
 
     private static final class RecordingGateway implements FoundryNativeEngine.NativeGateway {

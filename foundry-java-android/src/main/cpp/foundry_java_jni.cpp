@@ -667,6 +667,8 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeInvokeCallbackOnTh
 			}
 		});
 		callback_thread.join();
+		// std::thread::join synchronizes with callback completion, so the callback's
+		// write to result is visible before this thread reads it.
 		(void)type;
 		return static_cast<jlong>(result);
 	} catch (...) {
@@ -1144,12 +1146,24 @@ NativeHandle encode_variant(
 			type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME ||
 			type == FOUNDRY_EXTENSION_VARIANT_TYPE_NODE_PATH) {
 		auto text = static_cast<jstring>(environment->CallObjectMethod(snapshot, methods.text));
+		if (jni_reference_failed(
+					environment, text, state.errors, "variant text snapshot")) {
+			return 0;
+		}
 		return transport.construct_text_variant(context, generation, type, java_utf8(environment, text));
 	}
 	auto integers = static_cast<jlongArray>(
 			environment->CallObjectMethod(snapshot, methods.integers));
+	if (jni_reference_failed(
+				environment, integers, state.errors, "variant integer snapshot")) {
+		return 0;
+	}
 	auto reals = static_cast<jdoubleArray>(
 			environment->CallObjectMethod(snapshot, methods.reals));
+	if (jni_reference_failed(
+				environment, reals, state.errors, "variant real snapshot")) {
+		return 0;
+	}
 	if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_NIL) {
 		return transport.construct_variant(context, generation, type, nullptr, ValueBackend::JAVA_LOCAL);
 	}
@@ -1347,8 +1361,16 @@ NativeHandle encode_variant(
 	if (type >= FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY) {
 		auto key_array = static_cast<jobjectArray>(
 				environment->CallObjectMethod(snapshot, methods.keys));
+		if (jni_reference_failed(
+					environment, key_array, state.errors, "variant key snapshot")) {
+			return 0;
+		}
 		auto value_array = static_cast<jobjectArray>(
 				environment->CallObjectMethod(snapshot, methods.values));
+		if (jni_reference_failed(
+					environment, value_array, state.errors, "variant value snapshot")) {
+			return 0;
+		}
 		const jsize key_count = environment->GetArrayLength(key_array);
 		const jsize value_count = environment->GetArrayLength(value_array);
 		if ((type == FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY && key_count != value_count) ||

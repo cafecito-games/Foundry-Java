@@ -761,13 +761,29 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
                 long requestedContext, long requestedSignalHandle, long connectionHandle) {
             requireSignal(requestedSignalHandle);
             ConnectedCallable connection;
+            boolean interrupted = false;
+            boolean disconnectNative = false;
             synchronized (connectionLock) {
                 connection = connections.get(connectionHandle);
                 if (connection == null) {
                     return;
                 }
+                while (connection.nativeDisconnecting) {
+                    try {
+                        connectionLock.wait();
+                    } catch (InterruptedException interruption) {
+                        interrupted = true;
+                    }
+                }
+                if (!connection.nativeDisconnected) {
+                    connection.nativeDisconnecting = true;
+                    disconnectNative = true;
+                }
             }
-            if (!connection.nativeDisconnected) {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            if (disconnectNative) {
                 FoundryCallable previousAllowedCallable = allowedClosedCallable.get();
                 allowedClosedCallable.set(connection.transportCallable);
                 try {
@@ -779,7 +795,17 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
                                     Variant.ofCallable(connection.transportCallable)),
                             "native_signal_disconnect",
                             signal[0]);
-                    connection.nativeDisconnected = true;
+                    synchronized (connectionLock) {
+                        connection.nativeDisconnected = true;
+                        connection.nativeDisconnecting = false;
+                        connectionLock.notifyAll();
+                    }
+                } catch (RuntimeException | Error disconnectFailure) {
+                    synchronized (connectionLock) {
+                        connection.nativeDisconnecting = false;
+                        connectionLock.notifyAll();
+                    }
+                    throw disconnectFailure;
                 } finally {
                     if (previousAllowedCallable == null) {
                         allowedClosedCallable.remove();
@@ -871,6 +897,7 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
             private final FoundryCallable transportCallable;
             private final boolean ownsTransportCallable;
             private boolean nativeDisconnected;
+            private boolean nativeDisconnecting;
 
             private ConnectedCallable(
                     FoundryCallable originalCallable,

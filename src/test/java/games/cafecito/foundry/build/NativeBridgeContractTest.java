@@ -133,6 +133,20 @@ class NativeBridgeContractTest {
                             "nativeUnregisterExtensionClassV1",
                             "private static native void nativeUnregisterExtensionClassV1(long, "
                                     + "java.lang.String);"));
+    private static final List<String> NATIVE_ENGINE_HELPER_KEEP_SIGNATURES =
+            List.of(
+                    "private static games.cafecito.foundry.java."
+                            + "FoundryNativeEngine$NativeVariantSnapshot nativeSnapshotV1(long, "
+                            + "games.cafecito.foundry.types.Variant);",
+                    "private static games.cafecito.foundry.types.Variant "
+                            + "nativeVariantFromSnapshotV1(long, long, games.cafecito.foundry.java."
+                            + "FoundryNativeEngine$NativeVariantSnapshot);",
+                    "private static games.cafecito.foundry.types.Variant "
+                            + "invokeLocalCallableV1(long, "
+                            + "games.cafecito.foundry.runtime.FoundryCallable, "
+                            + "games.cafecito.foundry.types.Variant[]);",
+                    "private static java.lang.String[] nativeDispatchArgumentTypesV1("
+                            + "games.cafecito.foundry.runtime.FoundryNativeDispatch);");
     private static final Set<String> NATIVE_BRIDGE_FILES =
             Set.of(
                     "CMakeLists.txt",
@@ -230,11 +244,29 @@ class NativeBridgeContractTest {
         for (Map.Entry<String, String> method : INITIALIZER_KEEP_SIGNATURES.entrySet()) {
             assertEquals(1, occurrences(rules, method.getValue()), method.getKey());
         }
+        for (String signature : NATIVE_ENGINE_HELPER_KEEP_SIGNATURES) {
+            assertEquals(1, occurrences(rules, signature), signature);
+        }
         assertEquals(2, occurrences(rules, "-keepnames class games.cafecito.foundry.java."));
         assertFalse(rules.contains("native <methods>"));
         assertFalse(rules.contains("games.cafecito.foundry.**"));
         assertFalse(rules.contains("-keep class *"));
         assertFalse(rules.contains("-keep class **"));
+    }
+
+    @Test
+    void jniVariantSnapshotReferencesAreCheckedBeforeDereference() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+
+        for (String reference :
+                List.of(
+                        "variant text snapshot",
+                        "variant integer snapshot",
+                        "variant real snapshot",
+                        "variant key snapshot",
+                        "variant value snapshot")) {
+            assertEquals(1, occurrences(jni, "state.errors, \"" + reference + "\""), reference);
+        }
     }
 
     @Test

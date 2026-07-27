@@ -1587,6 +1587,18 @@ void test_native_structure_and_object_transport() {
 			"Resource",
 			true);
 	expect(object != 0, "object transport must return an opaque instance-ID handle");
+	const auto duplicate_owned = transport.track_object(
+			31,
+			5,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"Resource",
+			true);
+	expect(
+			duplicate_owned == object,
+			"repeated owned tracking of one instance ID must reuse its canonical handle");
+	expect(
+			native_object_destroy_count == 0,
+			"canonicalizing the same owned pointer must not destroy the live allocation");
 	auto object_lease = transport.acquire_object(object, 31, 5, "Resource");
 	expect(
 			object_lease.object == reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
@@ -1596,7 +1608,9 @@ void test_native_structure_and_object_transport() {
 	expect(
 			transport.handles().release(object, 31, 5, foundry_java::HandleKind::OBJECT, "Resource"),
 			"owned object handle must release");
-	expect(native_object_destroy_count == 1, "owned object release must destroy exactly once");
+	expect(
+			native_object_destroy_count == 1,
+			"canonical owned object release must destroy the allocation exactly once");
 }
 
 void test_dispatch_families_and_ref_counted_ownership() {

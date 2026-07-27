@@ -100,6 +100,51 @@ class FoundryRegistryCoordinatorTest {
     }
 
     @Test
+    void coreRegistrationMaySynchronouslyInvokeAnAdmittedCallback() {
+        RecordingEngine engine = new RecordingEngine();
+        AtomicReference<FoundryRegistryCoordinator> coordinatorReference = new AtomicReference<>();
+        AtomicReference<FoundryBindingContext> contextReference = new AtomicReference<>();
+        AtomicReference<Long> callbackResult = new AtomicReference<>();
+        AtomicInteger callbackCalls = new AtomicInteger();
+        FoundryRegistryCoordinator coordinator =
+                new FoundryRegistryCoordinator(
+                        bootstrap(provider("demo", type("example.Core", "Core", "CORE"))),
+                        context -> {
+                            engine.contextHandle = context;
+                            return engine;
+                        },
+                        (handle, activeEngine) -> {
+                            FoundryBindingContext context =
+                                    new FoundryBindingContext(handle, activeEngine);
+                            contextReference.set(context);
+                            return context;
+                        },
+                        ignored -> {});
+        coordinatorReference.set(coordinator);
+        engine.registerReentry =
+                () -> {
+                    long callback =
+                            contextReference
+                                    .get()
+                                    .callbackRegistry()
+                                    .register(
+                                            FoundryCallable.fixed(
+                                                    0,
+                                                    ignored -> {
+                                                        callbackCalls.incrementAndGet();
+                                                        return Variant.of("registered");
+                                                    }));
+                    callbackResult.set(
+                            coordinatorReference.get().invoke(41, callback, new long[0]));
+                };
+
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertEquals(0L, callbackResult.get());
+        assertEquals(1, callbackCalls.get());
+        assertEquals(List.of("register:Core"), engine.events);
+    }
+
+    @Test
     void deinitializationUnregistersEachLevelInReversePlanOrder() {
         RecordingEngine engine = new RecordingEngine();
         FoundryRegistryCoordinator coordinator =

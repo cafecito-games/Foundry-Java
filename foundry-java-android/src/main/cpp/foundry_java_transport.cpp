@@ -719,6 +719,9 @@ NativeHandle NativeTransport::track_object(
 				existing_handle = existing_identity->second;
 				promote_existing = owned && !existing.record().owned;
 				if (!promote_existing) {
+					// Instance-ID canonicalization proves object is the same engine allocation
+					// already represented by existing_handle. Destroying an "extra" owned
+					// pointer here would invalidate that canonical live handle.
 					return existing_handle;
 				}
 				existing = {};

@@ -177,6 +177,9 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             if (terminal || contextHandle != requestedContextHandle) {
                 return 0;
             }
+            // Lifecycle transitions are reserved, not callback barriers. CORE registration can
+            // synchronously invoke a callback after callbacks.register(activeContext), and the
+            // callback registry's admission/drain protocol remains the shutdown authority.
         }
         beforeCallbackAdmission.run();
         try {
