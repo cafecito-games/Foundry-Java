@@ -3,6 +3,7 @@
 #include "foundry_java_interface.h"
 #include "foundry_java_transport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -38,6 +40,60 @@ bool ref_hashes_valid = true;
 FoundryExtensionVariantType copied_variant_type = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
 int variant_copy_count = 0;
 int variant_destroy_count = 0;
+std::array<int, FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX> variant_construct_counts{};
+std::array<int, FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX> variant_inspect_counts{};
+std::array<int, FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX> native_value_destroy_counts{};
+bool typed_fixture_mismatch = false;
+bool force_call_error = false;
+bool force_keyed_get_failure = false;
+int method_bind_call_count = 0;
+int method_bind_ptrcall_count = 0;
+int builtin_method_count = 0;
+int builtin_constructor_count = 0;
+int operator_count = 0;
+int member_get_count = 0;
+int member_set_count = 0;
+int constant_count = 0;
+int utility_count = 0;
+int named_get_count = 0;
+int named_set_count = 0;
+int keyed_get_count = 0;
+int keyed_set_count = 0;
+int indexed_get_count = 0;
+int indexed_set_count = 0;
+int iter_init_count = 0;
+int iter_next_count = 0;
+int iter_get_count = 0;
+int callable_call_count = 0;
+int construct_object_count = 0;
+int postinitialize_count = 0;
+int singleton_count = 0;
+int nil_construct_count = 0;
+int signal_construct_count = 0;
+int rid_default_construct_count = 0;
+int callable_custom_create_count = 0;
+FoundryExtensionInt callable_reported_argument_count = -2;
+
+struct FakeCallableBox {
+	FoundryExtensionCallableCustomInfo2 info{};
+	int references = 1;
+};
+constexpr std::uint64_t fake_callable_magic = 0xcafec011ab1e;
+
+struct FakeTextBox {
+	std::string text;
+	int references = 1;
+};
+constexpr std::uint64_t fake_text_magic = 0x7e87ca11ab1e;
+void release_fake_text(FakeTextBox *box);
+
+struct FakeOpaqueBox {
+	FoundryExtensionVariantType type = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
+	std::vector<std::byte> bytes;
+};
+constexpr std::uint64_t fake_opaque_magic = 0x0fa9eab1e;
+std::unordered_map<const void *, FakeTextBox *> fake_text_native_values;
+std::unordered_map<const void *, FakeCallableBox *> fake_callable_native_values;
 
 void fake_print_error(const char *, const char *, const char *, std::int32_t, FoundryExtensionBool) {
 }
@@ -65,14 +121,22 @@ void fake_untyped_interface() {
 }
 
 void fake_string_name_from_utf8_and_len(
-		FoundryExtensionUninitializedStringNamePtr,
-		const char *,
-		FoundryExtensionInt) {
+		FoundryExtensionUninitializedStringNamePtr destination,
+		const char *text,
+		FoundryExtensionInt length) {
 	native_string_name_construct_count++;
+	auto *box = new FakeTextBox;
+	box->text.assign(text, static_cast<std::size_t>(length));
+	*static_cast<FakeTextBox **>(destination) = box;
+	fake_text_native_values[destination] = box;
 }
 
-void fake_string_name_destroy(FoundryExtensionTypePtr) {
+void fake_string_name_destroy(FoundryExtensionTypePtr value) {
 	native_string_name_destroy_count++;
+	auto **slot = static_cast<FakeTextBox **>(value);
+	release_fake_text(*slot);
+	*slot = nullptr;
+	fake_text_native_values.erase(value);
 }
 
 FoundryExtensionPtrDestructor fake_transport_variant_destructor(FoundryExtensionVariantType type) {
@@ -90,6 +154,17 @@ GDObjectInstanceID fake_object_instance_id(FoundryExtensionConstObjectPtr object
 FoundryExtensionObjectPtr fake_object_from_id(GDObjectInstanceID id) {
 	requested_object_id = id;
 	return id == 91 ? reinterpret_cast<FoundryExtensionObjectPtr>(0x1234) : nullptr;
+}
+
+FoundryExtensionBool fake_object_class_name(
+		FoundryExtensionConstObjectPtr object,
+		FoundryExtensionClassLibraryPtr,
+		FoundryExtensionUninitializedStringNamePtr destination) {
+	if (object != reinterpret_cast<FoundryExtensionConstObjectPtr>(0x1234)) {
+		return 0;
+	}
+	fake_string_name_from_utf8_and_len(destination, "Node", 4);
+	return 1;
 }
 
 void fake_object_destroy(FoundryExtensionObjectPtr object) {
@@ -133,18 +208,629 @@ void fake_ref_ptrcall(
 	}
 }
 
-FoundryExtensionVariantType fake_variant_get_type(FoundryExtensionConstVariantPtr) {
-	return copied_variant_type;
+FoundryExtensionVariantType fake_variant_get_type(FoundryExtensionConstVariantPtr value) {
+	const auto raw = static_cast<const std::uint64_t *>(value)[0];
+	return raw < FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX ?
+			static_cast<FoundryExtensionVariantType>(raw) :
+			copied_variant_type;
 }
 
 void fake_variant_new_copy(
-		FoundryExtensionUninitializedVariantPtr,
-		FoundryExtensionConstVariantPtr) {
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionConstVariantPtr source) {
 	variant_copy_count++;
+	auto *target = static_cast<std::uint64_t *>(destination);
+	const auto *origin = static_cast<const std::uint64_t *>(source);
+	std::memcpy(target, origin, 24);
+	if (origin[2] == fake_opaque_magic) {
+		const auto *source_box = reinterpret_cast<const FakeOpaqueBox *>(origin[1]);
+		auto *copy = new FakeOpaqueBox(*source_box);
+		target[1] = reinterpret_cast<std::uint64_t>(copy);
+	} else if (origin[2] == fake_callable_magic) {
+		reinterpret_cast<FakeCallableBox *>(origin[1])->references++;
+	} else if (origin[2] == fake_text_magic) {
+		reinterpret_cast<FakeTextBox *>(origin[1])->references++;
+	}
 }
 
-void fake_variant_destroy(FoundryExtensionVariantPtr) {
+void release_fake_callable(FakeCallableBox *box) {
+	if (box == nullptr || --box->references != 0) {
+		return;
+	}
+	if (box->info.free_func != nullptr) {
+		box->info.free_func(box->info.callable_userdata);
+	}
+	delete box;
+}
+
+void release_fake_text(FakeTextBox *box) {
+	if (box != nullptr && --box->references == 0) {
+		delete box;
+	}
+}
+
+void fake_variant_destroy(FoundryExtensionVariantPtr value) {
 	variant_destroy_count++;
+	auto *words = static_cast<std::uint64_t *>(value);
+	if (words[0] == FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE &&
+			words[2] == fake_callable_magic) {
+		release_fake_callable(reinterpret_cast<FakeCallableBox *>(words[1]));
+		words[1] = 0;
+	} else if ((words[0] == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING ||
+					   words[0] == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME ||
+					   words[0] == FOUNDRY_EXTENSION_VARIANT_TYPE_NODE_PATH) &&
+			words[2] == fake_text_magic) {
+		release_fake_text(reinterpret_cast<FakeTextBox *>(words[1]));
+		words[1] = 0;
+	} else if (words[2] == fake_opaque_magic) {
+		delete reinterpret_cast<FakeOpaqueBox *>(words[1]);
+		words[1] = 0;
+	}
+}
+
+void fake_variant_new_nil(FoundryExtensionUninitializedVariantPtr destination) {
+	nil_construct_count++;
+	static_cast<std::uint64_t *>(destination)[0] = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
+}
+
+void fake_variant_construct(
+		FoundryExtensionVariantType type,
+		FoundryExtensionUninitializedVariantPtr destination,
+		const FoundryExtensionConstVariantPtr *arguments,
+		int32_t argument_count,
+		FoundryExtensionCallError *error) {
+	if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL && argument_count == 2) {
+		signal_construct_count++;
+	} else if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_RID && argument_count == 0) {
+		rid_default_construct_count++;
+	}
+	auto *words = static_cast<std::uint64_t *>(destination);
+	words[0] = type;
+	if ((type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING ||
+				type == FOUNDRY_EXTENSION_VARIANT_TYPE_NODE_PATH) &&
+			argument_count == 1) {
+		const auto *source = static_cast<const std::uint64_t *>(arguments[0]);
+		if (source[2] == fake_text_magic) {
+			auto *box = reinterpret_cast<FakeTextBox *>(source[1]);
+			box->references++;
+			words[1] = source[1];
+			words[2] = fake_text_magic;
+		}
+	}
+	error->error = FOUNDRY_EXTENSION_CALL_OK;
+}
+
+template <FoundryExtensionVariantType Type>
+void fake_opaque_variant_from_native(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	variant_construct_counts.at(Type)++;
+	auto *words = static_cast<std::uint64_t *>(destination);
+	words[0] = static_cast<std::uint64_t>(Type);
+	const auto *category = foundry_java::variant_category(Type);
+	auto *box = new FakeOpaqueBox;
+	box->type = Type;
+	box->bytes.resize(foundry_java::abi_layout_size(category->native_name));
+	std::memcpy(box->bytes.data(), source, box->bytes.size());
+	words[1] = reinterpret_cast<std::uint64_t>(box);
+	words[2] = fake_opaque_magic;
+}
+
+template <FoundryExtensionVariantType Type>
+void fake_variant_from_native(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	fake_opaque_variant_from_native<Type>(destination, source);
+}
+
+template <FoundryExtensionVariantType Type>
+void fake_text_variant_from_native(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	variant_construct_counts.at(Type)++;
+	auto *words = static_cast<std::uint64_t *>(destination);
+	const auto text = fake_text_native_values.find(source);
+	if (text == fake_text_native_values.end()) {
+		fake_opaque_variant_from_native<Type>(destination, source);
+		variant_construct_counts.at(Type)--;
+		return;
+	}
+	auto *box = text->second;
+	box->references++;
+	words[0] = Type;
+	words[1] = reinterpret_cast<std::uint64_t>(box);
+	words[2] = fake_text_magic;
+}
+
+template <>
+void fake_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING>(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	fake_text_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING>(destination, source);
+}
+
+template <>
+void fake_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME>(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	fake_text_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME>(destination, source);
+}
+
+template <>
+void fake_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE>(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	variant_construct_counts.at(FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE)++;
+	auto *words = static_cast<std::uint64_t *>(destination);
+	const auto callable = fake_callable_native_values.find(source);
+	if (callable == fake_callable_native_values.end()) {
+		fake_opaque_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE>(
+				destination,
+				source);
+		variant_construct_counts.at(FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE)--;
+		return;
+	}
+	auto *box = callable->second;
+	words[0] = FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE;
+	words[1] = reinterpret_cast<std::uint64_t>(box);
+	box->references++;
+	words[2] = fake_callable_magic;
+}
+
+FoundryExtensionVariantFromTypeConstructorFunc fake_get_variant_from_native(
+		FoundryExtensionVariantType type) {
+#define FOUNDRY_JAVA_FAKE_FROM_CASE(suffix) \
+	case FOUNDRY_EXTENSION_VARIANT_TYPE_##suffix: \
+		return &fake_variant_from_native<FOUNDRY_EXTENSION_VARIANT_TYPE_##suffix>
+	switch (type) {
+		FOUNDRY_JAVA_FAKE_FROM_CASE(BOOL);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(INT);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(FLOAT);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(STRING);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(VECTOR2);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(VECTOR2I);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(RECT2);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(RECT2I);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(VECTOR3);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(VECTOR3I);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(TRANSFORM2D);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(VECTOR4);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(VECTOR4I);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PLANE);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(QUATERNION);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(AABB);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(BASIS);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(TRANSFORM3D);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PROJECTION);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(COLOR);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(STRING_NAME);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(NODE_PATH);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(RID);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(OBJECT);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(CALLABLE);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(SIGNAL);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(DICTIONARY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_BYTE_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_INT32_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_INT64_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_FLOAT32_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_FLOAT64_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_STRING_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_VECTOR2_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_VECTOR3_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_COLOR_ARRAY);
+		FOUNDRY_JAVA_FAKE_FROM_CASE(PACKED_VECTOR4_ARRAY);
+		default:
+			return nullptr;
+	}
+#undef FOUNDRY_JAVA_FAKE_FROM_CASE
+}
+
+template <FoundryExtensionVariantType Type>
+void fake_opaque_from_variant(
+		FoundryExtensionUninitializedTypePtr destination,
+		FoundryExtensionVariantPtr source) {
+	variant_inspect_counts.at(Type)++;
+	const auto *words = static_cast<const std::uint64_t *>(source);
+	if (words[2] == fake_opaque_magic) {
+		const auto *box = reinterpret_cast<const FakeOpaqueBox *>(words[1]);
+		typed_fixture_mismatch = typed_fixture_mismatch || box->type != Type;
+		std::memcpy(destination, box->bytes.data(), box->bytes.size());
+	} else {
+		*static_cast<std::uint64_t *>(destination) = words[1];
+	}
+}
+
+template <FoundryExtensionVariantType Type>
+void fake_native_from_variant(
+		FoundryExtensionUninitializedTypePtr destination,
+		FoundryExtensionVariantPtr source) {
+	fake_opaque_from_variant<Type>(destination, source);
+}
+
+template <FoundryExtensionVariantType Type>
+void fake_text_from_variant(
+		FoundryExtensionUninitializedTypePtr destination,
+		FoundryExtensionVariantPtr source) {
+	variant_inspect_counts.at(Type)++;
+	const auto *words = static_cast<const std::uint64_t *>(source);
+	if (words[2] != fake_text_magic) {
+		fake_opaque_from_variant<Type>(destination, source);
+		variant_inspect_counts.at(Type)--;
+		return;
+	}
+	auto *box = reinterpret_cast<FakeTextBox *>(words[1]);
+	box->references++;
+	*static_cast<FakeTextBox **>(destination) = box;
+	fake_text_native_values[destination] = box;
+}
+
+template <>
+void fake_native_from_variant<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING>(
+		FoundryExtensionUninitializedTypePtr destination,
+		FoundryExtensionVariantPtr source) {
+	fake_text_from_variant<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING>(destination, source);
+}
+
+template <>
+void fake_native_from_variant<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME>(
+		FoundryExtensionUninitializedTypePtr destination,
+		FoundryExtensionVariantPtr source) {
+	fake_text_from_variant<FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME>(destination, source);
+}
+
+FoundryExtensionTypeFromVariantConstructorFunc fake_get_variant_to_native(
+		FoundryExtensionVariantType type) {
+#define FOUNDRY_JAVA_FAKE_TO_CASE(suffix) \
+	case FOUNDRY_EXTENSION_VARIANT_TYPE_##suffix: \
+		return &fake_native_from_variant<FOUNDRY_EXTENSION_VARIANT_TYPE_##suffix>
+	switch (type) {
+		FOUNDRY_JAVA_FAKE_TO_CASE(BOOL);
+		FOUNDRY_JAVA_FAKE_TO_CASE(INT);
+		FOUNDRY_JAVA_FAKE_TO_CASE(FLOAT);
+		FOUNDRY_JAVA_FAKE_TO_CASE(STRING);
+		FOUNDRY_JAVA_FAKE_TO_CASE(VECTOR2);
+		FOUNDRY_JAVA_FAKE_TO_CASE(VECTOR2I);
+		FOUNDRY_JAVA_FAKE_TO_CASE(RECT2);
+		FOUNDRY_JAVA_FAKE_TO_CASE(RECT2I);
+		FOUNDRY_JAVA_FAKE_TO_CASE(VECTOR3);
+		FOUNDRY_JAVA_FAKE_TO_CASE(VECTOR3I);
+		FOUNDRY_JAVA_FAKE_TO_CASE(TRANSFORM2D);
+		FOUNDRY_JAVA_FAKE_TO_CASE(VECTOR4);
+		FOUNDRY_JAVA_FAKE_TO_CASE(VECTOR4I);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PLANE);
+		FOUNDRY_JAVA_FAKE_TO_CASE(QUATERNION);
+		FOUNDRY_JAVA_FAKE_TO_CASE(AABB);
+		FOUNDRY_JAVA_FAKE_TO_CASE(BASIS);
+		FOUNDRY_JAVA_FAKE_TO_CASE(TRANSFORM3D);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PROJECTION);
+		FOUNDRY_JAVA_FAKE_TO_CASE(COLOR);
+		FOUNDRY_JAVA_FAKE_TO_CASE(STRING_NAME);
+		FOUNDRY_JAVA_FAKE_TO_CASE(NODE_PATH);
+		FOUNDRY_JAVA_FAKE_TO_CASE(RID);
+		FOUNDRY_JAVA_FAKE_TO_CASE(OBJECT);
+		FOUNDRY_JAVA_FAKE_TO_CASE(CALLABLE);
+		FOUNDRY_JAVA_FAKE_TO_CASE(SIGNAL);
+		FOUNDRY_JAVA_FAKE_TO_CASE(DICTIONARY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_BYTE_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_INT32_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_INT64_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_FLOAT32_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_FLOAT64_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_STRING_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_VECTOR2_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_VECTOR3_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_COLOR_ARRAY);
+		FOUNDRY_JAVA_FAKE_TO_CASE(PACKED_VECTOR4_ARRAY);
+		default:
+			return nullptr;
+	}
+#undef FOUNDRY_JAVA_FAKE_TO_CASE
+}
+
+void fake_native_value_destroy(FoundryExtensionTypePtr value) {
+	const auto type = static_cast<FoundryExtensionVariantType>(
+			*static_cast<std::uint64_t *>(value));
+	native_value_destroy_counts.at(type)++;
+}
+
+void fake_callable_destroy(FoundryExtensionTypePtr value) {
+	auto **slot = static_cast<FakeCallableBox **>(value);
+	release_fake_callable(*slot);
+	*slot = nullptr;
+	fake_callable_native_values.erase(value);
+	native_value_destroy_counts.at(FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE)++;
+}
+
+FoundryExtensionPtrDestructor fake_all_variant_destructors(FoundryExtensionVariantType type) {
+	if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE) {
+		return &fake_callable_destroy;
+	}
+	if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING ||
+			type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME) {
+		return &fake_string_name_destroy;
+	}
+	return &fake_native_value_destroy;
+}
+
+FoundryExtensionInt fake_string_from_utf8(
+		FoundryExtensionUninitializedStringPtr destination,
+		const char *text,
+		FoundryExtensionInt length) {
+	auto *box = new FakeTextBox;
+	box->text.assign(text, static_cast<std::size_t>(length));
+	*static_cast<FakeTextBox **>(destination) = box;
+	fake_text_native_values[destination] = box;
+	return 0;
+}
+
+FoundryExtensionInt fake_string_to_utf8(
+		FoundryExtensionConstStringPtr source,
+		char *destination,
+		FoundryExtensionInt capacity) {
+	auto *box = *static_cast<FakeTextBox *const *>(source);
+	if (destination == nullptr || capacity == 0) {
+		return static_cast<FoundryExtensionInt>(box->text.size());
+	}
+	const auto length = std::min<std::size_t>(
+			box->text.size(),
+			static_cast<std::size_t>(capacity));
+	std::memcpy(destination, box->text.data(), length);
+	return static_cast<FoundryExtensionInt>(length);
+}
+
+void fake_callable_custom_create(
+		FoundryExtensionUninitializedTypePtr destination,
+		FoundryExtensionCallableCustomInfo2 *info) {
+	callable_custom_create_count++;
+	FoundryExtensionBool valid = 0;
+	callable_reported_argument_count =
+			info->get_argument_count_func(info->callable_userdata, &valid);
+	if (!valid) {
+		callable_reported_argument_count = -2;
+	}
+	auto *box = new FakeCallableBox;
+	box->info = *info;
+	*static_cast<FakeCallableBox **>(destination) = box;
+	fake_callable_native_values[destination] = box;
+}
+
+FoundryExtensionMethodBindPtr fake_dispatch_method_bind(
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionInt hash) {
+	return reinterpret_cast<FoundryExtensionMethodBindPtr>(
+			hash == 4023243586 ? 0x99 : 0x44);
+}
+
+void fake_dispatch_method_call(
+		FoundryExtensionMethodBindPtr,
+		FoundryExtensionObjectPtr,
+		const FoundryExtensionConstVariantPtr *,
+		FoundryExtensionInt,
+		FoundryExtensionUninitializedVariantPtr result,
+		FoundryExtensionCallError *error) {
+	method_bind_call_count++;
+	static_cast<std::uint64_t *>(result)[0] = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
+	error->error = force_call_error ?
+			FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD :
+			FOUNDRY_EXTENSION_CALL_OK;
+}
+
+void fake_dispatch_method_ptrcall(
+		FoundryExtensionMethodBindPtr method,
+		FoundryExtensionObjectPtr,
+		const FoundryExtensionConstTypePtr *,
+		FoundryExtensionTypePtr) {
+	if (method == reinterpret_cast<FoundryExtensionMethodBindPtr>(0x99)) {
+		postinitialize_count++;
+	} else {
+		method_bind_ptrcall_count++;
+	}
+}
+
+void fake_builtin_method(
+		FoundryExtensionTypePtr,
+		const FoundryExtensionConstTypePtr *,
+		FoundryExtensionTypePtr,
+		int32_t) {
+	builtin_method_count++;
+}
+
+FoundryExtensionPtrBuiltInMethod fake_get_builtin_method(
+		FoundryExtensionVariantType,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionInt) {
+	return &fake_builtin_method;
+}
+
+void fake_builtin_constructor(
+		FoundryExtensionUninitializedTypePtr,
+		const FoundryExtensionConstTypePtr *) {
+	builtin_constructor_count++;
+}
+
+FoundryExtensionPtrConstructor fake_get_builtin_constructor(
+		FoundryExtensionVariantType,
+		int32_t) {
+	return &fake_builtin_constructor;
+}
+
+void fake_member_getter(
+		FoundryExtensionConstTypePtr,
+		FoundryExtensionTypePtr) {
+	member_get_count++;
+}
+
+FoundryExtensionPtrGetter fake_get_member_getter(
+		FoundryExtensionVariantType,
+		FoundryExtensionConstStringNamePtr) {
+	return &fake_member_getter;
+}
+
+void fake_member_setter(
+		FoundryExtensionTypePtr,
+		FoundryExtensionConstTypePtr) {
+	member_set_count++;
+}
+
+FoundryExtensionPtrSetter fake_get_member_setter(
+		FoundryExtensionVariantType,
+		FoundryExtensionConstStringNamePtr) {
+	return &fake_member_setter;
+}
+
+void fake_variant_evaluate(
+		FoundryExtensionVariantOperator,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionUninitializedVariantPtr,
+		FoundryExtensionBool *valid) {
+	operator_count++;
+	*valid = 1;
+}
+
+void fake_variant_constant(
+		FoundryExtensionVariantType,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionUninitializedVariantPtr) {
+	constant_count++;
+}
+
+void fake_utility(
+		FoundryExtensionTypePtr,
+		const FoundryExtensionConstTypePtr *,
+		int32_t) {
+	utility_count++;
+}
+
+FoundryExtensionPtrUtilityFunction fake_get_utility(
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionInt) {
+	return &fake_utility;
+}
+
+void fake_named_get(
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionUninitializedVariantPtr,
+		FoundryExtensionBool *valid) {
+	named_get_count++;
+	*valid = 1;
+}
+
+void fake_named_set(
+		FoundryExtensionVariantPtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionBool *valid) {
+	named_set_count++;
+	*valid = 1;
+}
+
+void fake_variant_call(
+		FoundryExtensionVariantPtr callable,
+		FoundryExtensionConstStringNamePtr,
+		const FoundryExtensionConstVariantPtr *arguments,
+		FoundryExtensionInt argument_count,
+		FoundryExtensionUninitializedVariantPtr result,
+		FoundryExtensionCallError *error) {
+	callable_call_count++;
+	auto *words = static_cast<std::uint64_t *>(callable);
+	if (words[0] == FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE &&
+			words[1] != 0 &&
+			words[2] == fake_callable_magic) {
+		auto *box = reinterpret_cast<FakeCallableBox *>(words[1]);
+		box->info.call_func(
+				box->info.callable_userdata,
+				arguments,
+				argument_count,
+				result,
+				error);
+		return;
+	}
+	error->error = FOUNDRY_EXTENSION_CALL_OK;
+}
+
+void fake_keyed_get(
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionUninitializedVariantPtr,
+		FoundryExtensionBool *valid) {
+	keyed_get_count++;
+	*valid = !force_keyed_get_failure;
+}
+
+void fake_keyed_set(
+		FoundryExtensionVariantPtr,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionBool *valid) {
+	keyed_set_count++;
+	*valid = 1;
+}
+
+void fake_indexed_get(
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionInt,
+		FoundryExtensionUninitializedVariantPtr,
+		FoundryExtensionBool *valid,
+		FoundryExtensionBool *out_of_bounds) {
+	indexed_get_count++;
+	*valid = 1;
+	*out_of_bounds = 0;
+}
+
+void fake_indexed_set(
+		FoundryExtensionVariantPtr,
+		FoundryExtensionInt,
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionBool *valid,
+		FoundryExtensionBool *out_of_bounds) {
+	indexed_set_count++;
+	*valid = 1;
+	*out_of_bounds = 0;
+}
+
+FoundryExtensionBool fake_iter_init(
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionUninitializedVariantPtr iterator,
+		FoundryExtensionBool *valid) {
+	iter_init_count++;
+	*valid = 1;
+	static_cast<std::uint64_t *>(iterator)[0] = FOUNDRY_EXTENSION_VARIANT_TYPE_INT;
+	return 1;
+}
+
+FoundryExtensionBool fake_iter_next(
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionVariantPtr,
+		FoundryExtensionBool *valid) {
+	iter_next_count++;
+	*valid = 1;
+	return 0;
+}
+
+void fake_iter_get(
+		FoundryExtensionConstVariantPtr,
+		FoundryExtensionVariantPtr,
+		FoundryExtensionUninitializedVariantPtr value,
+		FoundryExtensionBool *valid) {
+	iter_get_count++;
+	*valid = 1;
+	static_cast<std::uint64_t *>(value)[0] = FOUNDRY_EXTENSION_VARIANT_TYPE_INT;
+}
+
+FoundryExtensionObjectPtr fake_construct_object(FoundryExtensionConstStringNamePtr) {
+	construct_object_count++;
+	return reinterpret_cast<FoundryExtensionObjectPtr>(0x1234);
+}
+
+FoundryExtensionObjectPtr fake_global_singleton(FoundryExtensionConstStringNamePtr) {
+	singleton_count++;
+	return reinterpret_cast<FoundryExtensionObjectPtr>(0x1234);
 }
 
 template <typename Function>
@@ -617,6 +1303,47 @@ void test_handle_teardown_waits_for_active_lease() {
 	teardown.join();
 	expect(teardown_finished, "teardown must finish after the lease drains");
 	expect(destroy_count == 1, "teardown must destroy owned storage exactly once");
+	const auto rejected = handles.insert(
+			22,
+			4,
+			foundry_java::HandleKind::NATIVE_STRUCTURE,
+			"PhysicsServer3DExtensionMotionResult",
+			foundry_java::NativeValue::storage(128),
+			true,
+			[&](foundry_java::HandleRecord &) { destroy_count++; });
+	expect(rejected == 0, "torn-down context generation must reject new handle admission");
+	expect(destroy_count == 2, "rejected owned admission must destroy its value exactly once");
+
+	const auto raced = handles.insert(
+			23,
+			5,
+			foundry_java::HandleKind::VARIANT,
+			"INTEGER",
+			foundry_java::NativeValue::storage(24),
+			true,
+			[&](foundry_java::HandleRecord &) { destroy_count++; });
+	std::atomic<bool> start = false;
+	std::thread release([&] {
+		while (!start) {
+			std::this_thread::yield();
+		}
+		handles.release(
+				raced,
+				23,
+				5,
+				foundry_java::HandleKind::VARIANT,
+				"INTEGER");
+	});
+	std::thread raced_teardown([&] {
+		while (!start) {
+			std::this_thread::yield();
+		}
+		handles.teardown(23, 5);
+	});
+	start = true;
+	release.join();
+	raced_teardown.join();
+	expect(destroy_count == 3, "release-vs-teardown race must destroy owned storage exactly once");
 }
 
 void test_variant_inventory_and_dispatch_validation() {
@@ -668,6 +1395,7 @@ void test_native_structure_and_object_transport() {
 	services->get_native_struct_size = &fake_native_struct_size;
 	services->object_get_instance_id = &fake_object_instance_id;
 	services->object_get_instance_from_id = &fake_object_from_id;
+	services->object_get_class_name = &fake_object_class_name;
 	services->object_destroy = &fake_object_destroy;
 	foundry_java::NativeTransport transport(services);
 
@@ -697,6 +1425,25 @@ void test_native_structure_and_object_transport() {
 					foundry_java::HandleKind::NATIVE_STRUCTURE,
 					"PhysicsServer3DExtensionMotionResult"),
 			"native structure must release");
+	const auto pointer_qualified =
+			transport.create_native_structure(31, 5, "const Glyph*");
+	expect(pointer_qualified != 0, "pointer-qualified native structure token must normalize");
+	expect(
+			static_cast<bool>(transport.handles().acquire(
+					pointer_qualified,
+					31,
+					5,
+					foundry_java::HandleKind::NATIVE_STRUCTURE,
+					"Glyph")),
+			"pointer-qualified native structure must store the exact base native name");
+	expect(
+			transport.handles().release(
+					pointer_qualified,
+					31,
+					5,
+					foundry_java::HandleKind::NATIVE_STRUCTURE,
+					"Glyph"),
+			"normalized pointer-qualified native structure must release");
 
 	native_object_destroy_count = 0;
 	requested_object_id = 0;
@@ -727,10 +1474,10 @@ void test_dispatch_families_and_ref_counted_ownership() {
 	expect(
 			foundry_java::dispatch_family(dispatch) == foundry_java::DispatchFamily::CLASS_VARIANT_CALL,
 			"Variant-only class methods must use object_method_bind_call");
-	dispatch.argument_native_types = { "Vector3" };
+	dispatch.argument_native_types = { "Glyph*" };
 	expect(
 			foundry_java::dispatch_family(dispatch) == foundry_java::DispatchFamily::CLASS_PTRCALL,
-			"typed class methods must use object_method_bind_ptrcall");
+			"native pointer/structure class methods must use object_method_bind_ptrcall");
 	dispatch.vararg = true;
 	expect(
 			foundry_java::dispatch_family(dispatch) == foundry_java::DispatchFamily::CLASS_VARIANT_CALL,
@@ -809,6 +1556,8 @@ void test_all_variant_categories_copy_and_destroy_through_public_abi() {
 	std::max_align_t source_storage[4]{};
 	for (const auto &category : foundry_java::variant_categories()) {
 		copied_variant_type = category.abi_type;
+		static_cast<std::uint64_t *>(static_cast<void *>(source_storage))[0] =
+				category.abi_type;
 		const auto handle = transport.copy_variant(
 				70,
 				9,
@@ -826,6 +1575,716 @@ void test_all_variant_categories_copy_and_destroy_through_public_abi() {
 	}
 	expect(variant_copy_count == 39, "all 39 Variant categories must use variant_new_copy");
 	expect(variant_destroy_count == 39, "all 39 copied Variants must destroy exactly once");
+}
+
+void test_category_specific_conversion_and_executable_dispatch() {
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->variant_get_type = &fake_variant_get_type;
+	services->variant_new_copy = &fake_variant_new_copy;
+	services->variant_new_nil = &fake_variant_new_nil;
+	services->variant_construct = &fake_variant_construct;
+	services->variant_destroy = &fake_variant_destroy;
+	services->get_variant_from_type_constructor = &fake_get_variant_from_native;
+	services->get_variant_to_type_constructor = &fake_get_variant_to_native;
+	services->variant_get_ptr_destructor = &fake_all_variant_destructors;
+	services->string_new_with_utf8_chars_and_len2 = &fake_string_from_utf8;
+	services->string_to_utf8_chars = &fake_string_to_utf8;
+	services->string_name_new_with_utf8_chars_and_len = &fake_string_name_from_utf8_and_len;
+	services->classdb_get_method_bind = &fake_dispatch_method_bind;
+	services->object_method_bind_call = &fake_dispatch_method_call;
+	services->object_method_bind_ptrcall = &fake_dispatch_method_ptrcall;
+	services->variant_get_ptr_builtin_method = &fake_get_builtin_method;
+	services->variant_get_ptr_constructor = &fake_get_builtin_constructor;
+	services->variant_get_ptr_getter = &fake_get_member_getter;
+	services->variant_get_ptr_setter = &fake_get_member_setter;
+	services->variant_evaluate = &fake_variant_evaluate;
+	services->variant_get_constant_value = &fake_variant_constant;
+	services->variant_get_ptr_utility_function = &fake_get_utility;
+	services->variant_get_named = &fake_named_get;
+	services->variant_set_named = &fake_named_set;
+	services->variant_get_keyed = &fake_keyed_get;
+	services->variant_set_keyed = &fake_keyed_set;
+	services->variant_get_indexed = &fake_indexed_get;
+	services->variant_set_indexed = &fake_indexed_set;
+	services->variant_iter_init = &fake_iter_init;
+	services->variant_iter_next = &fake_iter_next;
+	services->variant_iter_get = &fake_iter_get;
+	services->variant_call = &fake_variant_call;
+	services->callable_custom_create2 = &fake_callable_custom_create;
+	services->classdb_construct_object2 = &fake_construct_object;
+	services->global_get_singleton = &fake_global_singleton;
+	services->object_get_instance_id = &fake_object_instance_id;
+	services->object_get_instance_from_id = &fake_object_from_id;
+	services->object_get_class_name = &fake_object_class_name;
+	services->object_destroy = &fake_object_destroy;
+	foundry_java::NativeTransport transport(services);
+
+	variant_construct_counts.fill(0);
+	variant_inspect_counts.fill(0);
+	variant_destroy_count = 0;
+	typed_fixture_mismatch = false;
+	for (const auto &category : foundry_java::variant_categories()) {
+		const std::size_t byte_size = foundry_java::abi_layout_size(category.native_name);
+		foundry_java::NativeValue source = foundry_java::NativeValue::storage(
+				std::max<std::size_t>(sizeof(std::uint64_t), byte_size));
+		auto *source_bytes = static_cast<std::byte *>(source.data());
+		for (std::size_t index = 0; index < byte_size; index++) {
+			source_bytes[index] = static_cast<std::byte>(
+					(static_cast<unsigned>(category.abi_type) * 17 + index) & 0xff);
+		}
+		const auto handle = transport.construct_variant(
+				81,
+				12,
+				category.abi_type,
+				category.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_NIL ?
+						nullptr :
+						source.data());
+		expect(handle != 0, "each Variant category must use a real construction route");
+		foundry_java::NativeValue decoded = foundry_java::NativeValue::storage(
+				std::max<std::size_t>(sizeof(std::uint64_t), byte_size));
+		const auto inspected = transport.inspect_variant(
+				handle,
+				81,
+				12,
+				category.abi_type,
+				decoded.data());
+		expect(inspected.ok, "each Variant category must use a real inspection route");
+		if (category.abi_type != FOUNDRY_EXTENSION_VARIANT_TYPE_NIL) {
+			expect(
+					std::memcmp(source.data(), decoded.data(), byte_size) == 0,
+					"category-specific conversion must preserve every exact native-layout byte");
+			expect(
+					variant_construct_counts.at(category.abi_type) == 1,
+					"category-specific constructor must execute exactly once");
+			expect(
+					variant_inspect_counts.at(category.abi_type) == 1,
+					"category-specific inspector must execute exactly once");
+		}
+		expect(
+				transport.handles().release(
+						handle,
+						81,
+						12,
+						foundry_java::HandleKind::VARIANT,
+						std::string(category.java_name)),
+				"constructed Variant must release");
+	}
+	expect(!typed_fixture_mismatch, "every category must cross its exact typed trampoline");
+	expect(variant_destroy_count == 39, "every constructed Variant must destroy exactly once");
+	for (const auto text_type : {
+				 FOUNDRY_EXTENSION_VARIANT_TYPE_STRING,
+				 FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME,
+				 FOUNDRY_EXTENSION_VARIANT_TYPE_NODE_PATH,
+		 }) {
+		const auto text_handle =
+				transport.construct_text_variant(81, 12, text_type, "café/Node");
+		std::string decoded_text;
+		expect(text_handle != 0, "text category must construct from UTF-8");
+		expect(
+				transport.inspect_text_variant(
+						text_handle,
+						81,
+						12,
+						text_type,
+						decoded_text)
+						.ok &&
+						decoded_text == "café/Node",
+				"text category must inspect back to the exact UTF-8 bytes");
+		const auto *category = foundry_java::variant_category(text_type);
+		expect(
+				transport.handles().release(
+						text_handle,
+						81,
+						12,
+						foundry_java::HandleKind::VARIANT,
+						std::string(category->java_name)),
+				"text category Variant must release exactly once");
+	}
+	std::uint64_t local_native_value = 7;
+	signal_construct_count = rid_default_construct_count = 0;
+	expect(
+			transport.construct_variant(
+					81,
+					12,
+					FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL,
+					&local_native_value,
+					foundry_java::ValueBackend::JAVA_LOCAL) == 0,
+			"Java-local Signal must reject without touching a native constructor");
+	expect(signal_construct_count == 0, "Java-local Signal rejection must be zero-service");
+	expect(
+			transport.construct_variant(
+					81,
+					12,
+					FOUNDRY_EXTENSION_VARIANT_TYPE_RID,
+					&local_native_value,
+					foundry_java::ValueBackend::JAVA_LOCAL) == 0,
+			"nonzero Java-local RID must reject undocumented raw layout");
+	local_native_value = 0;
+	const auto local_zero_rid = transport.construct_variant(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_RID,
+			&local_native_value,
+			foundry_java::ValueBackend::JAVA_LOCAL);
+	expect(local_zero_rid != 0 && rid_default_construct_count == 1, "local zero RID must use default construction");
+	expect(
+			transport.handles().release(
+					local_zero_rid,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"RID"),
+			"default RID must release");
+	foundry_java::NativeValue native_rid_payload =
+			foundry_java::NativeValue::storage(foundry_java::abi_layout_size("RID"));
+	std::memset(native_rid_payload.data(), 0x3c, native_rid_payload.byte_size);
+	const auto native_rid = transport.construct_variant(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_RID,
+			native_rid_payload.data());
+	const auto copied_rid = transport.copy_native_backed_variant(
+			81,
+			12,
+			native_rid,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_RID);
+	expect(
+			native_rid != 0 && copied_rid != 0 &&
+					transport.handles().release(
+							native_rid,
+							81,
+							12,
+							foundry_java::HandleKind::VARIANT,
+							"RID"),
+			"native-backed nonzero RID must copy before original release");
+	foundry_java::NativeValue decoded_rid =
+			foundry_java::NativeValue::storage(foundry_java::abi_layout_size("RID"));
+	expect(
+			transport.inspect_variant(
+					copied_rid,
+					81,
+					12,
+					FOUNDRY_EXTENSION_VARIANT_TYPE_RID,
+					decoded_rid.data())
+					.ok &&
+					std::memcmp(
+							native_rid_payload.data(),
+							decoded_rid.data(),
+							native_rid_payload.byte_size) == 0,
+			"native-backed RID copy must preserve nonzero payload after original release");
+	expect(
+			transport.handles().release(
+					copied_rid,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"RID"),
+			"native-backed RID copy must release independently");
+	expect(
+			foundry_java::normalize_native_type("enum::Side").abi_type ==
+					FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
+			"enum token must normalize to raw int64");
+	expect(
+			foundry_java::normalize_native_type("typedarray::Node").abi_type ==
+					FOUNDRY_EXTENSION_VARIANT_TYPE_ARRAY,
+			"typed array token must normalize to Array");
+	expect(
+			foundry_java::normalize_native_type("Node").kind ==
+					foundry_java::NativeTypeKind::OBJECT,
+			"engine class token must normalize to OBJECT");
+
+	std::max_align_t variant_storage[4]{};
+	std::max_align_t native_storage[4]{};
+	foundry_java::DispatchCall call;
+	call.object = reinterpret_cast<FoundryExtensionObjectPtr>(0x1234);
+	call.receiver_variant = variant_storage;
+	call.receiver_native = native_storage;
+	call.variant_arguments = { variant_storage };
+	call.native_arguments = { native_storage };
+	call.variant_result = variant_storage;
+	call.native_result = native_storage;
+
+	foundry_java::NativeDispatch dispatch;
+	dispatch.identity = "Node.call";
+	dispatch.kind = foundry_java::DispatchKind::CLASS_METHOD;
+	dispatch.owner_native_type = "Node";
+	dispatch.native_name = "call";
+	dispatch.compatibility_hash = 1;
+	dispatch.argument_native_types = { "Variant" };
+	dispatch.minimum_argument_count = 1;
+	dispatch.return_native_type = "Variant";
+	expect(transport.execute(dispatch, call).ok, "Variant MethodBind route must execute");
+
+	dispatch.identity = "Node.get_index";
+	dispatch.native_name = "get_index";
+	dispatch.argument_native_types = { "Glyph*" };
+	dispatch.return_native_type = "void";
+	expect(transport.execute(dispatch, call).ok, "ptrcall MethodBind route must execute");
+	dispatch.argument_native_types = { "int", "int" };
+	dispatch.minimum_argument_count = 1;
+	dispatch.return_native_type = "int";
+	call.variant_arguments = { variant_storage };
+	expect(
+			transport.execute(dispatch, call).ok,
+			"omitted optional arguments must execute through Variant MethodBind call");
+
+	dispatch.kind = foundry_java::DispatchKind::CLASS_PROPERTY;
+	dispatch.native_name = "position";
+	dispatch.argument_native_types = { "Vector2" };
+	dispatch.minimum_argument_count = 0;
+	dispatch.getter_identity = "Node.position:get";
+	dispatch.getter_native_name = "get_position";
+	dispatch.getter_compatibility_hash = 1;
+	dispatch.setter_identity = "Node.position:set";
+	dispatch.setter_native_name = "set_position";
+	dispatch.setter_compatibility_hash = 2;
+	call.property_set = false;
+	expect(transport.execute(dispatch, call).ok, "named property getter must execute");
+	call.property_set = true;
+	expect(transport.execute(dispatch, call).ok, "named property setter must execute");
+
+	dispatch.kind = foundry_java::DispatchKind::CLASS_SIGNAL;
+	dispatch.native_name = "changed";
+	dispatch.argument_native_types.clear();
+	dispatch.minimum_argument_count = 0;
+	call.property_set = false;
+	call.native_arguments.clear();
+	signal_construct_count = 0;
+	expect(transport.execute(dispatch, call).ok, "class Signal must construct from Object and StringName");
+	expect(signal_construct_count == 1, "class Signal must use variant_construct exactly once");
+
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_METHOD;
+	dispatch.owner_native_type = "Vector2";
+	dispatch.native_name = "length";
+	dispatch.argument_native_types.clear();
+	dispatch.minimum_argument_count = 0;
+	dispatch.return_native_type = "float";
+	call.receiver_native_type = "Vector2";
+	call.variant_arguments.clear();
+	call.native_arguments.clear();
+	expect(transport.execute(dispatch, call).ok, "built-in method route must execute");
+
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_CONSTRUCTOR;
+	dispatch.constructor_index = 0;
+	expect(transport.execute(dispatch, call).ok, "built-in constructor route must execute");
+
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_OPERATOR;
+	call.variant_operator = FOUNDRY_EXTENSION_VARIANT_OP_ADD;
+	dispatch.argument_native_types = { "Vector2" };
+	dispatch.minimum_argument_count = 1;
+	call.variant_arguments = { variant_storage };
+	expect(transport.execute(dispatch, call).ok, "operator route must execute");
+	call.variant_operator = FOUNDRY_EXTENSION_VARIANT_OP_NEGATE;
+	dispatch.argument_native_types.clear();
+	dispatch.minimum_argument_count = 0;
+	call.variant_arguments.clear();
+	nil_construct_count = 0;
+	expect(transport.execute(dispatch, call).ok, "unary operator route must execute");
+	expect(nil_construct_count == 1, "unary operator must construct a real Nil RHS");
+
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_MEMBER;
+	dispatch.native_name = "x";
+	call.property_set = false;
+	expect(transport.execute(dispatch, call).ok, "built-in member getter must execute");
+	call.property_set = true;
+	dispatch.argument_native_types = { "float" };
+	call.native_arguments = { native_storage };
+	expect(
+			!transport.execute(dispatch, call).ok,
+			"built-in member setter must reject because frozen member dispatch is getter-only");
+
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_CONSTANT;
+	dispatch.native_name = "ZERO";
+	dispatch.argument_native_types.clear();
+	call.native_arguments.clear();
+	expect(transport.execute(dispatch, call).ok, "built-in constant route must execute");
+
+	dispatch.kind = foundry_java::DispatchKind::UTILITY_FUNCTION;
+	dispatch.native_name = "snapped";
+	expect(transport.execute(dispatch, call).ok, "utility route must execute");
+
+	expect(method_bind_call_count == 2, "Variant MethodBind must cover direct and defaulted calls");
+	expect(method_bind_ptrcall_count == 1, "ptrcall MethodBind must call once");
+	expect(named_get_count == 1 && named_set_count == 1, "property accessors must both execute");
+	expect(builtin_method_count == 1, "built-in method must execute once");
+	expect(builtin_constructor_count == 1, "built-in constructor must execute once");
+	expect(operator_count == 2, "binary and unary operators must each execute once");
+	expect(member_get_count == 1 && member_set_count == 0, "member route must be getter-only");
+	expect(constant_count == 1, "constant route must execute once");
+	expect(utility_count == 1, "utility route must execute once");
+	auto *saved_variant_result = call.variant_result;
+	call.variant_result = nullptr;
+	dispatch.kind = foundry_java::DispatchKind::CLASS_METHOD;
+	dispatch.owner_native_type = "Node";
+	dispatch.native_name = "consume";
+	dispatch.argument_native_types = { "Glyph*" };
+	dispatch.minimum_argument_count = 1;
+	dispatch.return_native_type = "void";
+	call.native_arguments = { native_storage };
+	const int ptrcall_before_invalid_void = method_bind_ptrcall_count;
+	expect(
+			!transport.execute(dispatch, call).ok &&
+					method_bind_ptrcall_count == ptrcall_before_invalid_void,
+			"missing void Variant result must reject before MethodBind ptrcall side effects");
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_METHOD;
+	dispatch.owner_native_type = "Vector2";
+	dispatch.native_name = "void_method";
+	dispatch.argument_native_types.clear();
+	dispatch.minimum_argument_count = 0;
+	call.native_arguments.clear();
+	const int builtin_before_invalid_void = builtin_method_count;
+	expect(
+			!transport.execute(dispatch, call).ok &&
+					builtin_method_count == builtin_before_invalid_void,
+			"missing void Variant result must reject before built-in side effects");
+	dispatch.kind = foundry_java::DispatchKind::UTILITY_FUNCTION;
+	dispatch.native_name = "void_utility";
+	const int utility_before_invalid_void = utility_count;
+	expect(
+			!transport.execute(dispatch, call).ok &&
+					utility_count == utility_before_invalid_void,
+			"missing void Variant result must reject before utility side effects");
+	call.variant_result = saved_variant_result;
+
+	dispatch.kind = foundry_java::DispatchKind::CLASS_METHOD;
+	dispatch.owner_native_type = "Node";
+	dispatch.native_name = "call";
+	dispatch.compatibility_hash = 1;
+	dispatch.argument_native_types = { "Variant" };
+	dispatch.minimum_argument_count = 1;
+	dispatch.return_native_type = "Variant";
+	call.object = reinterpret_cast<FoundryExtensionObjectPtr>(0x1234);
+	call.variant_arguments = { variant_storage };
+	const int destroy_before_call_failure = variant_destroy_count;
+	force_call_error = true;
+	expect(!transport.execute(dispatch, call).ok, "MethodBind call failure must be contained");
+	force_call_error = false;
+	expect(
+			variant_destroy_count == destroy_before_call_failure + 1,
+			"failed MethodBind call must destroy its placement-constructed result");
+
+	callable_call_count = 0;
+	expect(
+			transport.invoke_callable(variant_storage, {}, variant_storage).ok,
+			"generic Callable invocation must execute through variant_call");
+	expect(callable_call_count == 1, "generic Callable must execute exactly once");
+	callable_custom_create_count = 0;
+	int local_callable_calls = 0;
+	auto callable_lifetime = std::make_shared<int>(9);
+	std::weak_ptr<int> callable_lifetime_probe = callable_lifetime;
+	const auto local_callable = transport.construct_local_callable(
+			81,
+			12,
+			[&local_callable_calls, callable_lifetime](
+					const FoundryExtensionConstVariantPtr *,
+					FoundryExtensionInt,
+					FoundryExtensionVariantPtr,
+					FoundryExtensionCallError *error) {
+				local_callable_calls += *callable_lifetime;
+				error->error = FOUNDRY_EXTENSION_CALL_OK;
+			},
+			reinterpret_cast<void *>(0x777),
+			0);
+	callable_lifetime.reset();
+	expect(local_callable != 0 && callable_custom_create_count == 1, "local Callable must use custom_create2");
+	expect(callable_reported_argument_count == 0, "local Callable must preserve fixed arity");
+	{
+		auto lease = transport.handles().acquire(
+				local_callable,
+				81,
+				12,
+				foundry_java::HandleKind::VARIANT,
+				"CALLABLE");
+		expect(static_cast<bool>(lease), "local Callable Variant must be acquirable");
+		expect(
+				transport.invoke_callable(lease.record().value.data(), {}, variant_storage).ok,
+				"local Callable must round-trip through generic invocation");
+	}
+	expect(local_callable_calls == 9, "local Callable callback must execute with live userdata");
+	const auto copied_callable = transport.copy_native_backed_variant(
+			81,
+			12,
+			local_callable,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE);
+	expect(copied_callable != 0, "native-backed Callable must copy for decode/re-encode");
+	expect(
+			transport.handles().release(
+					local_callable,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"CALLABLE"),
+			"original local Callable must release");
+	expect(
+			!callable_lifetime_probe.expired(),
+			"Callable userdata must survive while a native-backed copy remains");
+	{
+		auto lease = transport.handles().acquire(
+				copied_callable,
+				81,
+				12,
+				foundry_java::HandleKind::VARIANT,
+				"CALLABLE");
+		expect(
+				lease &&
+						transport.invoke_callable(
+								lease.record().value.data(),
+								{},
+								variant_storage)
+								.ok,
+				"native-backed Callable copy must remain invokable after original release");
+	}
+	expect(local_callable_calls == 18, "Callable copy must preserve the same callback userdata");
+	expect(
+			transport.handles().release(
+					copied_callable,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"CALLABLE"),
+			"native-backed Callable copy must release");
+	expect(callable_lifetime_probe.expired(), "custom Callable userdata must free exactly at final release");
+
+	keyed_get_count = keyed_set_count = indexed_get_count = indexed_set_count = 0;
+	iter_init_count = iter_next_count = iter_get_count = 0;
+	expect(
+			transport.collection_get_keyed(variant_storage, variant_storage, variant_storage).ok,
+			"Dictionary keyed get must execute");
+	expect(
+			transport.collection_set_keyed(variant_storage, variant_storage, variant_storage).ok,
+			"Dictionary keyed set must execute");
+	expect(
+			transport.collection_get_indexed(variant_storage, 0, variant_storage).ok,
+			"Array/packed indexed get must execute");
+	expect(
+			transport.collection_set_indexed(variant_storage, 0, variant_storage).ok,
+			"Array/packed indexed set must execute");
+	int visited = 0;
+	copied_variant_type = FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY;
+	static_cast<std::uint64_t *>(static_cast<void *>(variant_storage))[0] =
+			FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY;
+	expect(
+			transport.collection_iterate(
+					variant_storage,
+					FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY,
+					[&visited](
+							FoundryExtensionConstVariantPtr,
+							FoundryExtensionConstVariantPtr) {
+						visited++;
+						return true;
+					})
+					.ok,
+			"Dictionary/Array iteration must execute");
+	expect(
+			keyed_get_count == 2 && keyed_set_count == 1 &&
+					indexed_get_count == 1 && indexed_set_count == 1,
+			"keyed and indexed routes must each execute once");
+	expect(
+			iter_init_count == 1 && iter_get_count == 1 && iter_next_count == 1 && visited == 1,
+			"iteration must construct, read, advance, and visit exactly once");
+	const int destroy_before_key_failure = variant_destroy_count;
+	force_keyed_get_failure = true;
+	expect(
+			!transport.collection_get_keyed(
+					   variant_storage,
+					   variant_storage,
+					   variant_storage)
+					 .ok,
+			"invalid keyed get must fail");
+	force_keyed_get_failure = false;
+	expect(
+			variant_destroy_count == destroy_before_key_failure + 1,
+			"invalid keyed get must destroy its placement-constructed result");
+	const int destroy_before_visitor_throw = variant_destroy_count;
+	copied_variant_type = FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY;
+	static_cast<std::uint64_t *>(static_cast<void *>(variant_storage))[0] =
+			FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY;
+	expect(
+			!transport.collection_iterate(
+					   variant_storage,
+					   FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY,
+					   [](FoundryExtensionConstVariantPtr,
+							   FoundryExtensionConstVariantPtr) -> bool {
+						   throw std::runtime_error("visitor");
+					   })
+					 .ok,
+			"throwing collection visitor must be contained");
+	expect(
+			variant_destroy_count == destroy_before_visitor_throw + 3,
+			"throwing Dictionary visitor must destroy iterator, key, and value exactly once");
+
+	std::uint64_t collection_payload = 55;
+	const auto collection_value = transport.construct_variant(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
+			&collection_payload);
+	expect(collection_value != 0, "collection element Variant must construct");
+	const auto dictionary = transport.construct_collection(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY,
+			{ collection_value },
+			{ collection_value });
+	const auto array = transport.construct_collection(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_ARRAY,
+			{},
+			{ collection_value });
+	const auto packed = transport.construct_collection(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_PACKED_INT64_ARRAY,
+			{},
+			{ collection_value });
+	expect(
+			dictionary != 0 && array != 0 && packed != 0,
+			"Dictionary, Array, and packed collections must construct through recursive ABI routes");
+	expect(
+			transport.handles().release(
+					dictionary,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"DICTIONARY") &&
+					transport.handles().release(
+							array,
+							81,
+							12,
+							foundry_java::HandleKind::VARIANT,
+							"ARRAY") &&
+					transport.handles().release(
+							packed,
+							81,
+							12,
+							foundry_java::HandleKind::VARIANT,
+							"PACKED_INT64_ARRAY") &&
+					transport.handles().release(
+							collection_value,
+							81,
+							12,
+							foundry_java::HandleKind::VARIANT,
+							"INTEGER"),
+			"recursive collection handles must release exactly once");
+
+	const auto borrowed_object = transport.track_object(
+			81,
+			12,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"Node",
+			false);
+	const auto object_variant =
+			transport.construct_object_variant(81, 12, borrowed_object, "Node");
+	std::uint64_t decoded_object_id = 0;
+	std::string decoded_object_type;
+	expect(
+			object_variant != 0 &&
+					transport.inspect_object_instance_id(
+							object_variant,
+							81,
+							12,
+							decoded_object_id)
+							.ok &&
+					decoded_object_id == 91 &&
+					transport.object_type(
+							borrowed_object,
+							81,
+							12,
+							"Node",
+							reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x88),
+							decoded_object_type)
+							.ok &&
+					decoded_object_type == "Node",
+			"Object Variant must round-trip through an instance-ID-backed object handle");
+	expect(
+			transport.handles().release(
+					object_variant,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"OBJECT") &&
+					transport.handles().release(
+							borrowed_object,
+							81,
+							12,
+							foundry_java::HandleKind::OBJECT,
+							"Node"),
+			"Object Variant and borrowed object handles must release");
+
+	foundry_java::NativeValue native_signal_payload = foundry_java::NativeValue::storage(
+			foundry_java::abi_layout_size("Signal"));
+	std::memset(native_signal_payload.data(), 0x66, native_signal_payload.byte_size);
+	const auto native_signal = transport.construct_variant(
+			81,
+			12,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL,
+			native_signal_payload.data());
+	const auto copied_signal = transport.copy_native_backed_variant(
+			81,
+			12,
+			native_signal,
+			FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL);
+	expect(copied_signal != 0, "native-backed Signal must copy for decode/re-encode");
+	expect(
+			transport.handles().release(
+					native_signal,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"SIGNAL"),
+			"original native-backed Signal must release before its copy");
+	foundry_java::NativeValue decoded_signal = foundry_java::NativeValue::storage(
+			foundry_java::abi_layout_size("Signal"));
+	expect(
+			transport.inspect_variant(
+					copied_signal,
+					81,
+					12,
+					FOUNDRY_EXTENSION_VARIANT_TYPE_SIGNAL,
+					decoded_signal.data())
+					.ok &&
+					std::memcmp(
+							native_signal_payload.data(),
+							decoded_signal.data(),
+							native_signal_payload.byte_size) == 0,
+			"native-backed Signal copy must preserve payload after original release");
+	expect(
+			transport.handles().release(
+					copied_signal,
+					81,
+					12,
+					foundry_java::HandleKind::VARIANT,
+					"SIGNAL"),
+			"native-backed Signal copy must release independently");
+
+	construct_object_count = postinitialize_count = singleton_count = 0;
+	native_object_destroy_count = 0;
+	const auto object = transport.instantiate(81, 12, "Node");
+	expect(object != 0, "object construction must produce a typed instance-id handle");
+	expect(
+			construct_object_count == 1 && postinitialize_count == 1,
+			"object construction must send POSTINITIALIZE exactly once");
+	expect(
+			transport.handles().release(
+					object,
+					81,
+					12,
+					foundry_java::HandleKind::OBJECT,
+					"Node"),
+			"owned constructed object must release");
+	expect(native_object_destroy_count == 1, "owned constructed object must destroy exactly once");
+	const auto singleton = transport.singleton(81, 12, "Engine");
+	expect(singleton != 0 && singleton_count == 1, "singleton route must track the returned instance ID");
+	expect(
+			transport.handles().release(
+					singleton,
+					81,
+					12,
+					foundry_java::HandleKind::OBJECT,
+					"Engine"),
+			"borrowed singleton handle must release");
+	expect(native_object_destroy_count == 1, "borrowed singleton release must not destroy");
 }
 
 } // namespace
@@ -885,6 +2344,7 @@ int main() {
 	test_native_structure_and_object_transport();
 	test_dispatch_families_and_ref_counted_ownership();
 	test_all_variant_categories_copy_and_destroy_through_public_abi();
+	test_category_specific_conversion_and_executable_dispatch();
 	std::cout << "Foundry Java native runtime tests passed\n";
 	return 0;
 }

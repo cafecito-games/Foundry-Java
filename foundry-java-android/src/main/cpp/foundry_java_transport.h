@@ -26,10 +26,28 @@ enum class HandleKind : std::uint8_t {
 
 struct VariantCategoryInfo {
 	std::string_view java_name;
+	std::string_view native_name;
 	FoundryExtensionVariantType abi_type;
 };
 
 const std::array<VariantCategoryInfo, 39> &variant_categories();
+const VariantCategoryInfo *variant_category(FoundryExtensionVariantType type);
+const VariantCategoryInfo *variant_category(std::string_view native_name);
+
+enum class NativeTypeKind : std::uint8_t {
+	VOID,
+	BUILTIN,
+	OBJECT,
+	NATIVE_STRUCTURE,
+};
+
+struct NormalizedNativeType {
+	NativeTypeKind kind = NativeTypeKind::OBJECT;
+	std::string_view token;
+	FoundryExtensionVariantType abi_type = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
+};
+
+NormalizedNativeType normalize_native_type(std::string_view token);
 
 enum class DispatchKind : std::int32_t {
 	CLASS_METHOD = 1,
@@ -108,6 +126,36 @@ struct NativeValue {
 	void *data() noexcept;
 	const void *data() const noexcept;
 };
+
+struct TransportResult {
+	bool ok = false;
+	std::string phase;
+	FoundryExtensionCallError call_error{};
+};
+
+struct DispatchCall {
+	FoundryExtensionObjectPtr object = nullptr;
+	FoundryExtensionVariantPtr receiver_variant = nullptr;
+	FoundryExtensionTypePtr receiver_native = nullptr;
+	std::string receiver_native_type;
+	std::vector<FoundryExtensionConstVariantPtr> variant_arguments;
+	std::vector<FoundryExtensionConstTypePtr> native_arguments;
+	FoundryExtensionUninitializedVariantPtr variant_result = nullptr;
+	FoundryExtensionTypePtr native_result = nullptr;
+	bool property_set = false;
+	FoundryExtensionVariantOperator variant_operator = FOUNDRY_EXTENSION_VARIANT_OP_MAX;
+};
+
+struct CollectionEntry {
+	NativeValue key;
+	NativeValue value;
+};
+
+using LocalCallable = std::function<void(
+		const FoundryExtensionConstVariantPtr *,
+		FoundryExtensionInt,
+		FoundryExtensionVariantPtr,
+		FoundryExtensionCallError *)>;
 
 struct HandleRecord {
 	ContextHandle context = 0;
@@ -221,6 +269,117 @@ public:
 			std::uint64_t generation,
 			FoundryExtensionConstVariantPtr source,
 			FoundryExtensionVariantType expected_type);
+	NativeHandle construct_variant(
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionVariantType type,
+			FoundryExtensionConstTypePtr native_value,
+			ValueBackend backend = ValueBackend::NATIVE);
+	NativeHandle construct_string_variant(
+			ContextHandle context,
+			std::uint64_t generation,
+			std::string_view utf8);
+	NativeHandle construct_text_variant(
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionVariantType type,
+			std::string_view utf8);
+	NativeHandle construct_local_callable(
+			ContextHandle context,
+			std::uint64_t generation,
+			LocalCallable callable,
+			void *identity_token,
+			FoundryExtensionInt argument_count = -1);
+	TransportResult inspect_variant(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionVariantType type,
+			FoundryExtensionUninitializedTypePtr destination);
+	TransportResult inspect_string_variant(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			std::string &destination);
+	TransportResult inspect_text_variant(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionVariantType type,
+			std::string &destination);
+	NativeHandle construct_object_variant(
+			ContextHandle context,
+			std::uint64_t generation,
+			NativeHandle object_handle,
+			const std::string &expected_object_type);
+	TransportResult inspect_object_instance_id(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			std::uint64_t &instance_id);
+	TransportResult object_type(
+			NativeHandle object_handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			const std::string &expected_object_type,
+			FoundryExtensionClassLibraryPtr library,
+			std::string &destination);
+	NativeHandle copy_native_backed_variant(
+			ContextHandle context,
+			std::uint64_t generation,
+			NativeHandle source_handle,
+			FoundryExtensionVariantType type);
+	NativeHandle construct_collection(
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionVariantType type,
+			const std::vector<NativeHandle> &keys,
+			const std::vector<NativeHandle> &values);
+	TransportResult execute(
+			const NativeDispatch &dispatch,
+			const DispatchCall &call);
+	TransportResult invoke_callable(
+			FoundryExtensionVariantPtr callable,
+			const std::vector<FoundryExtensionConstVariantPtr> &arguments,
+			FoundryExtensionUninitializedVariantPtr result);
+	TransportResult collection_get_named(
+			FoundryExtensionConstVariantPtr collection,
+			std::string_view name,
+			FoundryExtensionUninitializedVariantPtr result);
+	TransportResult collection_set_named(
+			FoundryExtensionVariantPtr collection,
+			std::string_view name,
+			FoundryExtensionConstVariantPtr value);
+	TransportResult collection_get_keyed(
+			FoundryExtensionConstVariantPtr collection,
+			FoundryExtensionConstVariantPtr key,
+			FoundryExtensionUninitializedVariantPtr result);
+	TransportResult collection_set_keyed(
+			FoundryExtensionVariantPtr collection,
+			FoundryExtensionConstVariantPtr key,
+			FoundryExtensionConstVariantPtr value);
+	TransportResult collection_get_indexed(
+			FoundryExtensionConstVariantPtr collection,
+			FoundryExtensionInt index,
+			FoundryExtensionUninitializedVariantPtr result);
+	TransportResult collection_set_indexed(
+			FoundryExtensionVariantPtr collection,
+			FoundryExtensionInt index,
+			FoundryExtensionConstVariantPtr value);
+	TransportResult collection_iterate(
+			FoundryExtensionConstVariantPtr collection,
+			FoundryExtensionVariantType collection_type,
+			const std::function<bool(
+					FoundryExtensionConstVariantPtr,
+					FoundryExtensionConstVariantPtr)> &visitor);
+	NativeHandle instantiate(
+			ContextHandle context,
+			std::uint64_t generation,
+			const std::string &native_class);
+	NativeHandle singleton(
+			ContextHandle context,
+			std::uint64_t generation,
+			const std::string &native_name);
 
 private:
 	std::shared_ptr<const BridgeServices> services;
