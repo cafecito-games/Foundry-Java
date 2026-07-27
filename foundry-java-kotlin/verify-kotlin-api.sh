@@ -22,11 +22,13 @@ actual="$temporary_directory/foundry-java-kotlin.api"
 LC_ALL=C jar tf "$jar_file" |
     sed -n 's#^games/cafecito/foundry/kotlin/\([^$]*\)\.class$#games.cafecito.foundry.kotlin.\1#p' |
     sort |
-    while IFS= read -r class_name; do
-        raw_declaration="$temporary_directory/raw-declaration"
-        declaration="$temporary_directory/declaration"
-        javap -classpath "$jar_file" -public -s "$class_name" >"$raw_declaration"
-        awk '
+    {
+        first_declaration=true
+        while IFS= read -r class_name; do
+            raw_declaration="$temporary_directory/raw-declaration"
+            declaration="$temporary_directory/declaration"
+            javap -classpath "$jar_file" -public -s "$class_name" >"$raw_declaration"
+            awk '
             /^  public .* (access\$|snapshot\$foundry_java_kotlin)/ {
                 skip_descriptor = 1
                 next
@@ -37,12 +39,16 @@ LC_ALL=C jar tf "$jar_file" |
             }
             NF { print }
         ' "$raw_declaration" >"$declaration"
-        if grep -Eq '^public (final |abstract )?(class|interface) ' "$declaration"; then
-            printf '## %s\n' "$class_name"
-            cat "$declaration"
-            printf '\n'
-        fi
-    done >"$actual"
+            if grep -Eq '^public (final |abstract )?(class|interface) ' "$declaration"; then
+                if [[ "$first_declaration" == false ]]; then
+                    printf '\n'
+                fi
+                printf '## %s\n' "$class_name"
+                cat "$declaration"
+                first_declaration=false
+            fi
+        done
+    } >"$actual"
 
 case "$mode" in
     --write)

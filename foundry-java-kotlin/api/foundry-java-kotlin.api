@@ -301,4 +301,3 @@ public final class games.cafecito.foundry.kotlin.SignalArgs5<A, B, C, D, E> {
   public boolean equals(java.lang.Object);
     descriptor: (Ljava/lang/Object;)Z
 }
-
