@@ -42,6 +42,7 @@ class ProcessorArtifactContractTest {
         assertEquals(
                 Set.of(
                         "games/cafecito/foundry/annotations/FoundryClass.class",
+                        "games/cafecito/foundry/annotations/FoundryConstant.class",
                         "games/cafecito/foundry/annotations/FoundryInitialization.class",
                         "games/cafecito/foundry/annotations/FoundryMethod.class",
                         "games/cafecito/foundry/annotations/FoundryOverride.class",
@@ -105,8 +106,15 @@ class ProcessorArtifactContractTest {
         for (String required :
                 new String[] {
                     "@FoundryClass",
+                    "@FoundryConstant",
                     "@FoundryMethod",
                     "@FoundryProperty",
+                    "enumName",
+                    "bitfield",
+                    "groupName",
+                    "groupPrefix",
+                    "subgroupName",
+                    "subgroupPrefix",
                     "@FoundrySignal",
                     "@FoundryOverride",
                     "@FoundryInitialization",
