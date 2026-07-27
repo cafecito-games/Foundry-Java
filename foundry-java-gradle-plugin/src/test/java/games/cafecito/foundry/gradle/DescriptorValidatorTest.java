@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -45,6 +47,243 @@ class DescriptorValidatorTest {
         assertThrows(
                 UnsupportedOperationException.class,
                 () -> descriptor.entries().add(new FoundryDescriptor.Entry("method", "bad")));
+    }
+
+    @Test
+    void parsesLegacyAndEnrichedMembersWithoutLosingEncodedText() {
+        String enumName = "Flags|line\nslash\\café☕";
+        String getter = "get|line\nslash\\値";
+        String groupName = "Physics|高度\n\\";
+        String subgroupName = "Advanced";
+        String constant =
+                "constant=demo.SpinningCube|HIGH_BIT|HIGH_BIT|long|d1|"
+                        + encoded(enumName)
+                        + "|-9223372036854775808|1";
+        String zeroConstant = "constant=demo.SpinningCube|ZERO|ZERO|int|d1||0|0";
+        String property =
+                "property=demo.SpinningCube|speed|speed|double|d1|"
+                        + encoded(getter)
+                        + "||7|"
+                        + encoded(groupName)
+                        + "||"
+                        + encoded(subgroupName)
+                        + "|";
+        String contents =
+                descriptorText(
+                                "demo-module",
+                                "games.cafecito.foundry.generated.demomodule.DemoModuleRegistry",
+                                API_SHA,
+                                "1",
+                                "1",
+                                "1")
+                        + constant
+                        + "\n"
+                        + zeroConstant
+                        + "\n"
+                        + property
+                        + "\n";
+
+        FoundryDescriptor descriptor = DescriptorValidator.parse("modules/enriched.jar", contents);
+
+        assertEquals(2, descriptor.format());
+        assertEquals("1", descriptor.runtimeContractVersion());
+        assertEquals(
+                List.of(
+                        constant.substring(constant.indexOf('=') + 1),
+                        zeroConstant.substring(zeroConstant.indexOf('=') + 1),
+                        property.substring(property.indexOf('=') + 1)),
+                descriptor.entries().stream()
+                        .filter(
+                                entry ->
+                                        entry.kind().equals("constant")
+                                                || entry.value().contains("|d1|"))
+                        .map(FoundryDescriptor.Entry::value)
+                        .toList());
+    }
+
+    @Test
+    void acceptsNamedGroupsWithoutPrefixesAndLegacyFourFieldProperties() {
+        String property =
+                "property=demo.SpinningCube|speed|speed|double|d1|"
+                        + encoded("speed")
+                        + "||-1|"
+                        + encoded("Physics")
+                        + "||"
+                        + encoded("Advanced")
+                        + "|";
+        String contents =
+                descriptorText(
+                                "demo-module",
+                                "games.cafecito.foundry.generated.demomodule.DemoModuleRegistry",
+                                API_SHA,
+                                "1",
+                                "1",
+                                "1")
+                        + property
+                        + "\n";
+
+        FoundryDescriptor descriptor = DescriptorValidator.parse("modules/groups.jar", contents);
+
+        assertEquals(
+                List.of("property", "property"),
+                descriptor.entries().stream()
+                        .filter(entry -> entry.kind().equals("property"))
+                        .map(FoundryDescriptor.Entry::kind)
+                        .toList());
+    }
+
+    @Test
+    void rejectsMalformedEnrichedMemberRows() {
+        String owner = "demo.SpinningCube|value|value|long";
+        String constant = owner + "|d1|" + encoded("Flags") + "|1|0";
+        String property =
+                "demo.SpinningCube|value|value|long|d1|" + encoded("getValue") + "||-1||||";
+        List<InvalidDescriptor> cases =
+                List.of(
+                        enriched("constant four fields", "constant=" + owner, "constant="),
+                        enriched(
+                                "constant short",
+                                "constant=" + owner + "|d1|" + encoded("Flags") + "|1",
+                                "constant="),
+                        enriched("constant long", "constant=" + constant + "|extra", "constant="),
+                        enriched(
+                                "constant tag",
+                                "constant=" + constant.replace("|d1|", "|d2|"),
+                                "constant="),
+                        enriched(
+                                "constant non-integral type",
+                                "constant=" + constant.replace("|long|d1|", "|double|d1|"),
+                                "constant="),
+                        enriched(
+                                "constant padded text",
+                                "constant=" + constant.replace(encoded("Flags"), "RmxhZ3M="),
+                                "constant="),
+                        enriched(
+                                "constant invalid alphabet",
+                                "constant=" + constant.replace(encoded("Flags"), "Rmxh*3M"),
+                                "constant="),
+                        enriched(
+                                "constant malformed utf8",
+                                "constant="
+                                        + constant.replace(
+                                                encoded("Flags"), encodedBytes(0xc3, 0x28)),
+                                "constant="),
+                        enriched(
+                                "constant noncanonical base64",
+                                "constant=" + constant.replace(encoded("Flags"), "RmxhZ3N"),
+                                "constant="),
+                        enriched(
+                                "constant blank enum",
+                                "constant=" + constant.replace(encoded("Flags"), encoded(" ")),
+                                "constant="),
+                        enriched(
+                                "bitfield without enum",
+                                "constant="
+                                        + constant.replace(encoded("Flags"), "")
+                                                .replace("|1|0", "|1|1"),
+                                "constant="),
+                        enriched(
+                                "constant plus",
+                                "constant=" + constant.replace("|1|0", "|+1|0"),
+                                "constant="),
+                        enriched(
+                                "constant leading zero",
+                                "constant=" + constant.replace("|1|0", "|01|0"),
+                                "constant="),
+                        enriched(
+                                "constant negative zero",
+                                "constant=" + constant.replace("|1|0", "|-0|0"),
+                                "constant="),
+                        enriched(
+                                "constant overflow",
+                                "constant=" + constant.replace("|1|0", "|9223372036854775808|0"),
+                                "constant="),
+                        enriched(
+                                "constant negative overflow",
+                                "constant=" + constant.replace("|1|0", "|-9223372036854775809|0"),
+                                "constant="),
+                        enriched(
+                                "constant boolean text",
+                                "constant=" + constant.replace("|1|0", "|1|false"),
+                                "constant="),
+                        enriched(
+                                "constant boolean digit",
+                                "constant=" + constant.replace("|1|0", "|1|2"),
+                                "constant="),
+                        enriched(
+                                "property short",
+                                "property=" + property.substring(0, property.lastIndexOf('|')),
+                                "property="),
+                        enriched("property long", "property=" + property + "|extra", "property="),
+                        enriched(
+                                "property tag",
+                                "property=" + property.replace("|d1|", "|d2|"),
+                                "property="),
+                        enriched(
+                                "property empty getter",
+                                "property=" + property.replace(encoded("getValue"), ""),
+                                "property="),
+                        enriched(
+                                "property blank getter",
+                                "property=" + property.replace(encoded("getValue"), encoded(" ")),
+                                "property="),
+                        enriched(
+                                "property blank setter",
+                                "property="
+                                        + property.replace(
+                                                encoded("getValue") + "||",
+                                                encoded("getValue") + "|" + encoded(" ") + "|"),
+                                "property="),
+                        enriched(
+                                "property index below minimum",
+                                "property=" + property.replace("||-1|", "||-2|"),
+                                "property="),
+                        enriched(
+                                "property index plus",
+                                "property=" + property.replace("||-1|", "||+1|"),
+                                "property="),
+                        enriched(
+                                "property index leading zero",
+                                "property=" + property.replace("||-1|", "||01|"),
+                                "property="),
+                        enriched(
+                                "property index overflow",
+                                "property=" + property.replace("||-1|", "||2147483648|"),
+                                "property="),
+                        enriched(
+                                "property group prefix without name",
+                                "property="
+                                        + property.replace(
+                                                "||-1||||", "||-1||" + encoded("group_") + "||"),
+                                "property="),
+                        enriched(
+                                "property subgroup prefix without name",
+                                "property="
+                                        + property.replace(
+                                                "||-1||||", "||-1||||" + encoded("subgroup_")),
+                                "property="),
+                        enriched(
+                                "property blank group name",
+                                "property="
+                                        + property.replace(
+                                                "||-1||||", "||-1|" + encoded(" ") + "|||"),
+                                "property="),
+                        enriched(
+                                "method extension",
+                                "method=demo.SpinningCube|run|run|void()|d1",
+                                "method="),
+                        enriched(
+                                "override extension",
+                                "override=demo.SpinningCube|_run|run|void()|d1",
+                                "override="),
+                        enriched(
+                                "signal extension",
+                                "signal=demo.SpinningCube|done|Done|void()|d1",
+                                "signal="));
+
+        for (InvalidDescriptor invalid : cases) {
+            assertInvalid(invalid.name(), invalid.contents(), invalid.expected());
+        }
     }
 
     @Test
@@ -466,6 +705,35 @@ class DescriptorValidatorTest {
                 property=demo.SpinningCube|speed|speed|double
                 """
                 .formatted(module, registry, apiSha, generator, runtime, bridge);
+    }
+
+    private static InvalidDescriptor enriched(String name, String entry, String expected) {
+        return new InvalidDescriptor(
+                name,
+                descriptorText(
+                                "demo-module",
+                                "games.cafecito.foundry.generated.demomodule.DemoModuleRegistry",
+                                API_SHA,
+                                "1",
+                                "1",
+                                "1")
+                        + entry
+                        + "\n",
+                expected);
+    }
+
+    private static String encoded(String value) {
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String encodedBytes(int... bytes) {
+        byte[] values = new byte[bytes.length];
+        for (int index = 0; index < bytes.length; index++) {
+            values[index] = (byte) bytes[index];
+        }
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(values);
     }
 
     private static List<DescriptorValidator.AndroidPayload> payloads() {

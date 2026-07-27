@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -186,6 +187,66 @@ class FoundryJavaPluginTest {
                 </manifest>
                 """,
                 Files.readString(project.resolve(STARTUP_MANIFEST)));
+    }
+
+    @Test
+    void enrichedDescriptorsKeepTheGeneratedIndexModuleOnly() throws IOException {
+        String enriched =
+                descriptor("alpha", "example.AlphaRegistry")
+                        + "constant=example.Extension|HIGH_BIT|HIGH_BIT|long|d1|"
+                        + encoded("Flags|line\nslash\\café☕")
+                        + "|-9223372036854775808|1\n"
+                        + "property=example.Extension|value|value|long|d1|"
+                        + encoded("get|value\nslash\\値")
+                        + "||7|"
+                        + encoded("Physics")
+                        + "||"
+                        + encoded("Advanced")
+                        + "|\n";
+        Path alpha =
+                moduleJarAtPath(
+                        temporaryDirectory.resolve("alpha-enriched.jar"),
+                        "META-INF/foundry-java/modules/alpha.descriptor",
+                        enriched);
+        Path project = project("enriched", List.of(alpha));
+
+        run(project, "generateFoundryJavaRegistry");
+
+        assertEquals(
+                """
+                format=2
+                api_sha256=%s
+                generator_version=1
+                runtime_contract_version=1
+                bridge_contract_version=1
+                module=alpha|example.AlphaRegistry
+                """
+                        .formatted(API_SHA),
+                Files.readString(project.resolve(INDEX)));
+        assertTrue(
+                Files.readString(project.resolve(BOOTSTRAP))
+                        .contains("example.AlphaRegistry.PROVIDER"));
+    }
+
+    @Test
+    void malformedEnrichedDescriptorsLeaveNoGeneratedRegistryOutputs() throws IOException {
+        String malformed =
+                descriptor("broken", "example.BrokenRegistry")
+                        + "property=example.Extension|value|value|long|d1|||-1||||\n";
+        Path broken =
+                moduleJarAtPath(
+                        temporaryDirectory.resolve("broken-enriched.jar"),
+                        "META-INF/foundry-java/modules/broken.descriptor",
+                        malformed);
+        Path project = project("broken-enriched", List.of(broken));
+
+        BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+        assertTrue(failure.getOutput().contains("Invalid Foundry descriptor"));
+        assertTrue(failure.getOutput().contains("property=example.Extension|value"));
+        assertFalse(Files.exists(project.resolve(INDEX)));
+        assertFalse(Files.exists(project.resolve(BOOTSTRAP)));
+        assertFalse(Files.exists(project.resolve(STARTUP_MANIFEST)));
     }
 
     @Test
@@ -2303,6 +2364,12 @@ class FoundryJavaPluginTest {
                 class=example.Extension|Extension|example.Node|SCENE|
                 """
                 .formatted(module, registry, API_SHA);
+    }
+
+    private static String encoded(String value) {
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 
     private record MavenDependency(String group, String artifact, String version, String scope) {}

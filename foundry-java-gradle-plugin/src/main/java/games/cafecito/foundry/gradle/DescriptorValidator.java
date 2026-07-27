@@ -1,6 +1,11 @@
 package games.cafecito.foundry.gradle;
 
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -22,7 +27,7 @@ final class DescriptorValidator {
                     "runtime_contract_version",
                     "bridge_contract_version");
     private static final Set<String> ENTRY_KINDS =
-            Set.of("class", "method", "override", "property", "signal");
+            Set.of("class", "constant", "method", "override", "property", "signal");
     private static final Pattern MODULE = Pattern.compile("[a-z][a-z0-9]*(?:-[a-z][a-z0-9]*)*");
     private static final Pattern QUALIFIED_JAVA_NAME =
             Pattern.compile(
@@ -38,6 +43,11 @@ final class DescriptorValidator {
             Set.of("CORE", "SERVERS", "SCENE", "EDITOR");
     private static final Set<String> PRIMITIVE_TYPES =
             Set.of("boolean", "byte", "short", "int", "long", "char", "float", "double");
+    private static final Set<String> INTEGRAL_TYPES =
+            Set.of("byte", "short", "int", "long", "char");
+    private static final Pattern ENCODED_TEXT = Pattern.compile("[A-Za-z0-9_-]*");
+    private static final Pattern CANONICAL_LONG = Pattern.compile("0|-?[1-9][0-9]*");
+    private static final Pattern CANONICAL_INDEX = Pattern.compile("-1|0|[1-9][0-9]*");
 
     private DescriptorValidator() {}
 
@@ -303,37 +313,166 @@ final class DescriptorValidator {
 
     private static void validateEntry(String artifact, String path, String kind, String value) {
         String[] parts = value.split("\\|", -1);
-        int requiredParts = kind.equals("class") ? 5 : 4;
-        if (parts.length != requiredParts) {
-            throw invalid(artifact, path, kind + "=" + value);
-        }
-        int requiredValues = kind.equals("class") ? 4 : 4;
-        for (int index = 0; index < requiredValues; index++) {
-            if (parts[index].isBlank()) {
-                throw invalid(artifact, path, kind + "=" + value);
-            }
-        }
         if (kind.equals("class")) {
-            if (!QUALIFIED_JAVA_NAME.matcher(parts[0]).matches()
-                    || !EXPORTED_NAME.matcher(parts[1]).matches()
-                    || !QUALIFIED_JAVA_NAME.matcher(parts[2]).matches()
-                    || !INITIALIZATION_LEVELS.contains(parts[3])
-                    || !validDependencies(parts[4])) {
-                throw invalid(artifact, path, kind + "=" + value);
-            }
+            validateClassEntry(artifact, path, kind, value, parts);
             return;
         }
-        if (!QUALIFIED_JAVA_NAME.matcher(parts[0]).matches()
-                || !EXPORTED_NAME.matcher(parts[1]).matches()
-                || !JAVA_NAME.matcher(parts[2]).matches()) {
+        if (kind.equals("constant")) {
+            validateConstantEntry(artifact, path, kind, value, parts);
+            return;
+        }
+        if (kind.equals("property") && parts.length == 12) {
+            validatePropertyEntry(artifact, path, kind, value, parts);
+            return;
+        }
+        if (parts.length != 4) {
             throw invalid(artifact, path, kind + "=" + value);
         }
+        validateMemberIdentity(artifact, path, kind, value, parts);
         boolean validSignature =
                 kind.equals("property")
                         ? validJavaType(parts[3], false)
                         : validMethodSignature(parts[3], kind.equals("signal"));
         if (!validSignature) {
             throw invalid(artifact, path, kind + "=" + value);
+        }
+    }
+
+    private static void validateClassEntry(
+            String artifact, String path, String kind, String value, String[] parts) {
+        if (parts.length != 5) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+        for (int index = 0; index < 4; index++) {
+            if (parts[index].isBlank()) {
+                throw invalid(artifact, path, kind + "=" + value);
+            }
+        }
+        if (!QUALIFIED_JAVA_NAME.matcher(parts[0]).matches()
+                || !EXPORTED_NAME.matcher(parts[1]).matches()
+                || !QUALIFIED_JAVA_NAME.matcher(parts[2]).matches()
+                || !INITIALIZATION_LEVELS.contains(parts[3])
+                || !validDependencies(parts[4])) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+    }
+
+    private static void validateConstantEntry(
+            String artifact, String path, String kind, String value, String[] parts) {
+        if (parts.length != 8) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+        validateMemberIdentity(artifact, path, kind, value, parts);
+        String enumName = decodedText(parts[5]);
+        boolean valid =
+                parts[4].equals("d1")
+                        && INTEGRAL_TYPES.contains(parts[3])
+                        && enumName != null
+                        && optionalText(enumName)
+                        && validLong(parts[6])
+                        && (parts[7].equals("0") || parts[7].equals("1"))
+                        && (!parts[7].equals("1") || !enumName.isEmpty());
+        if (!valid) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+    }
+
+    private static void validatePropertyEntry(
+            String artifact, String path, String kind, String value, String[] parts) {
+        validateMemberIdentity(artifact, path, kind, value, parts);
+        String getter = decodedText(parts[5]);
+        String setter = decodedText(parts[6]);
+        String groupName = decodedText(parts[8]);
+        String groupPrefix = decodedText(parts[9]);
+        String subgroupName = decodedText(parts[10]);
+        String subgroupPrefix = decodedText(parts[11]);
+        boolean valid =
+                parts[4].equals("d1")
+                        && validJavaType(parts[3], false)
+                        && getter != null
+                        && !getter.isBlank()
+                        && setter != null
+                        && optionalText(setter)
+                        && validIndex(parts[7])
+                        && groupName != null
+                        && optionalText(groupName)
+                        && groupPrefix != null
+                        && optionalText(groupPrefix)
+                        && subgroupName != null
+                        && optionalText(subgroupName)
+                        && subgroupPrefix != null
+                        && optionalText(subgroupPrefix)
+                        && (!groupName.isEmpty() || groupPrefix.isEmpty())
+                        && (!subgroupName.isEmpty() || subgroupPrefix.isEmpty());
+        if (!valid) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+    }
+
+    private static void validateMemberIdentity(
+            String artifact, String path, String kind, String value, String[] parts) {
+        for (int index = 0; index < 4; index++) {
+            if (parts[index].isBlank()) {
+                throw invalid(artifact, path, kind + "=" + value);
+            }
+        }
+        if (!QUALIFIED_JAVA_NAME.matcher(parts[0]).matches()
+                || !EXPORTED_NAME.matcher(parts[1]).matches()
+                || !JAVA_NAME.matcher(parts[2]).matches()) {
+            throw invalid(artifact, path, kind + "=" + value);
+        }
+    }
+
+    private static boolean validLong(String value) {
+        if (!CANONICAL_LONG.matcher(value).matches()) {
+            return false;
+        }
+        try {
+            Long.parseLong(value);
+            return true;
+        } catch (NumberFormatException failure) {
+            return false;
+        }
+    }
+
+    private static boolean validIndex(String value) {
+        if (!CANONICAL_INDEX.matcher(value).matches()) {
+            return false;
+        }
+        try {
+            Integer.parseInt(value);
+            return true;
+        } catch (NumberFormatException failure) {
+            return false;
+        }
+    }
+
+    private static boolean optionalText(String value) {
+        return value.isEmpty() || !value.isBlank();
+    }
+
+    private static String decodedText(String token) {
+        if (!ENCODED_TEXT.matcher(token).matches()) {
+            return null;
+        }
+        byte[] bytes;
+        try {
+            bytes = Base64.getUrlDecoder().decode(token);
+        } catch (IllegalArgumentException failure) {
+            return null;
+        }
+        if (!Base64.getUrlEncoder().withoutPadding().encodeToString(bytes).equals(token)) {
+            return null;
+        }
+        try {
+            return StandardCharsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
+        } catch (CharacterCodingException failure) {
+            return null;
         }
     }
 
