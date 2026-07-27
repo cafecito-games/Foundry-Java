@@ -733,6 +733,89 @@ class FoundryJavaPluginTest {
     }
 
     @Test
+    void mergedManifestStartupOverrideFailsWithEveryCriticalAttribute() throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("startup-override-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project = androidProject("startup-override", binding, List.of("x86_64"));
+        writeBootstrapStubs(project);
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        .replace(
+                                "    id 'games.cafecito.foundry.java'\n",
+                                "")
+                        .replace(
+                                "android {\n",
+                                """
+                                abstract class CorruptStartupManifest extends DefaultTask {
+                                    @org.gradle.api.tasks.InputFile
+                                    @org.gradle.api.tasks.PathSensitive(
+                                        org.gradle.api.tasks.PathSensitivity.NONE)
+                                    abstract org.gradle.api.file.RegularFileProperty getInputManifest()
+
+                                    @org.gradle.api.tasks.OutputFile
+                                    abstract org.gradle.api.file.RegularFileProperty getOutputManifest()
+
+                                    @org.gradle.api.tasks.TaskAction
+                                    void corrupt() {
+                                        def source = inputManifest.get().asFile.text
+                                        def changed = source
+                                            .replace(
+                                                'android:authorities="games.cafecito.test.custom.foundry-java-startup"',
+                                                'android:authorities="games.cafecito.test.custom.foundry-java-startup;extra.authority"')
+                                            .replace(
+                                                'android:exported="false"',
+                                                'android:exported="true"')
+                                            .replace(
+                                                'android:initOrder="100"',
+                                                'android:enabled="false" android:initOrder="99" android:process=":wrong"')
+                                        if (changed == source) {
+                                            throw new GradleException(
+                                                'Expected generated startup provider in merged manifest')
+                                        }
+                                        def output = outputManifest.get().asFile
+                                        output.parentFile.mkdirs()
+                                        output.text = changed
+                                    }
+                                }
+                                androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                                    def task = tasks.register(
+                                        "corrupt${variant.name.capitalize()}StartupManifest",
+                                        CorruptStartupManifest)
+                                    variant.artifacts
+                                        .use(task)
+                                        .wiredWithFiles(
+                                            { it.inputManifest },
+                                            { it.outputManifest })
+                                        .toTransform(
+                                            com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST.INSTANCE)
+                                }
+                                apply plugin: 'games.cafecito.foundry.java'
+                                android {
+                                """));
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("Foundry-Java variant debug"));
+        assertTrue(
+                failure.getOutput()
+                        .contains(
+                                "games.cafecito.foundry.generated."
+                                        + "FoundryGeneratedStartupProvider"));
+        assertTrue(failure.getOutput().contains("authority expected=games.cafecito.test.custom"));
+        assertTrue(failure.getOutput().contains("actual=games.cafecito.test.custom"));
+        assertTrue(failure.getOutput().contains("extra.authority"));
+        assertTrue(failure.getOutput().contains("exported expected=false, actual=true"));
+        assertTrue(failure.getOutput().contains("process expected=<empty>, actual=:wrong"));
+        assertTrue(failure.getOutput().contains("initOrder expected=100, actual=99"));
+        assertTrue(failure.getOutput().contains("enabled expected=not false, actual=false"));
+    }
+
+    @Test
     void agp891DownstreamUsesPublicVariantsAndPackagesTheValidatedPayload() throws Exception {
         Path host =
                 aar(

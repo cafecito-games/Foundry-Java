@@ -77,15 +77,14 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
                 factory.newDocumentBuilder().parse(manifest.toFile()).getElementsByTagName("provider");
         String expectedProvider = getExpectedProviderClass().get();
         String expectedAuthority = getExpectedAuthority().get();
-        int expectedCount = 0;
+        List<Element> expectedProviders = new ArrayList<>();
         List<String> conflicts = new ArrayList<>();
         for (int index = 0; index < providers.getLength(); index++) {
             Element provider = (Element) providers.item(index);
             String providerClass = provider.getAttributeNS(ANDROID_NAMESPACE, "name");
             String authorities = provider.getAttributeNS(ANDROID_NAMESPACE, "authorities");
-            if (providerClass.equals(expectedProvider)
-                    && authorityContains(authorities, expectedAuthority)) {
-                expectedCount++;
+            if (providerClass.equals(expectedProvider)) {
+                expectedProviders.add(provider);
             } else if (authorityContains(authorities, expectedAuthority)) {
                 conflicts.add(providerClass);
             }
@@ -103,7 +102,7 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
                             + expectedProvider
                             + ".");
         }
-        if (expectedCount != 1) {
+        if (expectedProviders.size() != 1) {
             throw new GradleException(
                     "Foundry-Java variant "
                             + getVariantName().get()
@@ -112,9 +111,50 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
                             + " with startup authority "
                             + expectedAuthority
                             + "; found "
-                            + expectedCount
+                            + expectedProviders.size()
                             + ".");
         }
+        verifyExpectedProvider(expectedProviders.get(0), expectedProvider, expectedAuthority);
+    }
+
+    private void verifyExpectedProvider(
+            Element provider, String expectedProvider, String expectedAuthority) {
+        List<String> violations = new ArrayList<>();
+        String authority = provider.getAttributeNS(ANDROID_NAMESPACE, "authorities").trim();
+        if (!authority.equals(expectedAuthority)) {
+            violations.add(
+                    "authority expected=" + expectedAuthority + ", actual=" + display(authority));
+        }
+        String exported = provider.getAttributeNS(ANDROID_NAMESPACE, "exported").trim();
+        if (!exported.equals("false")) {
+            violations.add("exported expected=false, actual=" + display(exported));
+        }
+        String process = provider.getAttributeNS(ANDROID_NAMESPACE, "process").trim();
+        if (!process.isEmpty()) {
+            violations.add("process expected=<empty>, actual=" + process);
+        }
+        String initOrder = provider.getAttributeNS(ANDROID_NAMESPACE, "initOrder").trim();
+        if (!initOrder.equals("100")) {
+            violations.add("initOrder expected=100, actual=" + display(initOrder));
+        }
+        String enabled = provider.getAttributeNS(ANDROID_NAMESPACE, "enabled").trim();
+        if (enabled.equalsIgnoreCase("false")) {
+            violations.add("enabled expected=not false, actual=" + enabled);
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    "Foundry-Java variant "
+                            + getVariantName().get()
+                            + " provider "
+                            + expectedProvider
+                            + " violates the final startup contract: "
+                            + String.join("; ", violations)
+                            + ".");
+        }
+    }
+
+    private static String display(String value) {
+        return value.isEmpty() ? "<empty>" : value;
     }
 
     private static boolean authorityContains(String authorities, String expected) {
