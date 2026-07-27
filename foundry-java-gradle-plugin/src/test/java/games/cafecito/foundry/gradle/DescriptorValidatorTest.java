@@ -4,7 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -17,6 +20,7 @@ class DescriptorValidatorTest {
     private static final String OTHER_API_SHA =
             "15e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
     private static final Set<String> ALL_ABIS = Set.of("armeabi-v7a", "arm64-v8a", "x86", "x86_64");
+    private static final String PROCESSOR_DESCRIPTOR_GOLDEN = "foundry.processor.descriptor.golden";
 
     @Test
     void parsesStrictFormatTwoAndPreservesRepeatableEntries() {
@@ -47,6 +51,27 @@ class DescriptorValidatorTest {
         assertThrows(
                 UnsupportedOperationException.class,
                 () -> descriptor.entries().add(new FoundryDescriptor.Entry("method", "bad")));
+    }
+
+    @Test
+    void productionParserAcceptsExactProcessorDescriptorGolden() throws IOException {
+        String configuredGolden = System.getProperty(PROCESSOR_DESCRIPTOR_GOLDEN);
+        assertTrue(
+                configuredGolden != null && !configuredGolden.isBlank(),
+                () -> "Missing test input property " + PROCESSOR_DESCRIPTOR_GOLDEN);
+        Path golden = Path.of(configuredGolden);
+        String contents = Files.readString(golden, StandardCharsets.UTF_8);
+
+        FoundryDescriptor descriptor =
+                DescriptorValidator.parse("foundry-java-processor", golden.toString(), contents);
+
+        assertEquals(2, descriptor.format());
+        assertEquals("1", descriptor.runtimeContractVersion());
+        assertEquals(
+                contents.lines().skip(7).toList(),
+                descriptor.entries().stream()
+                        .map(entry -> entry.kind() + "=" + entry.value())
+                        .toList());
     }
 
     @Test
