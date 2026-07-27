@@ -38,21 +38,21 @@ public final class FoundryJavaStartupEvidence {
     public static void recordProviderPrimed() {
         synchronized (LOCK) {
             providerRegistrationCount++;
-            EVENTS.add("provider_primed");
+            EVENTS.add("provider_on_create");
         }
     }
 
     public static void recordApplicationCreated() {
         synchronized (LOCK) {
             applicationOnCreateCount++;
-            EVENTS.add("application_created");
+            EVENTS.add("application_on_create");
         }
     }
 
     public static void recordActivityCreated() {
         synchronized (LOCK) {
             activityOnCreateCount++;
-            EVENTS.add("activity_created");
+            EVENTS.add("activity_on_create");
         }
     }
 
@@ -87,21 +87,18 @@ public final class FoundryJavaStartupEvidence {
             callbackDispatchCount++;
             callbackResult = result;
             callbackThread = Thread.currentThread().getName();
-            EVENTS.add("callback_dispatched");
         }
     }
 
     public static void recordExceptionDispatch() {
         synchronized (LOCK) {
             exceptionDispatchCount++;
-            EVENTS.add("exception_contained");
         }
     }
 
     public static void recordInvalidation() {
         synchronized (LOCK) {
             invalidationCount++;
-            EVENTS.add("lease_invalidated");
         }
     }
 
@@ -111,19 +108,30 @@ public final class FoundryJavaStartupEvidence {
 
     public static boolean providerBeforeApplication() {
         synchronized (LOCK) {
-            return eventBefore("provider_primed", "application_created");
+            return eventBefore("provider_on_create", "application_on_create");
         }
     }
 
     public static boolean providerBeforeActivity() {
         synchronized (LOCK) {
-            return eventBefore("provider_primed", "activity_created");
+            return eventBefore("provider_on_create", "activity_on_create");
         }
     }
 
     public static List<String> eventsForTesting() {
         synchronized (LOCK) {
             return List.copyOf(EVENTS);
+        }
+    }
+
+    static List<String> mergeLifecycleEvents(List<String> lifecycleEvents) {
+        List<String> checkedLifecycleEvents = List.copyOf(lifecycleEvents);
+        synchronized (LOCK) {
+            ArrayList<String> merged =
+                    new ArrayList<>(EVENTS.size() + checkedLifecycleEvents.size());
+            merged.addAll(EVENTS);
+            merged.addAll(checkedLifecycleEvents);
+            return List.copyOf(merged);
         }
     }
 
@@ -198,7 +206,9 @@ public final class FoundryJavaStartupEvidence {
             report.put("registration_counts", lifecycle.getJSONObject("registration_counts"));
             report.put("teardown_order", teardownOrder);
             report.put("unregistration_counts", lifecycle.getJSONObject("unregistration_counts"));
-            report.put("events", new JSONArray(EVENTS));
+            report.put(
+                    "events",
+                    new JSONArray(mergeLifecycleEvents(strings(lifecycle.getJSONArray("events")))));
             report.put("result", failure == null ? "pass" : "fail");
             report.put("failure", failure == null ? JSONObject.NULL : failureDescription(failure));
 
@@ -245,6 +255,14 @@ public final class FoundryJavaStartupEvidence {
         int firstIndex = EVENTS.indexOf(first);
         int secondIndex = EVENTS.indexOf(second);
         return firstIndex >= 0 && secondIndex > firstIndex;
+    }
+
+    private static List<String> strings(JSONArray values) throws JSONException {
+        ArrayList<String> strings = new ArrayList<>(values.length());
+        for (int index = 0; index < values.length(); index++) {
+            strings.add(values.getString(index));
+        }
+        return List.copyOf(strings);
     }
 
     private static JSONObject copy(JSONObject value) {

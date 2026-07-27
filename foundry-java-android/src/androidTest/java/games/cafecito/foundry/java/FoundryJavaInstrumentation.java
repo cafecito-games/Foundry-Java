@@ -17,6 +17,27 @@ import org.json.JSONObject;
 public final class FoundryJavaInstrumentation extends Instrumentation {
     private static final String TARGET_PACKAGE = "games.cafecito.foundry.android.test";
     private static final String PROVIDER_AUTHORITY = TARGET_PACKAGE + ".foundry-java-startup";
+    private static final List<String> NATIVE_EVENTS =
+            List.of(
+                    "foundry_extension_entry",
+                    "core_initialize",
+                    "scene_initialize",
+                    "callback_dispatch",
+                    "scene_deinitialize",
+                    "core_deinitialize",
+                    "context_invalidate");
+    private static final List<String> REQUIRED_EVENTS =
+            List.of(
+                    "provider_on_create",
+                    "application_on_create",
+                    "activity_on_create",
+                    "foundry_extension_entry",
+                    "core_initialize",
+                    "scene_initialize",
+                    "callback_dispatch",
+                    "scene_deinitialize",
+                    "core_deinitialize",
+                    "context_invalidate");
     private Bundle arguments;
 
     @Override
@@ -125,17 +146,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
 
     private static int parseRunIndex(Bundle arguments) {
         String encoded = arguments == null ? null : arguments.getString("foundry_run_index");
-        if (encoded == null || encoded.isBlank()) {
-            return 1;
-        }
-        try {
-            int parsed = Integer.parseInt(encoded);
-            require(parsed > 0, "foundry_run_index must be positive");
-            return parsed;
-        } catch (NumberFormatException failure) {
-            throw new IllegalArgumentException(
-                    "foundry_run_index must be a positive integer", failure);
-        }
+        return FoundryJavaTestHost.requireRunIndex(encoded);
     }
 
     private static void validateLifecycle(JSONObject lifecycle, int runIndex) throws JSONException {
@@ -184,6 +195,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
         require(
                 !lifecycle.getBoolean("entry_active_after_teardown"),
                 "native entry remained active after teardown");
+        requireArray(lifecycle.getJSONArray("events"), NATIVE_EVENTS, "native lifecycle events");
     }
 
     private static void validateReport(JSONObject report) throws JSONException {
@@ -232,16 +244,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
                 "provider descriptor was not evaluated exactly once");
         require(report.isNull("failure"), "passing evidence contained a failure");
         require("pass".equals(report.getString("result")), "evidence result was not pass");
-        requireArray(
-                report.getJSONArray("events"),
-                List.of(
-                        "provider_primed",
-                        "application_created",
-                        "activity_created",
-                        "callback_dispatched",
-                        "exception_contained",
-                        "lease_invalidated"),
-                "startup events");
+        requireArray(report.getJSONArray("events"), REQUIRED_EVENTS, "startup events");
     }
 
     private static void requireExactCounts(JSONObject counts, String label) throws JSONException {
@@ -282,6 +285,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
             lifecycle.put("live_instances_after_teardown", -1);
             lifecycle.put("live_handles_after_teardown", -1);
             lifecycle.put("entry_active_after_teardown", false);
+            lifecycle.put("events", new JSONArray());
             return lifecycle;
         } catch (JSONException failure) {
             throw new AssertionError("Could not construct fallback evidence.", failure);

@@ -27,6 +27,22 @@ public final class FoundryJavaTestHost {
         return evidence;
     }
 
+    static int requireRunIndex(String encoded) {
+        if (encoded == null || encoded.isBlank()) {
+            throw new IllegalArgumentException("foundry_run_index is required.");
+        }
+        try {
+            int parsed = Integer.parseInt(encoded);
+            if (parsed <= 0) {
+                throw new IllegalArgumentException("foundry_run_index must be positive.");
+            }
+            return parsed;
+        } catch (NumberFormatException failure) {
+            throw new IllegalArgumentException(
+                    "foundry_run_index must be a positive integer.", failure);
+        }
+    }
+
     public static void requirePrimedPreEntry(JSONObject evidence) {
         try {
             require(evidence.getBoolean("bridge_ready"), "bridge was not ready before entry");

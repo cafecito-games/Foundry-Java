@@ -13,6 +13,7 @@ import games.cafecito.foundry.runtime.FoundryMemberDescriptor;
 import games.cafecito.foundry.runtime.FoundryModuleDescriptor;
 import games.cafecito.foundry.runtime.FoundryPropertyDetails;
 import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -104,13 +105,88 @@ class FoundryJavaTestRegistryTest {
         invokeStatic(evidence, "recordActivityCreated");
 
         Object events = evidence.getMethod("eventsForTesting").invoke(null);
-        assertEquals(List.of("provider_primed", "application_created", "activity_created"), events);
+        assertEquals(
+                List.of("provider_on_create", "application_on_create", "activity_on_create"),
+                events);
         assertTrue((Boolean) evidence.getMethod("providerBeforeApplication").invoke(null));
         assertTrue((Boolean) evidence.getMethod("providerBeforeActivity").invoke(null));
     }
 
+    @Test
+    void reportEventsMergeStartupAndNativeLifecycleInContractOrder() throws Exception {
+        Class<?> evidence = requireFixture("FoundryJavaStartupEvidence");
+        invokeStatic(evidence, "resetForTesting");
+        invokeStatic(evidence, "recordProviderPrimed");
+        invokeStatic(evidence, "recordApplicationCreated");
+        invokeStatic(evidence, "recordActivityCreated");
+        evidence.getMethod("recordCallbackDispatch", long.class).invoke(null, 42L);
+        invokeStatic(evidence, "recordExceptionDispatch");
+        invokeStatic(evidence, "recordInvalidation");
+        Method merge = requireFixtureMethod(evidence, "mergeLifecycleEvents", List.class);
+
+        Object events =
+                merge.invoke(
+                        null,
+                        List.of(
+                                "foundry_extension_entry",
+                                "core_initialize",
+                                "scene_initialize",
+                                "callback_dispatch",
+                                "scene_deinitialize",
+                                "core_deinitialize",
+                                "context_invalidate"));
+
+        assertEquals(
+                List.of(
+                        "provider_on_create",
+                        "application_on_create",
+                        "activity_on_create",
+                        "foundry_extension_entry",
+                        "core_initialize",
+                        "scene_initialize",
+                        "callback_dispatch",
+                        "scene_deinitialize",
+                        "core_deinitialize",
+                        "context_invalidate"),
+                events);
+    }
+
+    @Test
+    void runIndexMustBePresentNonblankAndPositive() throws Exception {
+        Class<?> host = requireFixture("FoundryJavaTestHost");
+        Method parser = requireFixtureMethod(host, "requireRunIndex", String.class);
+
+        assertEquals(7, parser.invoke(null, "7"));
+        assertIllegalRunIndex(parser, null);
+        assertIllegalRunIndex(parser, "");
+        assertIllegalRunIndex(parser, " ");
+        assertIllegalRunIndex(parser, "0");
+        assertIllegalRunIndex(parser, "-1");
+        assertIllegalRunIndex(parser, "not-a-number");
+    }
+
+    private static void assertIllegalRunIndex(Method parser, String encoded) {
+        InvocationTargetException failure =
+                assertThrows(
+                        InvocationTargetException.class,
+                        () -> parser.invoke(null, new Object[] {encoded}));
+        assertTrue(failure.getCause() instanceof IllegalArgumentException);
+    }
+
     private static void invokeStatic(Class<?> type, String name) throws Exception {
         type.getMethod(name).invoke(null);
+    }
+
+    private static Method requireFixtureMethod(
+            Class<?> type, String name, Class<?>... parameterTypes) {
+        try {
+            Method method = type.getDeclaredMethod(name, parameterTypes);
+            method.setAccessible(true);
+            return method;
+        } catch (NoSuchMethodException failure) {
+            fail("Missing debug fixture method " + type.getSimpleName() + "." + name, failure);
+            throw new AssertionError("unreachable");
+        }
     }
 
     private static Class<?> requireFixture(String simpleName) {
