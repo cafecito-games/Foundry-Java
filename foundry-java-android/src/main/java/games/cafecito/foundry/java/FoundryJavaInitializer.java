@@ -196,10 +196,7 @@ public final class FoundryJavaInitializer {
     }
 
     private static FoundryEngine createProductionEngine(long contextHandle) {
-        throw new IllegalStateException(
-                "Foundry native engine transport is unavailable for context "
-                        + contextHandle
-                        + ".");
+        return new FoundryNativeEngine(contextHandle);
     }
 
     static IllegalStateException providerFailure(String message, Throwable cause) {

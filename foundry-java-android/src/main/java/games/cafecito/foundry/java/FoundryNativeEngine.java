@@ -1,5 +1,6 @@
 package games.cafecito.foundry.java;
 
+import games.cafecito.foundry.generated.GeneratedNativeDispatch;
 import games.cafecito.foundry.runtime.FoundryCallError;
 import games.cafecito.foundry.runtime.FoundryCallable;
 import games.cafecito.foundry.runtime.FoundryClassDescriptor;
@@ -39,6 +40,10 @@ public final class FoundryNativeEngine implements FoundryEngine {
     private final long contextHandle;
     private final Function<String, FoundryNativeDispatch> dispatchLookup;
     private final NativeGateway gateway;
+
+    public FoundryNativeEngine(long contextHandle) {
+        this(contextHandle, GeneratedNativeDispatch::require, new JniNativeGateway());
+    }
 
     FoundryNativeEngine(
             long contextHandle,

@@ -2,6 +2,7 @@ package games.cafecito.foundry.java;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -99,6 +100,16 @@ class FoundryJavaInitializerTest {
         assertEquals(1, constructions.get());
         assertTrue(primedCallbacks.get().initialize(91, 0));
         assertEquals(1, constructions.get());
+    }
+
+    @Test
+    void productionFactoryCreatesTheGeneratedDispatchEngine() throws Exception {
+        var factory =
+                FoundryJavaInitializer.class.getDeclaredMethod(
+                        "createProductionEngine", long.class);
+        factory.setAccessible(true);
+
+        assertInstanceOf(FoundryNativeEngine.class, factory.invoke(null, 91L));
     }
 
     @Test

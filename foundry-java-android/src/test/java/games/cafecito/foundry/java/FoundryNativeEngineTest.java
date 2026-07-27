@@ -99,6 +99,18 @@ class FoundryNativeEngineTest {
     }
 
     @Test
+    void productionConstructorUsesGeneratedLookupBeforeJni() {
+        FoundryNativeEngine engine = new FoundryNativeEngine(11);
+
+        IllegalArgumentException unknown =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> engine.call(11, 0, "missing/generated/identity", List.of()));
+
+        assertTrue(unknown.getMessage().contains("Unknown Foundry native dispatch identity"));
+    }
+
+    @Test
     void rejectsUnknownIdentityBadArityAndWrongTypesBeforeGateway() {
         RecordingGateway gateway = new RecordingGateway();
         FoundryNativeEngine unknown =
