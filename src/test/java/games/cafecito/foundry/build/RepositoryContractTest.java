@@ -260,6 +260,13 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("foundry-java-gradle-plugin"));
         assertTrue(rootBuild.contains("foundry-java-runtime"));
         assertTrue(rootBuild.contains("org.jetbrains.kotlin|kotlin-stdlib|2.0.21"));
+        assertTrue(
+                rootBuild.contains(
+                        "runtime|org.jetbrains.kotlinx|kotlinx-coroutines-core-jvm|1.9.0"));
+        assertTrue(rootBuild.contains("org.jetbrains.kotlinx|kotlinx-coroutines-core|1.9.0"));
+        assertFalse(
+                rootBuild.contains(
+                        "compile|org.jetbrains.kotlinx|kotlinx-coroutines-core-jvm|1.9.0"));
         assertTrue(rootBuild.contains("check(poms.size == 10)"));
         assertTrue(rootBuild.contains("check(modules.size == 9)"));
         assertTrue(rootBuild.contains("check(jarCount == 8 && aarCount == 1)"));

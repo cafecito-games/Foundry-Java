@@ -62,6 +62,14 @@ fun stableBoundaryFileSignature(dependency: FileCollectionDependency): String {
         displayName == "file collection" &&
             buildTaskPaths == listOf(":foundry-java-gradle-plugin:pluginUnderTestMetadata") ->
             "project-files(:foundry-java-gradle-plugin:pluginUnderTestMetadata)"
+        displayName == "file collection" &&
+            buildTaskPaths ==
+            listOf(
+                ":foundry-java-kotlin:classes",
+                ":foundry-java-kotlin:compileJava",
+                ":foundry-java-kotlin:compileKotlin",
+            ) ->
+            "project-files(:foundry-java-kotlin:main-output)"
         else ->
             error(
                 "Unsupported file collection dependency: " +
@@ -708,9 +716,21 @@ val requiredBoundaryDependencies =
         ":foundry-java-kotlin" to
             listOf(
                 "api=project(:foundry-java-runtime)",
+                "implementation=org.jetbrains.kotlinx:kotlinx-coroutines-core",
+                "javaOnlyConsumerClasspath=project(:foundry-java-runtime)",
                 "kotlinBuildToolsApiClasspath=org.jetbrains.kotlin:kotlin-build-tools-impl",
+                "kotlinCompilerPluginClasspathKotlinOverJavaConsumer=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
                 "kotlinCompilerPluginClasspathMain=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
+                "kotlinCompilerPluginClasspathMixedConsumer=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
                 "kotlinCompilerPluginClasspathTest=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
+                "kotlinOverJavaConsumerImplementation=org.jetbrains.kotlinx:kotlinx-coroutines-core",
+                "kotlinOverJavaConsumerImplementation=project(:foundry-java-runtime)",
+                "kotlinOverJavaConsumerImplementation=project-files(:foundry-java-kotlin:main-output)",
+                "mixedConsumerImplementation=org.jetbrains.kotlinx:kotlinx-coroutines-core",
+                "mixedConsumerImplementation=project(:foundry-java-runtime)",
+                "mixedConsumerImplementation=project-files(:foundry-java-kotlin:main-output)",
+                "testImplementation=org.jetbrains.kotlin:kotlin-test",
+                "testImplementation=org.jetbrains.kotlinx:kotlinx-coroutines-test",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
                 "testRuntimeOnly=org.junit.jupiter:junit-jupiter-engine",
@@ -825,6 +845,7 @@ val requiredPomDependencies =
             listOf(
                 "compile|$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
                 "compile|org.jetbrains.kotlin|kotlin-stdlib|2.0.21",
+                "runtime|org.jetbrains.kotlinx|kotlinx-coroutines-core-jvm|1.9.0",
             ).sorted()
                 .joinToString(";"),
         processorPublicationDirectory to
@@ -858,6 +879,7 @@ val requiredModuleDependencies =
             listOf(
                 "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
                 "org.jetbrains.kotlin|kotlin-stdlib|2.0.21",
+                "org.jetbrains.kotlinx|kotlinx-coroutines-core|1.9.0",
             ).sorted()
                 .joinToString(";"),
         processorPublicationDirectory to
