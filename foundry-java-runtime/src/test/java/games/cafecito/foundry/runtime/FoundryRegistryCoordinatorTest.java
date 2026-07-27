@@ -100,6 +100,47 @@ class FoundryRegistryCoordinatorTest {
     }
 
     @Test
+    void wholeRenamedCatalogIsPublishedBeforeForwardAndCyclicRegistrations() {
+        RecordingEngine engine = new RecordingEngine();
+        AtomicReference<FoundryBindingContext> contextReference = new AtomicReference<>();
+        FoundryClassDescriptor alpha =
+                typeWithMemberType(
+                        "example.Alpha", "RenamedAlpha", "example.Zeta");
+        FoundryClassDescriptor zeta =
+                typeWithMemberType(
+                        "example.Zeta", "RenamedZeta", "example.Alpha");
+        engine.registerReentry =
+                () -> {
+                    FoundryBindingContext context = contextReference.get();
+                    assertEquals(
+                            "RenamedAlpha",
+                            context.foundryTypeForJavaName("example.Alpha"));
+                    assertEquals(
+                            "RenamedZeta",
+                            context.foundryTypeForJavaName("example.Zeta"));
+                };
+        FoundryRegistryCoordinator coordinator =
+                new FoundryRegistryCoordinator(
+                        bootstrap(provider("demo", alpha, zeta)),
+                        context -> {
+                            engine.contextHandle = context;
+                            return engine;
+                        },
+                        (handle, activeEngine) -> {
+                            FoundryBindingContext context =
+                                    new FoundryBindingContext(handle, activeEngine);
+                            contextReference.set(context);
+                            return context;
+                        },
+                        ignored -> {});
+
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+
+        assertEquals(List.of("register:RenamedAlpha", "register:RenamedZeta"), engine.events);
+        coordinator.invalidate(41);
+    }
+
+    @Test
     void coreRegistrationMaySynchronouslyInvokeAnAdmittedCallback() {
         RecordingEngine engine = new RecordingEngine();
         AtomicReference<FoundryRegistryCoordinator> coordinatorReference = new AtomicReference<>();
@@ -729,6 +770,21 @@ class FoundryRegistryCoordinatorTest {
                     public void setProperty(Object target, String name, Object value) {}
                 },
                 List.of());
+    }
+
+    private static FoundryClassDescriptor typeWithMemberType(
+            String javaName, String foundryName, String peerJavaName) {
+        FoundryClassDescriptor descriptor = type(javaName, foundryName, "CORE");
+        return new FoundryClassDescriptor(
+                descriptor.javaName(),
+                descriptor.foundryName(),
+                descriptor.baseName(),
+                descriptor.initializationLevel(),
+                descriptor.after(),
+                descriptor.access(),
+                List.of(
+                        new FoundryMemberDescriptor(
+                                "method", "peer", "peer", peerJavaName + "()")));
     }
 
     private static void await(CountDownLatch latch) {

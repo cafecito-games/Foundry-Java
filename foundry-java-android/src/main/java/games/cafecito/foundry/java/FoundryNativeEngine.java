@@ -1,12 +1,16 @@
 package games.cafecito.foundry.java;
 
 import games.cafecito.foundry.generated.GeneratedNativeDispatch;
+import games.cafecito.foundry.generated.GeneratedRegistration;
 import games.cafecito.foundry.runtime.FoundryBindingContext;
 import games.cafecito.foundry.runtime.FoundryBindingContextAware;
 import games.cafecito.foundry.runtime.FoundryCallError;
 import games.cafecito.foundry.runtime.FoundryCallable;
 import games.cafecito.foundry.runtime.FoundryClassDescriptor;
 import games.cafecito.foundry.runtime.FoundryEngine;
+import games.cafecito.foundry.runtime.FoundryExtensionAccess;
+import games.cafecito.foundry.runtime.FoundryMemberDescriptor;
+import games.cafecito.foundry.runtime.FoundryMemberDetails;
 import games.cafecito.foundry.runtime.FoundryNativeDispatch;
 import games.cafecito.foundry.runtime.FoundryObject;
 import games.cafecito.foundry.runtime.FoundrySignal;
@@ -59,6 +63,7 @@ import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 /** Production FoundryEngine facade over the versioned JNI transport. */
@@ -73,6 +78,8 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
             "builtin_classes/Signal/methods/emit#3286317445";
     private static final ConcurrentHashMap<Long, WeakReference<FoundryNativeEngine>> ENGINES =
             new ConcurrentHashMap<>();
+    private static final ThreadLocal<FoundryNativeEngine> ACTIVE_REGISTRATION_ENGINE =
+            new ThreadLocal<>();
     private static final AtomicLong NEXT_LOCAL_CALLABLE_ID = new AtomicLong();
     private static final Map<FoundryCallable, Long> LOCAL_CALLABLE_IDS =
             Collections.synchronizedMap(new WeakHashMap<>());
@@ -80,25 +87,40 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
     private final long contextHandle;
     private final Function<String, FoundryNativeDispatch> dispatchLookup;
     private final NativeGateway gateway;
+    private final Consumer<FoundryBindingContext> generatedRegistration;
     private final ThreadLocal<FoundrySignal> allowedClosedSignal = new ThreadLocal<>();
     private final ThreadLocal<FoundryCallable> allowedClosedCallable = new ThreadLocal<>();
     private volatile WeakReference<FoundryBindingContext> bindingContext =
             new WeakReference<>(null);
 
     public FoundryNativeEngine(long contextHandle) {
-        this(contextHandle, GeneratedNativeDispatch::require, new JniNativeGateway());
+        this(
+                contextHandle,
+                GeneratedNativeDispatch::require,
+                new JniNativeGateway(),
+                GeneratedRegistration::registerAll);
     }
 
     FoundryNativeEngine(
             long contextHandle,
             Function<String, FoundryNativeDispatch> dispatchLookup,
             NativeGateway gateway) {
+        this(contextHandle, dispatchLookup, gateway, GeneratedRegistration::registerAll);
+    }
+
+    FoundryNativeEngine(
+            long contextHandle,
+            Function<String, FoundryNativeDispatch> dispatchLookup,
+            NativeGateway gateway,
+            Consumer<FoundryBindingContext> generatedRegistration) {
         if (contextHandle == 0) {
             throw new IllegalArgumentException("Foundry context handle must be nonzero.");
         }
         this.contextHandle = contextHandle;
         this.dispatchLookup = Objects.requireNonNull(dispatchLookup, "dispatchLookup");
         this.gateway = Objects.requireNonNull(gateway, "gateway");
+        this.generatedRegistration =
+                Objects.requireNonNull(generatedRegistration, "generatedRegistration");
         ENGINES.compute(
                 contextHandle,
                 (ignored, existingReference) -> {
@@ -131,6 +153,7 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
             throw new IllegalStateException(
                     "Foundry context " + contextHandle + " already has a live binding context.");
         }
+        generatedRegistration.accept(checked);
         bindingContext = new WeakReference<>(checked);
     }
 
@@ -138,13 +161,25 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
     public void registerExtensionClass(
             long requestedContextHandle, FoundryClassDescriptor descriptor) {
         requireContext(requestedContextHandle);
-        gateway.registerExtensionClass(contextHandle, descriptor);
+        FoundryClassDescriptor checked = Objects.requireNonNull(descriptor, "descriptor");
+        FoundryNativeEngine outerEngine = ACTIVE_REGISTRATION_ENGINE.get();
+        ACTIVE_REGISTRATION_ENGINE.set(this);
+        try {
+            gateway.registerExtensionClass(contextHandle, checked);
+        } finally {
+            if (outerEngine == null) {
+                ACTIVE_REGISTRATION_ENGINE.remove();
+            } else {
+                ACTIVE_REGISTRATION_ENGINE.set(outerEngine);
+            }
+        }
     }
 
     @Override
     public void unregisterExtensionClass(long requestedContextHandle, String foundryName) {
         requireContext(requestedContextHandle);
-        gateway.unregisterExtensionClass(contextHandle, foundryName);
+        String checkedName = requireText(foundryName, "foundryName");
+        gateway.unregisterExtensionClass(contextHandle, checkedName);
     }
 
     @Override
@@ -1207,6 +1242,209 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
         return Objects.requireNonNull(dispatch, "dispatch")
                 .argumentNativeTypes()
                 .toArray(String[]::new);
+    }
+
+    private static FoundryMemberDescriptor[] nativeRegistrationMembersV1(
+            FoundryClassDescriptor descriptor) {
+        return Objects.requireNonNull(descriptor, "descriptor")
+                .members()
+                .toArray(FoundryMemberDescriptor[]::new);
+    }
+
+    private static FoundryExtensionAccess nativeRegistrationAccessV1(
+            FoundryClassDescriptor descriptor) {
+        return Objects.requireNonNull(descriptor, "descriptor").access();
+    }
+
+    private static FoundryMemberDetails nativeRegistrationDetailsV1(
+            FoundryMemberDescriptor descriptor) {
+        return Objects.requireNonNull(descriptor, "descriptor").details();
+    }
+
+    private static String nativeRegistrationFoundryTypeV1(String javaName) {
+        if (javaName == null || javaName.isBlank()) {
+            return null;
+        }
+        FoundryNativeEngine engine = ACTIVE_REGISTRATION_ENGINE.get();
+        if (engine == null) {
+            return null;
+        }
+        FoundryBindingContext context = engine.bindingContext.get();
+        if (context == null || !context.isAlive()) {
+            return null;
+        }
+        return context.foundryTypeForJavaName(javaName);
+    }
+
+    private static Object nativeConstructExtensionV1(
+            long contextHandle, FoundryExtensionAccess access, long objectHandle) {
+        FoundryBindingContext context = requireLiveBindingContext(contextHandle);
+        FoundryExtensionAccess checkedAccess = Objects.requireNonNull(access, "access");
+        return context.bind(
+                objectHandle,
+                ObjectOwnership.BORROWED,
+                FoundryObject.class,
+                (activeContext, lease) -> {
+                    Object constructed =
+                            Objects.requireNonNull(
+                                    checkedAccess.construct(activeContext, lease),
+                                    "constructed extension");
+                    if (!(constructed instanceof FoundryObject foundryObject)) {
+                        throw new IllegalArgumentException(
+                                "Generated extension construction must return FoundryObject.");
+                    }
+                    return foundryObject;
+                });
+    }
+
+    private static Variant nativeInvokeExtensionV1(
+            long contextHandle,
+            FoundryExtensionAccess access,
+            Object target,
+            String javaName,
+            String[] argumentJavaTypes,
+            String returnJavaType,
+            Variant[] arguments) {
+        requireLiveBindingContext(contextHandle);
+        FoundryExtensionAccess checkedAccess = Objects.requireNonNull(access, "access");
+        Object checkedTarget = Objects.requireNonNull(target, "target");
+        String checkedName = requireText(javaName, "javaName");
+        String[] types = Objects.requireNonNull(argumentJavaTypes, "argumentJavaTypes").clone();
+        Variant[] values = Objects.requireNonNull(arguments, "arguments").clone();
+        if (types.length != values.length) {
+            throw new IllegalArgumentException(
+                    "Extension callback "
+                            + checkedName
+                            + " expected "
+                            + types.length
+                            + " arguments but received "
+                            + values.length
+                            + ".");
+        }
+        Object[] converted = new Object[types.length];
+        for (int index = 0; index < types.length; index++) {
+            converted[index] =
+                    registrationArgument(
+                            requireText(types[index], "argumentJavaTypes[" + index + "]"),
+                            Objects.requireNonNull(values[index], "arguments[" + index + "]"));
+        }
+        Object result = checkedAccess.invoke(checkedTarget, checkedName, converted);
+        return registrationResult(requireText(returnJavaType, "returnJavaType"), result);
+    }
+
+    private static Variant nativeGetExtensionPropertyV1(
+            long contextHandle,
+            FoundryExtensionAccess access,
+            Object target,
+            String javaName,
+            String javaType) {
+        requireLiveBindingContext(contextHandle);
+        Object result =
+                Objects.requireNonNull(access, "access")
+                        .getProperty(
+                                Objects.requireNonNull(target, "target"),
+                                requireText(javaName, "javaName"));
+        return registrationResult(requireText(javaType, "javaType"), result);
+    }
+
+    private static void nativeSetExtensionPropertyV1(
+            long contextHandle,
+            FoundryExtensionAccess access,
+            Object target,
+            String javaName,
+            String javaType,
+            Variant value) {
+        requireLiveBindingContext(contextHandle);
+        Objects.requireNonNull(access, "access")
+                .setProperty(
+                        Objects.requireNonNull(target, "target"),
+                        requireText(javaName, "javaName"),
+                        registrationArgument(
+                                requireText(javaType, "javaType"),
+                                Objects.requireNonNull(value, "value")));
+    }
+
+    private static String nativeExtensionToStringV1(Object target) {
+        return Objects.requireNonNull(
+                Objects.requireNonNull(target, "target").toString(), "extension string");
+    }
+
+    private static Object registrationArgument(String javaType, Variant value) {
+        return switch (javaType) {
+            case "boolean" -> value.asBoolean();
+            case "byte" -> (byte) registrationInteger(value, Byte.MIN_VALUE, Byte.MAX_VALUE, "byte");
+            case "short" ->
+                    (short) registrationInteger(value, Short.MIN_VALUE, Short.MAX_VALUE, "short");
+            case "int" ->
+                    (int)
+                            registrationInteger(
+                                    value, Integer.MIN_VALUE, Integer.MAX_VALUE, "int");
+            case "long" -> value.asLong();
+            case "char" ->
+                    (char)
+                            registrationInteger(
+                                    value, Character.MIN_VALUE, Character.MAX_VALUE, "char");
+            case "float" -> value.asFloat();
+            case "double" -> value.asDouble();
+            case "String", "java.lang.String" -> value.isNil() ? null : value.asString();
+            case "void" ->
+                    throw new IllegalArgumentException(
+                            "void is not a valid extension callback argument type.");
+            default -> value.isNil() ? null : value.value();
+        };
+    }
+
+    private static long registrationInteger(Variant value, long minimum, long maximum, String type) {
+        long numeric = value.asLong();
+        if (numeric < minimum || numeric > maximum) {
+            throw new IllegalArgumentException(
+                    "Extension callback integer "
+                            + numeric
+                            + " is outside Java "
+                            + type
+                            + " range.");
+        }
+        return numeric;
+    }
+
+    private static Variant registrationResult(String javaType, Object value) {
+        return switch (javaType) {
+            case "void" -> Variant.nil();
+            case "boolean" -> Variant.of(exactResult(value, Boolean.class, javaType));
+            case "byte" -> Variant.of(exactResult(value, Byte.class, javaType));
+            case "short" -> Variant.of(exactResult(value, Short.class, javaType));
+            case "int" -> Variant.of(exactResult(value, Integer.class, javaType));
+            case "long" -> Variant.of(exactResult(value, Long.class, javaType));
+            case "char" ->
+                    Variant.of(
+                            (long) exactResult(value, Character.class, javaType).charValue());
+            case "float" -> Variant.of(exactResult(value, Float.class, javaType));
+            case "double" -> Variant.of(exactResult(value, Double.class, javaType));
+            case "String", "java.lang.String" ->
+                    value == null ? Variant.nil() : Variant.of(exactResult(value, String.class, javaType));
+            default -> Variant.of(value);
+        };
+    }
+
+    private static <T> T exactResult(Object value, Class<T> expected, String javaType) {
+        if (!expected.isInstance(value)) {
+            throw new IllegalArgumentException(
+                    "Extension callback returned "
+                            + (value == null ? "null" : value.getClass().getName())
+                            + " for Java "
+                            + javaType
+                            + ".");
+        }
+        return expected.cast(value);
+    }
+
+    private static FoundryBindingContext requireLiveBindingContext(long contextHandle) {
+        FoundryNativeEngine engine = requireEngine(contextHandle);
+        FoundryBindingContext context = engine.bindingContext.get();
+        if (context == null || !context.isAlive()) {
+            throw new IllegalStateException("native_object_binding_context_unavailable");
+        }
+        return context;
     }
 
     private static long localCallableId(FoundryCallable callable) {
