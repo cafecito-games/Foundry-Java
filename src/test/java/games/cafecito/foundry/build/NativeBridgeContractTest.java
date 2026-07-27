@@ -508,6 +508,10 @@ class NativeBridgeContractTest {
         String cmake = read("foundry-java-android/src/main/cpp/CMakeLists.txt");
         String normalizedCmake = cmake.replaceAll("\\s+", " ");
         String androidBuild = read("foundry-java-android/build.gradle.kts");
+        String activitySource =
+                read(
+                        "foundry-java-android/src/debug/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaTestActivity.java");
         String fixtureSources =
                 readTree("foundry-java-android/src/androidTest")
                         + readTree("foundry-java-android/src/debug");
@@ -518,6 +522,20 @@ class NativeBridgeContractTest {
         assertTrue(normalizedCmake.contains("add_library( foundry_java_test_host SHARED"));
         assertTrue(androidBuild.contains("-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=ON"));
         assertTrue(fixtureSources.contains("System.loadLibrary(\"foundry_java_test_host\")"));
+        assertTrue(fixtureSources.contains("JNI_OnLoad(JavaVM *java_vm, void *)"));
+        assertTrue(fixtureSources.contains("FOUNDRY_EXTENSION_INITIALIZATION_SERVERS"));
+        assertTrue(
+                fixtureSources.contains(
+                        "List.of(\"CORE\", \"CORE\", \"SERVERS\", \"SERVERS\", \"SCENE\","
+                                + " \"SCENE\")"));
+        assertTrue(
+                fixtureSources.contains(
+                        "List.of(\"SCENE\", \"SCENE\", \"SERVERS\", \"SERVERS\", \"CORE\","
+                                + " \"CORE\")"));
+        assertTrue(
+                activitySource.contains(
+                        "FoundryJavaStartupEvidence.recordActivityPreEntry(preEntry);\n"
+                                + "        finish();"));
         assertFalse(fixtureSources.contains("FoundryJavaInitializer.initialize("));
         assertFalse(fixtureSources.contains("FoundryJavaInitializer.createContext("));
         assertFalse(fixtureSources.contains("Class.forName"));

@@ -397,6 +397,10 @@ class RepositoryContractTest {
         assertTrue(
                 script.contains(
                         "./gradlew --no-daemon :foundry-java-android:assembleDebugAndroidTest"));
+        assertTrue(script.contains("llvm-readelf"));
+        assertTrue(script.contains("libfoundry_java_test_host.so"));
+        assertTrue(script.contains("JNI_OnLoad"));
+        assertTrue(script.contains("libfoundry_java.so"));
         assertEquals(1, occurrences(script, "build/outputs/apk/androidTest/debug/"));
         assertEquals(1, occurrences(script, "adb\" install"));
         assertTrue(script.contains("target_package=\"games.cafecito.foundry.android.test\""));
@@ -406,6 +410,8 @@ class RepositoryContractTest {
                                 + "games.cafecito.foundry.java.FoundryJavaInstrumentation\""));
         assertTrue(script.contains("force-stop"));
         assertTrue(script.contains("pidof"));
+        assertTrue(script.contains("instrumentation_process=$!"));
+        assertTrue(script.contains("wait \"$instrumentation_process\""));
         assertTrue(script.contains("-e foundry_run_index \"$run_index\""));
         assertTrue(
                 script.contains(

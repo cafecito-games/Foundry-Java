@@ -15,5 +15,6 @@ public final class FoundryJavaTestActivity extends Activity {
         JSONObject preEntry = FoundryJavaTestHost.preEntryEvidence();
         FoundryJavaTestHost.requirePrimedPreEntry(preEntry);
         FoundryJavaStartupEvidence.recordActivityPreEntry(preEntry);
+        finish();
     }
 }

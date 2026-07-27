@@ -12,6 +12,14 @@ if [[ ! -x "$adb" ]]; then
   printf 'Android SDK adb does not exist: %s\n' "$adb" >&2
   exit 1
 fi
+android_ndk_root="${ANDROID_NDK_HOME:-${sdk_root}/ndk/29.0.14206865}"
+llvm_readelf="$(
+  find "$android_ndk_root/toolchains/llvm/prebuilt" -path '*/bin/llvm-readelf' -print -quit
+)"
+if [[ -z "$llvm_readelf" || ! -x "$llvm_readelf" ]]; then
+  printf 'llvm-readelf was not found under %s\n' "$android_ndk_root" >&2
+  exit 1
+fi
 runner_temp="${RUNNER_TEMP:?RUNNER_TEMP must be set}"
 artifact_root="${runner_temp}/foundry-java-production-startup"
 target_package="games.cafecito.foundry.android.test"
@@ -48,6 +56,33 @@ if [[ ! -f "$test_apk" ]]; then
   printf 'Instrumentation APK does not exist: %s\n' "$test_apk" >&2
   exit 1
 fi
+
+native_check_root="${artifact_root}/native-check"
+mkdir -p "$native_check_root"
+for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+  test_host_entry="lib/${abi}/libfoundry_java_test_host.so"
+  test_host_library="${native_check_root}/${abi}-libfoundry_java_test_host.so"
+  symbols_file="${native_check_root}/${abi}-symbols.txt"
+  dynamic_file="${native_check_root}/${abi}-dynamic.txt"
+  if ! unzip -p "$test_apk" "$test_host_entry" >"$test_host_library"; then
+    printf 'Instrumentation APK is missing %s.\n' "$test_host_entry" >&2
+    exit 1
+  fi
+  "$llvm_readelf" --dyn-syms --wide "$test_host_library" >"$symbols_file"
+  "$llvm_readelf" --dynamic "$test_host_library" >"$dynamic_file"
+  if ! awk \
+    '$4 == "FUNC" && $5 == "GLOBAL" && $7 != "UND" && $8 == "JNI_OnLoad" { found = 1 }
+     END { exit !found }' \
+    "$symbols_file"; then
+    printf '%s must define its own global JNI_OnLoad.\n' "$test_host_entry" >&2
+    exit 1
+  fi
+  if ! grep -Fq 'Shared library: [libfoundry_java.so]' "$dynamic_file"; then
+    printf '%s must retain its production bridge dependency.\n' "$test_host_entry" >&2
+    exit 1
+  fi
+  rm "$test_host_library"
+done
 ANDROID_SERIAL="$serial" "$adb" install -r -t "$test_apk"
 
 force_stop_and_wait() {
@@ -123,11 +158,33 @@ for run_index in 1 2; do
   mkdir -p "$run_directory"
   force_stop_and_wait
   "$adb" -s "$serial" logcat -c
+  instrumentation_file="${run_directory}/instrumentation.txt"
   "$adb" -s "$serial" shell am instrument -w -r \
     -e foundry_run_index "$run_index" \
-    "$instrumentation_component" |
-    tee "${run_directory}/instrumentation.txt"
-  observed_pid="$("$adb" -s "$serial" shell pidof "$target_package" | tr -d '\r' | xargs)"
+    "$instrumentation_component" >"$instrumentation_file" 2>&1 &
+  instrumentation_process=$!
+  observed_pid=""
+  for _ in $(seq 1 100); do
+    observed_pid="$(
+      "$adb" -s "$serial" shell pidof "$target_package" 2>/dev/null |
+        tr -d '\r' |
+        xargs || true
+    )"
+    if [[ "$observed_pid" =~ ^[1-9][0-9]*$ ]]; then
+      break
+    fi
+    sleep 0.05
+  done
+  set +e
+  wait "$instrumentation_process"
+  instrumentation_status=$?
+  set -e
+  cat "$instrumentation_file"
+  if [[ "$instrumentation_status" -ne 0 ]]; then
+    printf 'Run %s instrumentation command exited %s.\n' \
+      "$run_index" "$instrumentation_status" >&2
+    exit 1
+  fi
   if [[ ! "$observed_pid" =~ ^[1-9][0-9]*$ ]]; then
     printf 'Run %s did not leave one observable positive package PID: %s\n' \
       "$run_index" "$observed_pid" >&2

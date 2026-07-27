@@ -18,6 +18,18 @@ jstring to_java_string(JNIEnv *environment, const std::string &value) {
 
 } // namespace
 
+FOUNDRY_JAVA_TEST_HOST_JNI_EXPORT jint JNICALL
+JNI_OnLoad(JavaVM *java_vm, void *) {
+  JNIEnv *environment = nullptr;
+  if (java_vm == nullptr ||
+      java_vm->GetEnv(reinterpret_cast<void **>(&environment),
+                      JNI_VERSION_1_6) != JNI_OK ||
+      environment == nullptr) {
+    return JNI_ERR;
+  }
+  return JNI_VERSION_1_6;
+}
+
 FOUNDRY_JAVA_TEST_HOST_JNI_EXPORT jstring JNICALL
 Java_games_cafecito_foundry_java_FoundryJavaTestHost_nativePreEntryEvidenceV1(
     JNIEnv *environment, jclass) {

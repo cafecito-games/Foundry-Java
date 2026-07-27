@@ -253,7 +253,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
         require(lifecycle.getLong("context_handle") == 1L, "fresh process context was not 1");
         requireArray(
                 lifecycle.getJSONArray("initialize_attempts"),
-                List.of("CORE", "CORE", "SCENE", "SCENE"),
+                List.of("CORE", "CORE", "SERVERS", "SERVERS", "SCENE", "SCENE"),
                 "initialize attempts");
         requireArray(
                 lifecycle.getJSONArray("registration_order"),
@@ -275,7 +275,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
                 "stale instance callback was accepted");
         requireArray(
                 lifecycle.getJSONArray("deinitialize_attempts"),
-                List.of("SCENE", "SCENE", "CORE", "CORE"),
+                List.of("SCENE", "SCENE", "SERVERS", "SERVERS", "CORE", "CORE"),
                 "deinitialize attempts");
         requireArray(
                 lifecycle.getJSONArray("unregistration_order"),

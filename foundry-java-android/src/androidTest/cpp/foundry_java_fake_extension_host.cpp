@@ -1693,6 +1693,12 @@ std::string run_lifecycle_v1(int run_index) {
   }
 
   if (raw_entry_accepted) {
+    initialize_attempts.emplace_back("SERVERS");
+    initialization.initialize(initialization.userdata,
+                              FOUNDRY_EXTENSION_INITIALIZATION_SERVERS);
+    initialize_attempts.emplace_back("SERVERS");
+    initialization.initialize(initialization.userdata,
+                              FOUNDRY_EXTENSION_INITIALIZATION_SERVERS);
     initialize_attempts.emplace_back("SCENE");
     initialization.initialize(initialization.userdata,
                               FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
@@ -1741,6 +1747,12 @@ std::string run_lifecycle_v1(int run_index) {
   }
 
   if (raw_entry_accepted) {
+    deinitialize_attempts.emplace_back("SERVERS");
+    initialization.deinitialize(initialization.userdata,
+                                FOUNDRY_EXTENSION_INITIALIZATION_SERVERS);
+    deinitialize_attempts.emplace_back("SERVERS");
+    initialization.deinitialize(initialization.userdata,
+                                FOUNDRY_EXTENSION_INITIALIZATION_SERVERS);
     deinitialize_attempts.emplace_back("CORE");
     initialization.deinitialize(initialization.userdata,
                                 FOUNDRY_EXTENSION_INITIALIZATION_CORE);
