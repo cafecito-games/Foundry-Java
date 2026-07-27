@@ -2,7 +2,6 @@ package games.cafecito.foundry.gradle;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -16,14 +15,14 @@ import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.InputDirectory;
 import org.gradle.api.tasks.InputFile;
-import org.gradle.api.tasks.OutputFile;
+import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
-/** Verifies the final merged startup provider before the manifest reaches packaging. */
+/** Observes and verifies the final merged startup provider before packaging. */
 public abstract class VerifyStartupManifestTask extends DefaultTask {
     private static final String ANDROID_NAMESPACE =
             "http://schemas.android.com/apk/res/android";
@@ -33,8 +32,8 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
     @PathSensitive(PathSensitivity.NONE)
     public abstract RegularFileProperty getInputManifest();
 
-    @OutputFile
-    public abstract RegularFileProperty getOutputManifest();
+    @OutputDirectory
+    public abstract DirectoryProperty getVerificationOutputDirectory();
 
     @InputDirectory
     @PathSensitive(PathSensitivity.RELATIVE)
@@ -52,14 +51,13 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
     @TaskAction
     public void verify() throws Exception {
         Path input = getInputManifest().get().getAsFile().toPath();
-        Path output = getOutputManifest().get().getAsFile().toPath();
         Path registryIndex =
                 getRegistryAssetsDirectory().get().getAsFile().toPath().resolve(REGISTRY_INDEX);
         if (Files.isRegularFile(registryIndex)) {
             verifyModuleBearingManifest(input);
+            Files.createDirectories(
+                    getVerificationOutputDirectory().get().getAsFile().toPath());
         }
-        Files.createDirectories(output.getParent());
-        Files.copy(input, output, StandardCopyOption.REPLACE_EXISTING);
     }
 
     private void verifyModuleBearingManifest(Path manifest) throws Exception {
@@ -138,8 +136,8 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
             violations.add("initOrder expected=100, actual=" + display(initOrder));
         }
         String enabled = provider.getAttributeNS(ANDROID_NAMESPACE, "enabled").trim();
-        if (enabled.equalsIgnoreCase("false")) {
-            violations.add("enabled expected=not false, actual=" + enabled);
+        if (!enabled.isEmpty() && !enabled.equals("true")) {
+            violations.add("enabled expected=<empty>|true, actual=" + enabled);
         }
         if (!violations.isEmpty()) {
             throw new GradleException(

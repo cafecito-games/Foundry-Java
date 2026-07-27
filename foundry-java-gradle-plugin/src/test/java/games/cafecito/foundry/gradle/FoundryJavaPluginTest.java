@@ -566,6 +566,11 @@ class FoundryJavaPluginTest {
         String mapping =
                 Files.readString(project.resolve("build/outputs/mapping/release/mapping.txt"));
         assertTrue(mapping.contains("games.cafecito.foundry.generated.FoundryGeneratedBootstrap"));
+        assertTrue(
+                mapping.contains(
+                        "games.cafecito.foundry.generated.FoundryGeneratedStartupProvider"
+                                + " -> games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider:"));
         assertTrue(mapping.contains("example.DemoRegistry"));
         assertTrue(mapping.contains("example.DemoRegistry$1"));
         assertTrue(
@@ -646,6 +651,9 @@ class FoundryJavaPluginTest {
         assertFalse(
                 mergedManifest(project, "debug")
                         .contains("FoundryGeneratedStartupProvider"));
+        assertFalse(
+                Files.exists(
+                        project.resolve("build/generated/foundryJava/verification/debug")));
     }
 
     @Test
@@ -733,7 +741,8 @@ class FoundryJavaPluginTest {
     }
 
     @Test
-    void mergedManifestStartupOverrideFailsWithEveryCriticalAttribute() throws IOException {
+    void downstreamMergedManifestStartupOverrideFailsWithEveryCriticalAttribute()
+            throws IOException {
         Path binding =
                 bindingAar(
                         temporaryDirectory.resolve("startup-override-binding.aar"),
@@ -742,12 +751,17 @@ class FoundryJavaPluginTest {
                         List.of("x86_64"));
         Path project = androidProject("startup-override", binding, List.of("x86_64"));
         writeBootstrapStubs(project);
+        Files.createDirectories(project.resolve("src/main/res/values"));
+        Files.writeString(
+                project.resolve("src/main/res/values/bools.xml"),
+                """
+                <resources>
+                    <bool name="foundry_disabled">false</bool>
+                </resources>
+                """);
         Files.writeString(
                 project.resolve("build.gradle"),
                 Files.readString(project.resolve("build.gradle"))
-                        .replace(
-                                "    id 'games.cafecito.foundry.java'\n",
-                                "")
                         .replace(
                                 "android {\n",
                                 """
@@ -772,7 +786,7 @@ class FoundryJavaPluginTest {
                                                 'android:exported="true"')
                                             .replace(
                                                 'android:initOrder="100"',
-                                                'android:enabled="false" android:initOrder="99" android:process=":wrong"')
+                                                'android:enabled="@bool/foundry_disabled" android:initOrder="99" android:process=":wrong"')
                                         if (changed == source) {
                                             throw new GradleException(
                                                 'Expected generated startup provider in merged manifest')
@@ -794,7 +808,6 @@ class FoundryJavaPluginTest {
                                         .toTransform(
                                             com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST.INSTANCE)
                                 }
-                                apply plugin: 'games.cafecito.foundry.java'
                                 android {
                                 """));
 
@@ -812,7 +825,9 @@ class FoundryJavaPluginTest {
         assertTrue(failure.getOutput().contains("exported expected=false, actual=true"));
         assertTrue(failure.getOutput().contains("process expected=<empty>, actual=:wrong"));
         assertTrue(failure.getOutput().contains("initOrder expected=100, actual=99"));
-        assertTrue(failure.getOutput().contains("enabled expected=not false, actual=false"));
+        assertTrue(
+                failure.getOutput()
+                        .contains("enabled expected=<empty>|true, actual=@bool/foundry_disabled"));
     }
 
     @Test
@@ -848,6 +863,9 @@ class FoundryJavaPluginTest {
 
         assertEquals(
                 TaskOutcome.SUCCESS, first.task(":generateDebugFoundryJavaRegistry").getOutcome());
+        assertEquals(
+                TaskOutcome.SUCCESS,
+                first.task(":verifyDebugFoundryJavaStartupManifest").getOutcome());
         assertTrue(first.getOutput().contains("AGP_VERSION=8.9.1"));
         assertTrue(second.getOutput().contains("Reusing configuration cache."));
         Path generatedAssets =
@@ -866,6 +884,18 @@ class FoundryJavaPluginTest {
                                                 + "games/cafecito/foundry/generated/"
                                                 + "FoundryGeneratedBootstrap.java"))
                         .contains("example.DemoRegistry.PROVIDER"));
+        String mergedManifest = mergedManifest(project, "debug");
+        assertTrue(
+                mergedManifest.contains(
+                        "android:name=\"games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider\""));
+        assertTrue(
+                mergedManifest.contains(
+                        "android:authorities=\"games.cafecito.test.custom."
+                                + "foundry-java-startup\""));
+        assertTrue(mergedManifest.contains("android:exported=\"false\""));
+        assertTrue(mergedManifest.contains("android:initOrder=\"100\""));
+        assertFalse(mergedManifest.contains("android:process="));
         Path apk =
                 Files.list(project.resolve("build/outputs/apk/debug"))
                         .filter(path -> path.getFileName().toString().endsWith(".apk"))

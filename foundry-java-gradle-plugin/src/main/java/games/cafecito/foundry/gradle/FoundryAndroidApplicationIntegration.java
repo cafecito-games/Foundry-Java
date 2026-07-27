@@ -115,13 +115,23 @@ final class FoundryAndroidApplicationIntegration {
                                                     registry.flatMap(
                                                             RegistryIndexTask
                                                                     ::getAssetsOutputDirectory));
+                                    task.getVerificationOutputDirectory()
+                                            .set(
+                                                    project.getLayout()
+                                                            .getBuildDirectory()
+                                                            .dir(
+                                                                    "generated/foundryJava/"
+                                                                            + "verification/"
+                                                                            + variant.getName()));
                                 });
         variant.getArtifacts()
                 .use(verify)
-                .wiredWithFiles(
-                        VerifyStartupManifestTask::getInputManifest,
-                        VerifyStartupManifestTask::getOutputManifest)
-                .toTransform(SingleArtifact.MERGED_MANIFEST.INSTANCE);
+                .wiredWith(VerifyStartupManifestTask::getInputManifest)
+                .toListenTo(SingleArtifact.MERGED_MANIFEST.INSTANCE);
+        variant.getSources()
+                .getAssets()
+                .addGeneratedSourceDirectory(
+                        verify, VerifyStartupManifestTask::getVerificationOutputDirectory);
     }
 
     private static String capitalize(String value) {
