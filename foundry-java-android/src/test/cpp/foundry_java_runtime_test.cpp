@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -25,6 +26,7 @@ bool jni_ready = false;
 bool jni_initialize_result = true;
 int jni_initialize_count = 0;
 int jni_deinitialize_count = 0;
+int jni_shutdown_context_attempt_count = 0;
 int jni_shutdown_context_count = 0;
 std::int32_t jni_shutdown_context_level = -1;
 int jni_shutdown_count = 0;
@@ -1027,9 +1029,27 @@ public:
 		return result;
 	}
 
-	void invalidate(foundry_java::ContextHandle context) override {
+	bool invalidate(foundry_java::ContextHandle context) override {
 		last_context = context;
 		invalidate_count++;
+		return invalidate_succeeds;
+	}
+
+	bool terminal_cleanup_complete(foundry_java::ContextHandle context) override {
+		last_context = context;
+		terminal_cleanup_check_count++;
+		if (probe_cleanup_operation_during_terminal_check) {
+			ordinary_operation_during_terminal_check =
+					static_cast<bool>(runtime->acquire_operation(context));
+			cleanup_operation_during_terminal_check =
+					static_cast<bool>(runtime->acquire_operation(
+							context, foundry_java::ContextOperationKind::CLEANUP));
+		}
+		if (terminal_cleanup_failures_remaining > 0) {
+			terminal_cleanup_failures_remaining--;
+			return false;
+		}
+		return true;
 	}
 
 	void wait_until_blocked() {
@@ -1066,6 +1086,9 @@ public:
 	std::atomic<int> deinitialize_count = 0;
 	std::atomic<int> invoke_count = 0;
 	std::atomic<int> invalidate_count = 0;
+	std::atomic<int> terminal_cleanup_check_count = 0;
+	std::atomic<int> terminal_cleanup_failures_remaining = 0;
+	bool invalidate_succeeds = true;
 	std::int64_t reentrant_result = 0;
 	std::mutex block_mutex;
 	std::condition_variable block_condition;
@@ -1077,6 +1100,9 @@ public:
 	bool probe_cleanup_operation = false;
 	bool ordinary_operation_during_cleanup = true;
 	bool cleanup_operation_during_cleanup = false;
+	bool probe_cleanup_operation_during_terminal_check = false;
+	bool ordinary_operation_during_terminal_check = true;
+	bool cleanup_operation_during_terminal_check = false;
 	foundry_java::ContextHandle blocked_deinitialize_context = 0;
 	std::mutex deinitialize_mutex;
 	std::condition_variable deinitialize_condition;
@@ -1317,8 +1343,9 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 						callbacks->last_context == torn_down_context &&
 								callbacks->deinitialize_count == 1 &&
 								callbacks->invalidate_count == 1,
-						"Java cleanup must complete before final native resource teardown");
+							"Java cleanup must complete before final native resource teardown");
 				resources_torn_down = true;
+				return true;
 			});
 	auto operation = runtime.acquire_operation(context);
 	expect(operation && operation.generation() != 0, "live context must admit native operation");
@@ -1353,6 +1380,449 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 			"transport must release after its final retained owner");
 }
 
+void test_java_cleanup_retry_gates_native_teardown() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	expect(
+			runtime.install_native_services(
+					services, reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x517)),
+			"Java retry fixture must install stable native services");
+	const auto context = runtime.create_native_context();
+	auto operation = runtime.acquire_operation(context);
+	std::weak_ptr<foundry_java::NativeTransport> transport_lifetime = operation.transport();
+	operation = {};
+	callbacks->terminal_cleanup_failures_remaining = 2;
+	int native_teardown_count = 0;
+	runtime.set_context_teardown(
+			[&native_teardown_count](foundry_java::ContextHandle, std::uint64_t) {
+				native_teardown_count++;
+				return true;
+			});
+
+	expect(
+			!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"incomplete Java cleanup must retain the context for retry");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 1 && native_teardown_count == 0,
+			"first Java cleanup failure must not enter native teardown");
+	expect(
+			!runtime.acquire_operation(context) &&
+					!runtime.acquire_operation(
+							context, foundry_java::ContextOperationKind::CLEANUP),
+			"Java cleanup retry state must reject every operation kind");
+	expect(!transport_lifetime.expired(), "Java cleanup failure must retain native resources");
+
+	expect(
+			!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"second incomplete Java cleanup must remain retryable");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 2 &&
+					callbacks->terminal_cleanup_check_count == 2 && native_teardown_count == 0,
+			"Java retry must rerun invalidation without repeating deinitialization or native teardown");
+	expect(!transport_lifetime.expired(), "second Java cleanup failure must retain native resources");
+
+	expect(
+			runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"completed Java cleanup must advance to native teardown");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 3 &&
+					callbacks->terminal_cleanup_check_count == 3 && native_teardown_count == 1,
+			"third Java cleanup attempt must complete before one native teardown");
+	expect(transport_lifetime.expired(), "successful two-stage teardown must release native resources");
+}
+
+void test_native_teardown_retry_skips_completed_java_cleanup() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	expect(
+			runtime.install_native_services(
+					services, reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x518)),
+			"native retry fixture must install stable native services");
+	const auto context = runtime.create_native_context();
+	auto operation = runtime.acquire_operation(context);
+	std::weak_ptr<foundry_java::NativeTransport> transport_lifetime = operation.transport();
+	operation = {};
+	int native_teardown_count = 0;
+	bool native_teardown_succeeds = false;
+	runtime.set_context_teardown(
+			[&](foundry_java::ContextHandle, std::uint64_t) {
+				native_teardown_count++;
+				return native_teardown_succeeds;
+			});
+
+	expect(
+			!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"failed native teardown must retain the context for retry");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 1 && native_teardown_count == 1,
+			"native failure must happen only after completed Java cleanup");
+	expect(!transport_lifetime.expired(), "native teardown failure must retain native resources");
+	expect(!runtime.invoke(context, 7, {}), "native retry state must reject callbacks");
+
+	native_teardown_succeeds = true;
+	expect(
+			runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"native teardown retry must later succeed");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 1 && native_teardown_count == 2,
+			"native retry must not repeat completed Java cleanup");
+	expect(transport_lifetime.expired(), "successful native retry must release native resources");
+}
+
+void test_failed_java_invalidation_cannot_default_native_teardown_open() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	const auto context = runtime.create_context();
+	int native_teardown_count = 0;
+	runtime.set_context_teardown(
+			[&](foundry_java::ContextHandle, std::uint64_t) {
+				native_teardown_count++;
+				return true;
+			});
+	callbacks->invalidate_succeeds = false;
+
+	expect(
+			!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"failed Java invalidation call must retain the context");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 0 && native_teardown_count == 0,
+			"failed invalidation must not consult default completion or enter native teardown");
+
+	callbacks->invalidate_succeeds = true;
+	expect(
+			runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"Java invalidation must remain retryable after a call failure");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 2 &&
+					callbacks->terminal_cleanup_check_count == 1 && native_teardown_count == 1,
+			"successful invalidation retry must gate one native teardown without repeating deinitialize");
+}
+
+void test_shutdown_all_returns_false_without_spinning_and_retries_both_phases() {
+	{
+		auto callbacks = std::make_shared<RecordingCallbacks>();
+		auto errors = std::make_shared<RecordingLogger>();
+		foundry_java::BridgeRuntime runtime(callbacks, errors);
+		callbacks->terminal_cleanup_failures_remaining = 1;
+		expect(runtime.create_context() != 0, "Java shutdown-all retry fixture must create a context");
+		int native_teardown_count = 0;
+		runtime.set_context_teardown(
+				[&](foundry_java::ContextHandle, std::uint64_t) {
+					native_teardown_count++;
+					return true;
+				});
+
+		expect(
+				!runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"shutdown_all must return false on incomplete Java cleanup");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+						native_teardown_count == 0,
+				"shutdown_all must stop before native teardown on Java failure");
+		expect(
+				runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"shutdown_all must retry Java cleanup later");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 2 &&
+						native_teardown_count == 1,
+				"shutdown_all Java retry must finish without repeated deinitialization");
+	}
+	{
+		auto callbacks = std::make_shared<RecordingCallbacks>();
+		auto errors = std::make_shared<RecordingLogger>();
+		foundry_java::BridgeRuntime runtime(callbacks, errors);
+		expect(runtime.create_context() != 0, "native shutdown-all retry fixture must create a context");
+		int native_teardown_count = 0;
+		bool native_teardown_succeeds = false;
+		runtime.set_context_teardown(
+				[&](foundry_java::ContextHandle, std::uint64_t) {
+					native_teardown_count++;
+					return native_teardown_succeeds;
+				});
+
+		expect(
+				!runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"shutdown_all must return false on native teardown failure");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+						native_teardown_count == 1,
+				"shutdown_all native failure must follow one completed Java cleanup");
+		native_teardown_succeeds = true;
+		expect(
+				runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"shutdown_all must retry native teardown later");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+						native_teardown_count == 2,
+				"shutdown_all native retry must skip completed Java cleanup");
+	}
+}
+
+void test_shutdown_all_joins_one_failed_java_cleanup_attempt() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	callbacks->runtime = &runtime;
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	expect(
+			runtime.install_native_services(
+					services, reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x519)),
+			"concurrent Java failure fixture must install native services");
+	const auto context = runtime.create_native_context();
+	auto operation = runtime.acquire_operation(context);
+	std::weak_ptr<foundry_java::NativeTransport> transport_lifetime = operation.transport();
+	operation = {};
+	callbacks->terminal_cleanup_failures_remaining = 100;
+	callbacks->blocked_deinitialize_context = context;
+	std::mutex wait_mutex;
+	std::condition_variable wait_condition;
+	bool wait_bound = false;
+	runtime.set_shutdown_wait_observer(
+			[&](foundry_java::ContextHandle waiting_context, std::uint64_t attempt_epoch) {
+				expect(waiting_context == context && attempt_epoch == 1,
+						"bridge shutdown must bind to the first Java cleanup attempt");
+				std::lock_guard lock(wait_mutex);
+				wait_bound = true;
+				wait_condition.notify_all();
+			});
+	std::atomic<bool> context_shutdown_result = true;
+	std::atomic<bool> bridge_shutdown_finished = false;
+	std::atomic<bool> bridge_shutdown_result = true;
+
+	std::thread context_shutdown_thread([&] {
+		context_shutdown_result =
+				runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	});
+	callbacks->wait_until_deinitialize_blocked();
+	std::thread bridge_shutdown_thread([&] {
+		bridge_shutdown_result = runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+		bridge_shutdown_finished = true;
+	});
+	{
+		std::unique_lock lock(wait_mutex);
+		wait_condition.wait(lock, [&] { return wait_bound; });
+	}
+	expect(
+			!bridge_shutdown_finished,
+			"bridge shutdown must join the blocked Java cleanup attempt");
+	callbacks->release_blocked_deinitialize();
+	context_shutdown_thread.join();
+	bridge_shutdown_thread.join();
+
+	expect(!context_shutdown_result && !bridge_shutdown_result,
+			"every caller joining a persistent Java cleanup failure must return false");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 1,
+			"concurrent callers must share one failed Java cleanup attempt without retry ping-pong");
+	expect(!transport_lifetime.expired(),
+			"joined Java cleanup failure must retain native resources");
+
+	callbacks->terminal_cleanup_failures_remaining = 0;
+	expect(
+			runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"a later bridge shutdown call must retry retained Java cleanup");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 2 &&
+					callbacks->terminal_cleanup_check_count == 2,
+			"later Java cleanup retry must remain balanced and skip deinitialization");
+	expect(transport_lifetime.expired(),
+			"successful later Java cleanup retry must release native resources");
+}
+
+void test_shutdown_all_joins_one_failed_native_teardown_attempt() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	expect(
+			runtime.install_native_services(
+					services, reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x51a)),
+			"concurrent native failure fixture must install native services");
+	const auto context = runtime.create_native_context();
+	auto operation = runtime.acquire_operation(context);
+	std::weak_ptr<foundry_java::NativeTransport> transport_lifetime = operation.transport();
+	operation = {};
+	std::mutex teardown_mutex;
+	std::condition_variable teardown_condition;
+	bool teardown_started = false;
+	bool release_teardown = false;
+	std::atomic<bool> native_teardown_succeeds = false;
+	std::atomic<int> native_teardown_active = 0;
+	std::atomic<int> native_teardown_max_active = 0;
+	std::atomic<int> native_teardown_count = 0;
+	std::mutex wait_mutex;
+	std::condition_variable wait_condition;
+	bool wait_bound = false;
+	runtime.set_context_teardown(
+			[&](foundry_java::ContextHandle, std::uint64_t) {
+				const int active = ++native_teardown_active;
+				native_teardown_max_active =
+						std::max(native_teardown_max_active.load(), active);
+				const int attempt = ++native_teardown_count;
+				if (attempt == 1) {
+					std::unique_lock lock(teardown_mutex);
+					teardown_started = true;
+					teardown_condition.notify_all();
+					teardown_condition.wait(lock, [&] { return release_teardown; });
+				}
+				native_teardown_active--;
+				return native_teardown_succeeds.load();
+			});
+	runtime.set_shutdown_wait_observer(
+			[&](foundry_java::ContextHandle waiting_context, std::uint64_t attempt_epoch) {
+				expect(waiting_context == context && attempt_epoch == 1,
+						"bridge shutdown must bind to the first native teardown attempt");
+				std::lock_guard lock(wait_mutex);
+				wait_bound = true;
+				wait_condition.notify_all();
+			});
+	std::atomic<bool> context_shutdown_result = true;
+	std::atomic<bool> bridge_shutdown_finished = false;
+	std::atomic<bool> bridge_shutdown_result = true;
+
+	std::thread context_shutdown_thread([&] {
+		context_shutdown_result =
+				runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	});
+	{
+		std::unique_lock lock(teardown_mutex);
+		teardown_condition.wait(lock, [&] { return teardown_started; });
+	}
+	std::thread bridge_shutdown_thread([&] {
+		bridge_shutdown_result = runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+		bridge_shutdown_finished = true;
+	});
+	{
+		std::unique_lock lock(wait_mutex);
+		wait_condition.wait(lock, [&] { return wait_bound; });
+	}
+	expect(
+			!bridge_shutdown_finished,
+			"bridge shutdown must join the blocked native teardown attempt");
+	{
+		std::lock_guard lock(teardown_mutex);
+		release_teardown = true;
+		teardown_condition.notify_all();
+	}
+	context_shutdown_thread.join();
+	bridge_shutdown_thread.join();
+
+	expect(!context_shutdown_result && !bridge_shutdown_result,
+			"every caller joining a persistent native teardown failure must return false");
+	expect(
+			native_teardown_count == 1 && native_teardown_max_active == 1 &&
+					native_teardown_active == 0,
+			"concurrent callers must share one balanced native teardown attempt without retry ping-pong");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 1,
+			"joined native failure must not repeat completed Java cleanup");
+	expect(!transport_lifetime.expired(),
+			"joined native teardown failure must retain native resources");
+
+	native_teardown_succeeds = true;
+	expect(
+			runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"a later bridge shutdown call must retry retained native teardown");
+	expect(
+			native_teardown_count == 2 && native_teardown_max_active == 1 &&
+					native_teardown_active == 0,
+			"later native teardown retry must complete as one balanced attempt");
+	expect(
+			callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+					callbacks->terminal_cleanup_check_count == 1,
+			"later native retry must continue skipping completed Java cleanup");
+	expect(transport_lifetime.expired(),
+			"successful later native teardown retry must release native resources");
+}
+
+void test_shutdown_attempt_epoch_exhaustion_fails_closed_without_mutation() {
+	{
+		auto callbacks = std::make_shared<RecordingCallbacks>();
+		auto errors = std::make_shared<RecordingLogger>();
+		foundry_java::BridgeRuntime runtime(callbacks, errors);
+		const auto context = runtime.create_context();
+		expect(
+				runtime.set_shutdown_attempt_epoch_for_testing(
+						context, std::numeric_limits<std::uint64_t>::max()),
+				"active exhaustion fixture must set the attempt epoch boundary");
+
+		expect(
+				!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"active context must reject an exhausted shutdown attempt epoch");
+		expect(
+				callbacks->deinitialize_count == 0 && callbacks->invalidate_count == 0 &&
+						runtime.invoke(context, 7, {}) == 7,
+				"active epoch exhaustion must not mutate phase or enter Java cleanup");
+		expect(
+				!runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"bridge shutdown must fail closed on an exhausted active context");
+		expect(
+				callbacks->deinitialize_count == 0 && callbacks->invalidate_count == 0 &&
+						runtime.invoke(context, 7, {}) == 7,
+				"bridge exhaustion rejection must preserve the active context and counter balance");
+
+		expect(
+				runtime.set_shutdown_attempt_epoch_for_testing(context, 0),
+				"active exhaustion fixture must restore a usable attempt epoch");
+		expect(
+				runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"explicit later active-context recovery must shut down normally");
+	}
+	{
+		auto callbacks = std::make_shared<RecordingCallbacks>();
+		auto errors = std::make_shared<RecordingLogger>();
+		foundry_java::BridgeRuntime runtime(callbacks, errors);
+		const auto context = runtime.create_context();
+		callbacks->terminal_cleanup_failures_remaining = 1;
+		expect(
+				!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"retry exhaustion fixture must first retain the context");
+		expect(
+				runtime.set_shutdown_attempt_epoch_for_testing(
+						context, std::numeric_limits<std::uint64_t>::max()),
+				"retry exhaustion fixture must set the attempt epoch boundary");
+
+		expect(
+				!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"retry context must reject an exhausted shutdown attempt epoch");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+						callbacks->terminal_cleanup_check_count == 1 &&
+						!runtime.acquire_operation(
+								context, foundry_java::ContextOperationKind::CLEANUP),
+				"retry epoch exhaustion must preserve retry phase without entering cleanup");
+		expect(
+				!runtime.shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"bridge shutdown must fail closed on an exhausted retry context");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 1 &&
+						callbacks->terminal_cleanup_check_count == 1,
+				"bridge retry exhaustion rejection must preserve callback and counter balance");
+
+		expect(
+				runtime.set_shutdown_attempt_epoch_for_testing(context, 1),
+				"retry exhaustion fixture must restore the completed attempt epoch");
+		expect(
+				runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"explicit later retry recovery must shut down normally");
+		expect(
+				callbacks->deinitialize_count == 1 && callbacks->invalidate_count == 2 &&
+						callbacks->terminal_cleanup_check_count == 2,
+				"later retry recovery must not repeat deinitialization");
+	}
+}
+
 void test_java_cleanup_admits_only_authenticated_cleanup_operations() {
 	auto callbacks = std::make_shared<RecordingCallbacks>();
 	auto errors = std::make_shared<RecordingLogger>();
@@ -1373,6 +1843,27 @@ void test_java_cleanup_admits_only_authenticated_cleanup_operations() {
 			"JAVA_CLEANUP must reject ordinary registration operations");
 	expect(callbacks->cleanup_operation_during_cleanup,
 			"JAVA_CLEANUP must admit same-thread unregister cleanup");
+}
+
+void test_java_cleanup_retry_admits_same_thread_cleanup_operations() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	callbacks->runtime = &runtime;
+	const auto context = runtime.create_context();
+	callbacks->terminal_cleanup_failures_remaining = 1;
+
+	expect(
+			!runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"cleanup admission retry fixture must first retain the context");
+	callbacks->probe_cleanup_operation_during_terminal_check = true;
+	expect(
+			runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"cleanup admission retry fixture must later shut down");
+	expect(!callbacks->ordinary_operation_during_terminal_check,
+			"JAVA_CLEANUP_RETRY attempt must reject ordinary registration operations");
+	expect(callbacks->cleanup_operation_during_terminal_check,
+			"JAVA_CLEANUP_RETRY attempt must admit same-thread unregister cleanup");
 }
 
 void test_native_operation_can_finish_on_a_different_thread() {
@@ -1428,6 +1919,7 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 	jni_initialize_result = true;
 	jni_initialize_count = 0;
 	jni_deinitialize_count = 0;
+	jni_shutdown_context_attempt_count = 0;
 	jni_shutdown_context_count = 0;
 	jni_shutdown_context_level = -1;
 	jni_shutdown_count = 0;
@@ -1491,6 +1983,7 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 	expect(jni_deinitialize_count == 1, "non-final deinitialization level must enter Java");
 	jni_shutdown_context_result = false;
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_context_attempt_count == 1, "failed context drain must count one attempt");
 	expect(jni_shutdown_count == 0, "failed context drain must not release JNI state");
 	FoundryExtensionInitialization rejected_after_failed_shutdown{};
 	expect(
@@ -1502,13 +1995,16 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 	jni_shutdown_context_result = true;
 	jni_shutdown_result = false;
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_context_attempt_count == 2, "successful context retry must count a second attempt");
 	expect(jni_shutdown_context_count == 1, "core deinit must drain its context once");
 	expect(jni_shutdown_count == 1, "core deinit must attempt JNI state release once");
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_context_attempt_count == 2, "bridge retry must not retry a closed context");
 	expect(jni_shutdown_context_count == 1, "bridge-shutdown retry must not drain a closed context again");
 	expect(jni_shutdown_count == 2, "bridge-shutdown retry must reach JNI state release");
 	jni_shutdown_result = true;
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(jni_shutdown_context_attempt_count == 2, "successful bridge release must not retry context teardown");
 	expect(jni_shutdown_context_count == 1, "successful retry must still preserve one context drain");
 	expect(jni_shutdown_count == 3, "successful retry must release JNI state");
 }
@@ -1518,10 +2014,11 @@ void test_extension_entry_failed_initialize_tears_down_context_once() {
 	jni_initialize_result = false;
 	jni_initialize_count = 0;
 	jni_deinitialize_count = 0;
+	jni_shutdown_context_attempt_count = 0;
 	jni_shutdown_context_count = 0;
 	jni_shutdown_context_level = -1;
 	jni_shutdown_count = 0;
-	jni_shutdown_context_result = true;
+	jni_shutdown_context_result = false;
 	jni_shutdown_result = true;
 	installed_print_error = nullptr;
 
@@ -1537,8 +2034,8 @@ void test_extension_entry_failed_initialize_tears_down_context_once() {
 
 	expect(jni_initialize_count == 1, "failed CORE initialization must enter Java exactly once");
 	expect(
-			jni_shutdown_context_count == 1,
-			"failed CORE initialization must immediately tear down its native context");
+			jni_shutdown_context_attempt_count == 1 && jni_shutdown_context_count == 0,
+			"failed CORE initialization must immediately attempt native context teardown");
 	expect(
 			jni_shutdown_context_level == FOUNDRY_EXTENSION_INITIALIZATION_CORE,
 			"failed initialization must use full CORE context teardown");
@@ -1548,13 +2045,14 @@ void test_extension_entry_failed_initialize_tears_down_context_once() {
 			jni_initialize_count == 1,
 			"terminal entry must ignore later initialization levels after CORE failure");
 	expect(
-			jni_shutdown_context_count == 1,
+			jni_shutdown_context_attempt_count == 1 && jni_shutdown_context_count == 0,
 			"terminal entry must not create and tear down another context");
 
+	jni_shutdown_context_result = true;
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
 	expect(
-			jni_shutdown_context_count == 1,
-			"CORE deinitialization must not tear down the failed context twice");
+			jni_shutdown_context_attempt_count == 2 && jni_shutdown_context_count == 1,
+			"CORE deinitialization must retry the retained failed context exactly once");
 	expect(jni_shutdown_count == 1, "CORE deinitialization must still release the JNI bridge");
 }
 
@@ -2965,6 +3463,7 @@ void jni_bridge_deinitialize(ContextHandle context, std::int32_t) noexcept {
 
 bool jni_bridge_shutdown_context(ContextHandle context, std::int32_t level) noexcept {
 	if (context == 77) {
+		jni_shutdown_context_attempt_count++;
 		jni_shutdown_context_level = level;
 		if (jni_shutdown_context_result) {
 			jni_shutdown_context_count++;
@@ -2996,7 +3495,15 @@ int main() {
 	test_context_identity_reentrancy_and_exception_containment();
 	test_shutdown_waits_for_active_callback_lease();
 	test_shutdown_waits_for_native_operations_then_tears_down_resources();
+	test_java_cleanup_retry_gates_native_teardown();
+	test_native_teardown_retry_skips_completed_java_cleanup();
+	test_failed_java_invalidation_cannot_default_native_teardown_open();
+	test_shutdown_all_returns_false_without_spinning_and_retries_both_phases();
+	test_shutdown_all_joins_one_failed_native_teardown_attempt();
+	test_shutdown_all_joins_one_failed_java_cleanup_attempt();
+	test_shutdown_attempt_epoch_exhaustion_fails_closed_without_mutation();
 	test_java_cleanup_admits_only_authenticated_cleanup_operations();
+	test_java_cleanup_retry_admits_same_thread_cleanup_operations();
 	test_native_operation_can_finish_on_a_different_thread();
 	test_shutdown_all_waits_for_concurrent_context_teardown();
 	test_extension_entry_failed_initialize_tears_down_context_once();

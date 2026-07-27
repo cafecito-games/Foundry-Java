@@ -58,7 +58,8 @@ public:
 			ContextHandle context,
 			std::int64_t callback,
 			const std::vector<std::int64_t> &arguments) = 0;
-	virtual void invalidate(ContextHandle context) = 0;
+	virtual bool invalidate(ContextHandle context) = 0;
+	virtual bool terminal_cleanup_complete(ContextHandle context) = 0;
 };
 
 class BridgeRuntime final {
@@ -84,10 +85,16 @@ public:
 			std::shared_ptr<const BridgeServices> services,
 			FoundryExtensionClassLibraryPtr library) noexcept;
 	void set_context_teardown(
-			std::function<void(ContextHandle, std::uint64_t)> teardown) noexcept;
+			std::function<bool(ContextHandle, std::uint64_t)> teardown) noexcept;
 	bool shutdown_context(ContextHandle context, std::int32_t level) noexcept;
 	void begin_new_generation() noexcept;
 	bool shutdown_all(std::int32_t level) noexcept;
+#if defined(FOUNDRY_JAVA_TESTING)
+	void set_shutdown_wait_observer(
+			std::function<void(ContextHandle, std::uint64_t)> observer) noexcept;
+	bool set_shutdown_attempt_epoch_for_testing(
+			ContextHandle context, std::uint64_t epoch) noexcept;
+#endif
 
 private:
 	struct Impl;

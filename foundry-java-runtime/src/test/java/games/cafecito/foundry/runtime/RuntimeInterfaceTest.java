@@ -21,7 +21,8 @@ class RuntimeInterfaceTest {
                         "initialize(long,int):boolean",
                         "deinitialize(long,int):void",
                         "invoke(long,long,long[]):long",
-                        "invalidate(long):void"),
+                        "invalidate(long):void",
+                        "terminalCleanupComplete(long):boolean"),
                 publicMethods(FoundryBridgeCallbacks.class));
     }
 

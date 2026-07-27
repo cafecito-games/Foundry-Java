@@ -26,6 +26,7 @@ games.cafecito.foundry.runtime.FoundryBridgeCallbacks|public abstract boolean in
 games.cafecito.foundry.runtime.FoundryBridgeCallbacks|public abstract long invoke(long, long, long[]);
 games.cafecito.foundry.runtime.FoundryBridgeCallbacks|public abstract void deinitialize(long, int);
 games.cafecito.foundry.runtime.FoundryBridgeCallbacks|public abstract void invalidate(long);
+games.cafecito.foundry.runtime.FoundryBridgeCallbacks|public default boolean terminalCleanupComplete(long);
 games.cafecito.foundry.runtime.FoundryBridgeCallbacks|public interface games.cafecito.foundry.runtime.FoundryBridgeCallbacks {
 games.cafecito.foundry.runtime.FoundryCallError|public final class games.cafecito.foundry.runtime.FoundryCallError extends java.lang.Enum<games.cafecito.foundry.runtime.FoundryCallError> {
 games.cafecito.foundry.runtime.FoundryCallError|public static final games.cafecito.foundry.runtime.FoundryCallError INSTANCE_IS_NULL;
@@ -233,6 +234,7 @@ games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public java.util.List<ga
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public java.util.List<games.cafecito.foundry.runtime.FoundryModuleProvider> providers();
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public java.util.List<java.lang.String> moduleNames();
 games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public boolean initialize(long, int);
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public boolean terminalCleanupComplete(long);
 games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public final class games.cafecito.foundry.runtime.FoundryRegistryCoordinator implements games.cafecito.foundry.runtime.FoundryBridgeCallbacks {
 games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public games.cafecito.foundry.runtime.FoundryRegistryCoordinator(games.cafecito.foundry.runtime.FoundryRegistryBootstrap, java.util.function.LongFunction<? extends games.cafecito.foundry.runtime.FoundryEngine>);
 games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public long invoke(long, long, long[]);

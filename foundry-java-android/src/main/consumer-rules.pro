@@ -151,4 +151,5 @@
     void deinitialize(long, int);
     long invoke(long, long, long[]);
     void invalidate(long);
+    boolean terminalCleanupComplete(long);
 }

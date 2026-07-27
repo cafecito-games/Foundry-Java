@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import games.cafecito.foundry.runtime.FoundryBridgeCallbacks;
@@ -62,6 +63,7 @@ class FoundryJavaInitializerTest {
         assertTrue(rules.contains("FoundryJavaStartupProvider"));
         assertTrue(rules.contains("FoundryModuleProvider"));
         assertTrue(rules.contains("FoundryBridgeCallbacks"));
+        assertTrue(rules.contains("boolean terminalCleanupComplete(long);"));
         for (String exactEntry :
                 List.of(
                         "nativeRegistrationMembersV1",
@@ -166,8 +168,17 @@ class FoundryJavaInitializerTest {
                         bootstrap, accepted, accepted::recordDiagnostic);
 
         assertTrue(loggingAccepted.initialize(41, 1));
+        assertTrue(loggingAccepted.terminalCleanupComplete(41));
+        assertFalse(loggingAccepted.terminalCleanupComplete(42));
         assertEquals(
                 FoundryJavaInitializer.diagnosticJson(bootstrap, 1, "none"),
+                accepted.lastDiagnostic);
+        accepted.failTerminalCleanupQuery = true;
+        assertThrows(
+                IllegalStateException.class, () -> loggingAccepted.terminalCleanupComplete(41));
+        assertEquals(
+                FoundryJavaInitializer.diagnosticJson(
+                        bootstrap, -1, "terminal_cleanup_query_exception"),
                 accepted.lastDiagnostic);
 
         RecordingCallbacks rejected = new RecordingCallbacks(false);
@@ -216,6 +227,7 @@ class FoundryJavaInitializerTest {
     private static final class RecordingCallbacks implements FoundryBridgeCallbacks {
         private final boolean initializeResult;
         private String lastDiagnostic;
+        private boolean failTerminalCleanupQuery;
 
         private RecordingCallbacks(boolean initializeResult) {
             this.initializeResult = initializeResult;
@@ -240,5 +252,13 @@ class FoundryJavaInitializerTest {
 
         @Override
         public void invalidate(long contextHandle) {}
+
+        @Override
+        public boolean terminalCleanupComplete(long contextHandle) {
+            if (failTerminalCleanupQuery) {
+                throw new IllegalStateException("terminal cleanup query failed");
+            }
+            return contextHandle == 41;
+        }
     }
 }

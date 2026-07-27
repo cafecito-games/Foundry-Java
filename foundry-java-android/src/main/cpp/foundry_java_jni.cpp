@@ -155,6 +155,7 @@ public:
 			jmethodID deinitialize_method,
 			jmethodID invoke_method,
 			jmethodID invalidate_method,
+			jmethodID terminal_cleanup_complete_method,
 			std::shared_ptr<FoundryErrorSink> errors) :
 			java_vm(java_vm),
 			callbacks(callbacks),
@@ -162,6 +163,7 @@ public:
 			deinitialize_method(deinitialize_method),
 			invoke_method(invoke_method),
 			invalidate_method(invalidate_method),
+			terminal_cleanup_complete_method(terminal_cleanup_complete_method),
 			errors(std::move(errors)) {
 	}
 
@@ -248,15 +250,32 @@ public:
 		return static_cast<std::int64_t>(result);
 	}
 
-	void invalidate(ContextHandle context) override {
+	bool invalidate(ContextHandle context) override {
 		AttachedEnvironment attached(java_vm);
 		JNIEnv *environment = attached.get();
 		if (environment == nullptr) {
 			errors->error("Could not attach the Foundry Java invalidation callback thread.");
-			return;
+			return false;
 		}
 		environment->CallVoidMethod(callbacks, invalidate_method, static_cast<jlong>(context));
-		clear_java_exception(environment, errors, "context invalidation");
+		return !clear_java_exception(environment, errors, "context invalidation");
+	}
+
+	bool terminal_cleanup_complete(ContextHandle context) override {
+		AttachedEnvironment attached(java_vm);
+		JNIEnv *environment = attached.get();
+		if (environment == nullptr) {
+			errors->error("Could not attach the Foundry Java terminal cleanup query thread.");
+			return false;
+		}
+		const jboolean complete = environment->CallBooleanMethod(
+				callbacks,
+				terminal_cleanup_complete_method,
+				static_cast<jlong>(context));
+		if (clear_java_exception(environment, errors, "terminal cleanup query")) {
+			return false;
+		}
+		return complete == JNI_TRUE;
 	}
 
 private:
@@ -266,6 +285,7 @@ private:
 	jmethodID deinitialize_method = nullptr;
 	jmethodID invoke_method = nullptr;
 	jmethodID invalidate_method = nullptr;
+	jmethodID terminal_cleanup_complete_method = nullptr;
 	std::shared_ptr<FoundryErrorSink> errors;
 };
 
@@ -375,7 +395,7 @@ std::shared_ptr<BridgeRuntime> live_runtime() {
 bool install_registration_bridge(
 		std::shared_ptr<const BridgeServices> services) noexcept;
 void reset_registration_bridge() noexcept;
-void shutdown_context_registration(ContextHandle context,
+bool shutdown_context_registration(ContextHandle context,
 		std::uint64_t generation) noexcept;
 
 } // namespace
@@ -594,6 +614,17 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1(
 			environment->DeleteLocalRef(callback_class);
 			return JNI_FALSE;
 		}
+		jmethodID terminal_cleanup_complete_method =
+				environment->GetMethodID(
+						callback_class, "terminalCleanupComplete", "(J)Z");
+		if (foundry_java::jni_reference_failed(
+					environment,
+					terminal_cleanup_complete_method,
+					foundry_java::state.errors,
+					"terminal cleanup callback resolution")) {
+			environment->DeleteLocalRef(callback_class);
+			return JNI_FALSE;
+		}
 		jobject global_callbacks = environment->NewGlobalRef(callbacks);
 		environment->DeleteLocalRef(callback_class);
 		if (foundry_java::jni_reference_failed(
@@ -614,12 +645,13 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1(
 				deinitialize_method,
 				invoke_method,
 				invalidate_method,
+				terminal_cleanup_complete_method,
 				foundry_java::state.errors);
 		callback_guard.release();
 		auto runtime = std::make_shared<foundry_java::BridgeRuntime>(target, foundry_java::state.errors);
 		runtime->set_context_teardown(
 				[](foundry_java::ContextHandle context, std::uint64_t generation) {
-					foundry_java::shutdown_context_registration(context, generation);
+					return foundry_java::shutdown_context_registration(context, generation);
 				});
 		return bootstrap.publish(std::move(runtime)) ? JNI_TRUE : JNI_FALSE;
 	} catch (...) {
@@ -3059,17 +3091,18 @@ void reset_registration_bridge() noexcept {
 	released.reset();
 }
 
-void shutdown_context_registration(ContextHandle context,
+bool shutdown_context_registration(ContextHandle context,
 		std::uint64_t generation) noexcept {
 	auto bridge = registration_bridge();
 	if (bridge == nullptr) {
-		return;
+		return true;
 	}
 	const RegistrationResult result = bridge->shutdown(context, generation);
 	if (!result.ok()) {
 		state.errors->error(
 				"Foundry Java registration teardown failed: " + result.phase + ".");
 	}
+	return result.ok();
 }
 
 void throw_registration_result(JNIEnv *environment,

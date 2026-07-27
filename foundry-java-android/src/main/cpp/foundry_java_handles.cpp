@@ -18,7 +18,9 @@ struct Context {
 	enum class Phase : std::uint8_t {
 		ACTIVE,
 		JAVA_CLEANUP,
+		JAVA_CLEANUP_RETRY,
 		NATIVE_TEARDOWN,
+		NATIVE_TEARDOWN_RETRY,
 		CLOSED,
 	};
 
@@ -27,6 +29,9 @@ struct Context {
 	std::mutex mutex;
 	std::condition_variable drained;
 	Phase phase = Phase::ACTIVE;
+	std::uint64_t shutdown_attempt_epoch = 0;
+	std::uint64_t completed_shutdown_attempt_epoch = 0;
+	std::uint64_t failed_shutdown_attempt_epoch = 0;
 	std::size_t active_callbacks = 0;
 	std::size_t active_operations = 0;
 	std::shared_ptr<const BridgeServices> services;
@@ -167,13 +172,16 @@ struct BridgeRuntime::Impl {
 	std::unordered_map<ContextHandle, std::shared_ptr<Context>> contexts;
 	std::shared_ptr<CallbackTarget> callbacks;
 	std::shared_ptr<ErrorSink> errors;
-	std::function<void(ContextHandle, std::uint64_t)> context_teardown;
+	std::function<bool(ContextHandle, std::uint64_t)> context_teardown;
 	std::shared_ptr<const BridgeServices> services;
 	FoundryExtensionClassLibraryPtr library = nullptr;
 	ContextHandle next_handle = 1;
 	std::uint64_t generation = 1;
 	std::size_t active_shutdowns = 0;
 	bool accepting_contexts = true;
+#if defined(FOUNDRY_JAVA_TESTING)
+	std::function<void(ContextHandle, std::uint64_t)> shutdown_wait_observer;
+#endif
 };
 
 struct JniTransitionState::Impl {
@@ -531,10 +539,36 @@ bool BridgeRuntime::install_native_services(
 }
 
 void BridgeRuntime::set_context_teardown(
-		std::function<void(ContextHandle, std::uint64_t)> teardown) noexcept {
+		std::function<bool(ContextHandle, std::uint64_t)> teardown) noexcept {
 	std::lock_guard lock(impl->mutex);
 	impl->context_teardown = std::move(teardown);
 }
+
+#if defined(FOUNDRY_JAVA_TESTING)
+void BridgeRuntime::set_shutdown_wait_observer(
+		std::function<void(ContextHandle, std::uint64_t)> observer) noexcept {
+	std::lock_guard lock(impl->mutex);
+	impl->shutdown_wait_observer = std::move(observer);
+}
+
+bool BridgeRuntime::set_shutdown_attempt_epoch_for_testing(
+		ContextHandle handle, std::uint64_t epoch) noexcept {
+	std::lock_guard lock(impl->mutex);
+	auto found = impl->contexts.find(handle);
+	if (found == impl->contexts.end() || found->second->generation != impl->generation) {
+		return false;
+	}
+	std::lock_guard context_lock(found->second->mutex);
+	if (found->second->phase == Context::Phase::JAVA_CLEANUP ||
+			found->second->phase == Context::Phase::NATIVE_TEARDOWN ||
+			found->second->phase == Context::Phase::CLOSED ||
+			epoch < found->second->completed_shutdown_attempt_epoch) {
+		return false;
+	}
+	found->second->shutdown_attempt_epoch = epoch;
+	return true;
+}
+#endif
 
 bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) noexcept {
 	if (current_thread_owns(handle)) {
@@ -542,6 +576,9 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 		return false;
 	}
 	std::shared_ptr<Context> context;
+	bool run_deinitialize = false;
+	bool run_java_cleanup = false;
+	std::uint64_t shutdown_attempt_epoch = 0;
 	{
 		std::lock_guard lock(impl->mutex);
 		auto found = impl->contexts.find(handle);
@@ -550,36 +587,75 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 		}
 		context = found->second;
 		std::lock_guard context_lock(context->mutex);
-		if (context->phase != Context::Phase::ACTIVE) {
+		const bool retryable =
+				context->phase == Context::Phase::ACTIVE ||
+				context->phase == Context::Phase::JAVA_CLEANUP_RETRY ||
+				context->phase == Context::Phase::NATIVE_TEARDOWN_RETRY;
+		if (retryable &&
+				context->shutdown_attempt_epoch ==
+						std::numeric_limits<std::uint64_t>::max()) {
 			return false;
 		}
-		context->phase = Context::Phase::JAVA_CLEANUP;
+		if (context->phase == Context::Phase::ACTIVE) {
+			context->phase = Context::Phase::JAVA_CLEANUP;
+			run_deinitialize = true;
+			run_java_cleanup = true;
+		} else if (context->phase == Context::Phase::JAVA_CLEANUP_RETRY) {
+			context->phase = Context::Phase::JAVA_CLEANUP;
+			run_java_cleanup = true;
+		} else if (context->phase == Context::Phase::NATIVE_TEARDOWN_RETRY) {
+			context->phase = Context::Phase::NATIVE_TEARDOWN;
+		} else {
+			return false;
+		}
+		shutdown_attempt_epoch = ++context->shutdown_attempt_epoch;
 		impl->active_shutdowns++;
 	}
-	{
+	if (run_java_cleanup) {
 		std::unique_lock lock(context->mutex);
 		context->drained.wait(lock, [&context] {
 			return context->active_callbacks == 0 && context->active_operations == 0;
 		});
 	}
 	ActiveContextScope shutdown_callback_scope(handle);
-	try {
-		impl->callbacks->deinitialize(handle, level);
-	} catch (...) {
-		impl->report("Java deinitialization callback failed.");
+	if (run_java_cleanup) {
+		if (run_deinitialize) {
+			try {
+				impl->callbacks->deinitialize(handle, level);
+			} catch (...) {
+				impl->report("Java deinitialization callback failed.");
+			}
+		}
+		bool java_cleanup_complete = false;
+		try {
+			const bool invalidated = impl->callbacks->invalidate(handle);
+			java_cleanup_complete = invalidated &&
+					impl->callbacks->terminal_cleanup_complete(handle);
+		} catch (...) {
+			impl->report("Java context invalidation failed.");
+		}
+		if (!java_cleanup_complete) {
+			std::lock_guard lock(impl->mutex);
+			{
+				std::lock_guard context_lock(context->mutex);
+				context->phase = Context::Phase::JAVA_CLEANUP_RETRY;
+				context->completed_shutdown_attempt_epoch = shutdown_attempt_epoch;
+				context->failed_shutdown_attempt_epoch = shutdown_attempt_epoch;
+			}
+			impl->active_shutdowns--;
+			impl->shutdowns_drained.notify_all();
+			return false;
+		}
 	}
-	try {
-		impl->callbacks->invalidate(handle);
-	} catch (...) {
-		impl->report("Java context invalidation failed.");
-	}
-	std::function<void(ContextHandle, std::uint64_t)> teardown;
+	std::function<bool(ContextHandle, std::uint64_t)> teardown;
+	bool teardown_copied = true;
 	{
 		try {
 			std::lock_guard lock(impl->mutex);
 			teardown = impl->context_teardown;
 		} catch (...) {
 			impl->report("Foundry Java native teardown observer could not be copied.");
+			teardown_copied = false;
 		}
 	}
 	{
@@ -589,12 +665,27 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 			return context->active_callbacks == 0 && context->active_operations == 0;
 		});
 	}
+	bool native_teardown_complete = teardown_copied;
 	if (teardown) {
 		try {
-			teardown(handle, context->generation);
+			native_teardown_complete =
+					teardown(handle, context->generation);
 		} catch (...) {
 			impl->report("Foundry Java native context teardown failed.");
+			native_teardown_complete = false;
 		}
+	}
+	if (!native_teardown_complete) {
+		std::lock_guard lock(impl->mutex);
+		{
+			std::lock_guard context_lock(context->mutex);
+			context->phase = Context::Phase::NATIVE_TEARDOWN_RETRY;
+			context->completed_shutdown_attempt_epoch = shutdown_attempt_epoch;
+			context->failed_shutdown_attempt_epoch = shutdown_attempt_epoch;
+		}
+		impl->active_shutdowns--;
+		impl->shutdowns_drained.notify_all();
+		return false;
 	}
 	if (context->transport != nullptr) {
 		(void)context->transport->handles().teardown(handle, context->generation);
@@ -611,11 +702,10 @@ bool BridgeRuntime::shutdown_context(ContextHandle handle, std::int32_t level) n
 		{
 			std::lock_guard context_lock(context->mutex);
 			context->phase = Context::Phase::CLOSED;
+			context->completed_shutdown_attempt_epoch = shutdown_attempt_epoch;
 		}
 		impl->active_shutdowns--;
-		if (impl->active_shutdowns == 0) {
-			impl->shutdowns_drained.notify_all();
-		}
+		impl->shutdowns_drained.notify_all();
 	}
 	return true;
 }
@@ -640,6 +730,9 @@ bool BridgeRuntime::shutdown_all(std::int32_t level) noexcept {
 	}
 	while (true) {
 		ContextHandle handle = 0;
+		std::shared_ptr<Context> attempt_context;
+		std::uint64_t target_attempt_epoch = 0;
+		bool start_attempt = false;
 		{
 			std::unique_lock lock(impl->mutex);
 			if (impl->contexts.empty()) {
@@ -648,12 +741,28 @@ bool BridgeRuntime::shutdown_all(std::int32_t level) noexcept {
 			}
 			for (const auto &[candidate_handle, context] : impl->contexts) {
 				std::lock_guard context_lock(context->mutex);
-				if (context->phase == Context::Phase::ACTIVE) {
+				if (context->phase == Context::Phase::ACTIVE ||
+						context->phase == Context::Phase::JAVA_CLEANUP_RETRY ||
+						context->phase == Context::Phase::NATIVE_TEARDOWN_RETRY) {
+					if (context->shutdown_attempt_epoch ==
+							std::numeric_limits<std::uint64_t>::max()) {
+						return false;
+					}
 					handle = candidate_handle;
+					attempt_context = context;
+					target_attempt_epoch = context->shutdown_attempt_epoch + 1;
+					start_attempt = true;
 					break;
 				}
+				if (attempt_context == nullptr &&
+						(context->phase == Context::Phase::JAVA_CLEANUP ||
+								context->phase == Context::Phase::NATIVE_TEARDOWN)) {
+					handle = candidate_handle;
+					attempt_context = context;
+					target_attempt_epoch = context->shutdown_attempt_epoch;
+				}
 			}
-			if (handle == 0) {
+			if (attempt_context == nullptr) {
 				impl->shutdowns_drained.wait(lock, [this] {
 					if (impl->active_shutdowns == 0) {
 						return true;
@@ -661,7 +770,9 @@ bool BridgeRuntime::shutdown_all(std::int32_t level) noexcept {
 					for (const auto &[candidate_handle, context] : impl->contexts) {
 						(void)candidate_handle;
 						std::lock_guard context_lock(context->mutex);
-						if (context->phase == Context::Phase::ACTIVE) {
+						if (context->phase == Context::Phase::ACTIVE ||
+								context->phase == Context::Phase::JAVA_CLEANUP_RETRY ||
+								context->phase == Context::Phase::NATIVE_TEARDOWN_RETRY) {
 							return true;
 						}
 					}
@@ -670,7 +781,29 @@ bool BridgeRuntime::shutdown_all(std::int32_t level) noexcept {
 				continue;
 			}
 		}
-		(void)shutdown_context(handle, level);
+		if (start_attempt && shutdown_context(handle, level)) {
+			continue;
+		}
+#if defined(FOUNDRY_JAVA_TESTING)
+		std::function<void(ContextHandle, std::uint64_t)> wait_observer;
+		{
+			std::lock_guard lock(impl->mutex);
+			wait_observer = impl->shutdown_wait_observer;
+		}
+		if (wait_observer) {
+			wait_observer(handle, target_attempt_epoch);
+		}
+#endif
+		std::unique_lock lock(impl->mutex);
+		impl->shutdowns_drained.wait(lock, [&attempt_context, target_attempt_epoch] {
+			std::lock_guard context_lock(attempt_context->mutex);
+			return attempt_context->completed_shutdown_attempt_epoch >=
+					target_attempt_epoch;
+		});
+		std::lock_guard context_lock(attempt_context->mutex);
+		if (attempt_context->failed_shutdown_attempt_epoch >= target_attempt_epoch) {
+			return false;
+		}
 	}
 }
 

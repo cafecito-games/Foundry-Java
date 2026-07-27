@@ -617,10 +617,10 @@ class RepositoryContractTest {
                 "7487bcff4a8ab4affd0ea43f4f19bbb7de4b556c6b4f769f2a7e5af6771f9633",
                 sha256("foundry-java-android/src/main/cpp/foundry_java_exports.map"));
         assertEquals(
-                "be69b76a9fb1b5bd9968db1c5bbca8d64e0ef9bb5a881ac3cd37e4f0e1e9dd89",
+                "655945c7347bb4ba01a9d259c2b4eac67605c5bb2e70b5d74057e31a198f80f9",
                 sha256("foundry-java-android/src/main/consumer-rules.pro"));
         assertEquals(
-                "d399fe6e08bf9dcb3ae689621b0d5ce4d657836eafa9da0a4f974fee9e0eedb2",
+                "c3eedd9b1d92f19a04c1aaf8c0427671955cfa65522aea114ff09dd08f650c5d",
                 sha256("foundry-java-runtime/api/foundry-java-runtime.api"));
     }
 

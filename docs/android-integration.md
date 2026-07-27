@@ -207,6 +207,8 @@ Teardown unregisters in exact reverse topological order. It blocks new callbacks
 callbacks, deinitializes completed levels, invalidates the binding context, releases instance and
 class references, and only then clears native tables. Bridge shutdown is process-terminal; restart
 requires a fresh Android process.
+`FoundryBridgeCallbacks.terminalCleanupComplete` must confirm the exact terminal context before
+native teardown begins; otherwise the bridge retains the context and cleanup ownership for retry.
 
 ## Structured bootstrap logs
 
@@ -235,7 +237,7 @@ by the callback; `-1` means the event is not tied to one initialization callback
 `failure_phase="none"` is success. Other phases identify the boundary that failed, including
 `native_library_load`, `native_bootstrap`, `native_bootstrap_exception`,
 `initialization_callback`, `initialization_exception`, `deinitialization_exception`,
-`callback_exception`, and `invalidation_exception`.
+`callback_exception`, `invalidation_exception`, and `terminal_cleanup_query_exception`.
 
 ## Minified release builds
 

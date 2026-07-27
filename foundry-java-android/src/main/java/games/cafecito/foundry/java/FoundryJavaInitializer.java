@@ -389,5 +389,16 @@ public final class FoundryJavaInitializer {
                 throw failure;
             }
         }
+
+        @Override
+        public boolean terminalCleanupComplete(long contextHandle) {
+            try {
+                return callbacks.terminalCleanupComplete(contextHandle);
+            } catch (RuntimeException | Error failure) {
+                diagnostics.write(
+                        diagnosticJson(bootstrap, -1, "terminal_cleanup_query_exception"));
+                throw failure;
+            }
+        }
     }
 }

@@ -122,6 +122,7 @@ endif()
 
 if(FOUNDRY_JAVA_BUILD_TESTS)
     enable_testing()
+    target_compile_definitions(foundry_java_runtime PUBLIC FOUNDRY_JAVA_TESTING)
     add_executable(
         foundry_java_registration_test
         "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_registration_test.cpp"

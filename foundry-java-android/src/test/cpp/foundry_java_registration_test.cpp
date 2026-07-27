@@ -2149,10 +2149,14 @@ void test_failed_provisional_rollback_retains_ownership_for_shutdown_retry() {
 	const FoundryExtensionClassCreationInfo5 quarantined_creation =
 			services->class_registration.creation_info;
 	expect(quarantined_creation.create_instance_func(
-				   quarantined_creation.class_userdata, 0) == nullptr &&
-					callbacks->create_count == 0,
+					   quarantined_creation.class_userdata, 0) == nullptr &&
+						callbacks->create_count == 0,
 			"failed rollback class must stay quarantined from callbacks");
 
+	expect(!registry.shutdown(10, 4).ok(),
+			"persistent unregister failure must keep provisional cleanup retryable");
+	expect(registry.active_class_count() == 1 && callbacks->release_count.load() == 0,
+			"failed shutdown retry must retain provisional native ownership");
 	services->fail_operations.clear();
 	services->operations.clear();
 	expect(registry.shutdown(10, 4).ok(),

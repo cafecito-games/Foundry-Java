@@ -9,4 +9,14 @@ public interface FoundryBridgeCallbacks {
     long invoke(long contextHandle, long callbackHandle, long[] argumentHandles);
 
     void invalidate(long contextHandle);
+
+    /**
+     * Reports whether terminal Java cleanup for the requested context has completed.
+     *
+     * <p>Custom callback implementations that do not retain retryable terminal state may use the
+     * default. Coordinators with pending cleanup override this method and remain fail closed.
+     */
+    default boolean terminalCleanupComplete(long contextHandle) {
+        return true;
+    }
 }

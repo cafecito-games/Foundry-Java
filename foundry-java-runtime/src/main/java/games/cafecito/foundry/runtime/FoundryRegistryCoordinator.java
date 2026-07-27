@@ -26,6 +26,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
     private final EnumMap<FoundryInitializationLevel, List<FoundryClassDescriptor>> registered =
             new EnumMap<>(FoundryInitializationLevel.class);
     private long contextHandle;
+    private long terminalContextHandle;
     private FoundryEngine engine;
     private FoundryBindingContext context;
     private boolean transitionInProgress;
@@ -196,6 +197,17 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         if (cleanup != null) {
             afterTerminalReservation.run();
             performTerminalCleanup(requestedContextHandle, cleanup);
+        }
+    }
+
+    @Override
+    public boolean terminalCleanupComplete(long requestedContextHandle) {
+        synchronized (lifecycleLock) {
+            return requestedContextHandle != 0
+                    && requestedContextHandle == terminalContextHandle
+                    && contextHandle == 0
+                    && !transitionInProgress
+                    && pendingCleanup == null;
         }
     }
 
@@ -450,6 +462,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         synchronized (lifecycleLock) {
             engine = null;
             context = null;
+            terminalContextHandle = contextHandle;
             contextHandle = 0;
             registered.clear();
             pendingCleanup = null;

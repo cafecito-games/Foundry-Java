@@ -469,6 +469,7 @@ class FoundryRegistryCoordinatorTest {
         }
 
         assertFalse(contextReference.get().callbackRegistry().isEnabled());
+        assertFalse(coordinator.terminalCleanupComplete(41));
         assertTrue(staleAdmissionObservation);
         assertThrows(
                 CallbackRegistry.CallbackUnavailableException.class,
@@ -605,6 +606,7 @@ class FoundryRegistryCoordinatorTest {
                         type("example.A", "A", "CORE"),
                         type("example.B", "B", "CORE", "example.A"));
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        assertFalse(coordinator.terminalCleanupComplete(41));
 
         coordinator.invalidate(41);
 
@@ -612,12 +614,15 @@ class FoundryRegistryCoordinatorTest {
                 List.of("register:A", "register:B", "unregister:B", "unregister:A"), engine.events);
         assertEquals(0, engine.contextCloses.get());
         assertEquals(1, engine.reportedFailures.size());
+        assertFalse(coordinator.terminalCleanupComplete(41));
+        assertFalse(coordinator.terminalCleanupComplete(42));
 
         coordinator.invalidate(41);
 
         assertEquals(0, engine.contextCloses.get());
         assertEquals(2, engine.reportedFailures.size());
         assertEquals(1, engine.reportedFailures.get(0).getSuppressed().length);
+        assertFalse(coordinator.terminalCleanupComplete(41));
 
         coordinator.invalidate(41);
 
@@ -631,6 +636,23 @@ class FoundryRegistryCoordinatorTest {
                         "unregister:A"),
                 engine.events);
         assertEquals(1, engine.contextCloses.get());
+        assertTrue(coordinator.terminalCleanupComplete(41));
+        assertTrue(coordinator.terminalCleanupComplete(41));
+        assertFalse(coordinator.terminalCleanupComplete(42));
+    }
+
+    @Test
+    void successfulCoreDeinitializeRemembersOnlyItsCompletedContext() {
+        RecordingEngine engine = new RecordingEngine();
+        FoundryRegistryCoordinator coordinator =
+                coordinator(engine, type("example.A", "A", "CORE"));
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+
+        coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
+
+        assertTrue(coordinator.terminalCleanupComplete(41));
+        assertTrue(coordinator.terminalCleanupComplete(41));
+        assertFalse(coordinator.terminalCleanupComplete(42));
     }
 
     @Test
