@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:name="games.cafecito.foundry.java.FoundryJavaTestApplication">
+        <provider
+            android:name="games.cafecito.foundry.java.FoundryJavaTestStartupProvider"
+            android:authorities="${applicationId}.foundry-java-startup"
+            android:exported="false"
+            android:initOrder="100" />
+        <activity
+            android:name="games.cafecito.foundry.java.FoundryJavaTestActivity"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
+    </application>
+</manifest>
