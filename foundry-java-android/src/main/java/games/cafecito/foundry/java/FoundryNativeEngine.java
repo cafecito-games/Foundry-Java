@@ -10,8 +10,13 @@ import games.cafecito.foundry.types.Variant;
 import games.cafecito.foundry.types.VariantType;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -238,8 +243,8 @@ public final class FoundryNativeEngine implements FoundryEngine {
 
         int formalCount = arguments.size() - receiverCount;
         if (dispatch.kind() == FoundryNativeDispatch.Kind.CLASS_PROPERTY) {
-            boolean validGetter = formalCount == 0 && !dispatch.getterIdentity().isEmpty();
-            boolean validSetter = formalCount == 1 && !dispatch.setterIdentity().isEmpty();
+            boolean validGetter = formalCount == 0 && !dispatch.getterNativeName().isEmpty();
+            boolean validSetter = formalCount == 1 && !dispatch.setterNativeName().isEmpty();
             if (!validGetter && !validSetter) {
                 throw arityFailure(dispatch, formalCount, receiverCount);
             }
@@ -306,6 +311,10 @@ public final class FoundryNativeEngine implements FoundryEngine {
     private void validateBridgeValue(Variant value, String phase) {
         if (value.type() == VariantType.CALLABLE) {
             FoundryCallable callable = value.asCallable();
+            if (callable.isClosed()) {
+                throw new IllegalArgumentException(
+                        "closed CALLABLE values are unsupported during " + phase + ".");
+            }
             if (callable.isNativeBacked()
                     && callable.nativeContextHandle() != contextHandle) {
                 throw new IllegalArgumentException(
@@ -445,9 +454,14 @@ public final class FoundryNativeEngine implements FoundryEngine {
     private final class SignalBackend implements FoundrySignal.NativeBackend {
         private final FoundrySignal[] signal;
         private final long signalHandle;
+        private final Object connectionLock = new Object();
         private final AtomicLong nextConnection = new AtomicLong();
-        private final ConcurrentHashMap<Long, FoundryCallable> connections =
-                new ConcurrentHashMap<>();
+        private final Map<Long, FoundryCallable> connections = new LinkedHashMap<>();
+        private final IdentityHashMap<FoundryCallable, Long> connectionsByCallable =
+                new IdentityHashMap<>();
+        private final Set<FoundryCallable> pendingConnections =
+                Collections.newSetFromMap(new IdentityHashMap<>());
+        private boolean signalReleased;
 
         private SignalBackend(FoundrySignal[] signal, long signalHandle) {
             this.signal = signal;
@@ -460,22 +474,46 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 long requestedSignalHandle,
                 FoundryCallable callable) {
             requireSignal(requestedSignalHandle);
-            long error =
-                    callValue(
-                                    requestedContext,
-                                    SIGNAL_CONNECT_IDENTITY,
-                                    List.of(
-                                            Variant.ofSignal(signal[0]),
-                                            Variant.ofCallable(callable)),
-                                    "native_signal_connect")
-                            .asLong();
-            if (error != 0) {
-                throw new IllegalStateException(
-                        "native_signal_connect failed with error " + error + ".");
+            synchronized (connectionLock) {
+                if (signalReleased) {
+                    throw new IllegalStateException("Native Signal is released.");
+                }
+                if (connectionsByCallable.containsKey(callable)
+                        || !pendingConnections.add(callable)) {
+                    throw new IllegalStateException(
+                            "Callable is already connected to this native Signal.");
+                }
             }
-            long connection = nextConnection.incrementAndGet();
-            connections.put(connection, callable);
-            return connection;
+            boolean connected = false;
+            try {
+                long error =
+                        callValue(
+                                        requestedContext,
+                                        SIGNAL_CONNECT_IDENTITY,
+                                        List.of(
+                                                Variant.ofSignal(signal[0]),
+                                                Variant.ofCallable(callable)),
+                                        "native_signal_connect")
+                                .asLong();
+                if (error != 0) {
+                    throw new IllegalStateException(
+                            "native_signal_connect failed with error " + error + ".");
+                }
+                long connection = nextConnection.incrementAndGet();
+                synchronized (connectionLock) {
+                    pendingConnections.remove(callable);
+                    connections.put(connection, callable);
+                    connectionsByCallable.put(callable, connection);
+                }
+                connected = true;
+                return connection;
+            } finally {
+                if (!connected) {
+                    synchronized (connectionLock) {
+                        pendingConnections.remove(callable);
+                    }
+                }
+            }
         }
 
         @Override
@@ -484,15 +522,24 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 long requestedSignalHandle,
                 long connectionHandle) {
             requireSignal(requestedSignalHandle);
-            FoundryCallable callable = connections.remove(connectionHandle);
-            if (callable == null) {
-                return;
+            FoundryCallable callable;
+            synchronized (connectionLock) {
+                callable = connections.get(connectionHandle);
+                if (callable == null) {
+                    return;
+                }
             }
             callValue(
                     requestedContext,
                     SIGNAL_DISCONNECT_IDENTITY,
                     List.of(Variant.ofSignal(signal[0]), Variant.ofCallable(callable)),
                     "native_signal_disconnect");
+            synchronized (connectionLock) {
+                if (connections.get(connectionHandle) == callable) {
+                    connections.remove(connectionHandle);
+                    connectionsByCallable.remove(callable);
+                }
+            }
         }
 
         @Override
@@ -514,10 +561,38 @@ public final class FoundryNativeEngine implements FoundryEngine {
         @Override
         public void release(long requestedContext, long requestedSignalHandle) {
             requireSignal(requestedSignalHandle);
-            for (Long connection : List.copyOf(connections.keySet())) {
-                disconnect(requestedContext, requestedSignalHandle, connection);
+            List<Long> activeConnections;
+            synchronized (connectionLock) {
+                if (signalReleased) {
+                    connections.clear();
+                    connectionsByCallable.clear();
+                    pendingConnections.clear();
+                    return;
+                }
+                activeConnections = List.copyOf(connections.keySet());
             }
-            FoundryNativeEngine.this.release(requestedContext, requestedSignalHandle);
+            Throwable failure = null;
+            for (Long connection : activeConnections) {
+                try {
+                    disconnect(requestedContext, requestedSignalHandle, connection);
+                } catch (RuntimeException | Error disconnectFailure) {
+                    failure = combineFailures(failure, disconnectFailure);
+                }
+            }
+            try {
+                FoundryNativeEngine.this.release(requestedContext, requestedSignalHandle);
+                synchronized (connectionLock) {
+                    signalReleased = true;
+                    connections.clear();
+                    connectionsByCallable.clear();
+                    pendingConnections.clear();
+                }
+            } catch (RuntimeException | Error releaseFailure) {
+                failure = combineFailures(failure, releaseFailure);
+            }
+            if (failure != null) {
+                rethrowUnchecked(failure);
+            }
         }
 
         private void requireSignal(long requestedSignalHandle) {
@@ -525,6 +600,21 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 throw new IllegalArgumentException("Native Signal handle mismatch.");
             }
         }
+    }
+
+    private static Throwable combineFailures(Throwable first, Throwable next) {
+        if (first == null) {
+            return next;
+        }
+        first.addSuppressed(next);
+        return first;
+    }
+
+    private static void rethrowUnchecked(Throwable failure) {
+        if (failure instanceof RuntimeException runtimeFailure) {
+            throw runtimeFailure;
+        }
+        throw (Error) failure;
     }
 
     interface NativeGateway {

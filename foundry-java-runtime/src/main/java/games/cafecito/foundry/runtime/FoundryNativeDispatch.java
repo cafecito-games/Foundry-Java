@@ -27,8 +27,8 @@ public record FoundryNativeDispatch(
     public FoundryNativeDispatch {
         identity = requireText(identity, "identity");
         kind = Objects.requireNonNull(kind, "kind");
-        ownerNativeType = requireText(ownerNativeType, "ownerNativeType");
-        nativeName = requireText(nativeName, "nativeName");
+        ownerNativeType = requireKindText(ownerNativeType, "ownerNativeType", kind, Kind.UTILITY_FUNCTION);
+        nativeName = requireKindText(nativeName, "nativeName", kind, Kind.BUILTIN_CONSTRUCTOR);
         argumentNativeTypes =
                 List.copyOf(Objects.requireNonNull(argumentNativeTypes, "argumentNativeTypes"));
         for (String argumentNativeType : argumentNativeTypes) {
@@ -115,6 +115,16 @@ public record FoundryNativeDispatch(
         return checked;
     }
 
+    private static String requireKindText(
+            String value, String name, Kind actualKind, Kind blankAllowedKind) {
+        String checked = Objects.requireNonNull(value, name);
+        if (checked.isBlank() && actualKind != blankAllowedKind) {
+            throw new IllegalArgumentException(
+                    name + " must not be blank for " + actualKind + ".");
+        }
+        return checked;
+    }
+
     private static void requireHash(long value, String name) {
         if (value < -1 || value > MAX_COMPATIBILITY_HASH) {
             throw new IllegalArgumentException(
@@ -124,12 +134,16 @@ public record FoundryNativeDispatch(
 
     private static boolean requireAccessorBundle(
             String identity, String nativeName, long compatibilityHash, String name) {
-        boolean any = !identity.isEmpty() || !nativeName.isEmpty() || compatibilityHash != -1;
-        boolean all = !identity.isBlank() && !nativeName.isBlank() && compatibilityHash >= 0;
-        if (any && !all) {
-            throw new IllegalArgumentException(name + " accessor metadata must be complete.");
+        boolean absent = identity.isEmpty() && nativeName.isEmpty() && compatibilityHash == -1;
+        boolean generated =
+                !identity.isBlank() && !nativeName.isBlank() && compatibilityHash >= 0;
+        boolean nameOnlyFallback =
+                identity.isEmpty() && !nativeName.isBlank() && compatibilityHash == -1;
+        if (!absent && !generated && !nameOnlyFallback) {
+            throw new IllegalArgumentException(
+                    name + " accessor metadata must be generated or a name-only fallback.");
         }
-        return all;
+        return generated || nameOnlyFallback;
     }
 
     /** Stable wire values shared by generated Java metadata and the native transport. */

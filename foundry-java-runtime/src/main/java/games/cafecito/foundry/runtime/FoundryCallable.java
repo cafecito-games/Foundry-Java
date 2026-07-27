@@ -13,7 +13,9 @@ public final class FoundryCallable implements AutoCloseable {
     private final int arity;
     private final Function<List<Variant>, Variant> localInvocation;
     private final NativeIdentity nativeIdentity;
-    private volatile boolean closed;
+    private int activeInvocations;
+    private boolean closed;
+    private boolean nativeReleased;
 
     private FoundryCallable(
             int arity,
@@ -88,36 +90,68 @@ public final class FoundryCallable implements AutoCloseable {
         return requireNativeIdentity().bridgeHandle();
     }
 
+    public synchronized boolean isClosed() {
+        return closed;
+    }
+
     public Variant call(List<Variant> arguments) {
         List<Variant> checked = List.copyOf(Objects.requireNonNull(arguments, "arguments"));
         if (!isVariadic() && checked.size() != arity) {
             throw new IllegalArgumentException(
                     "Callable expected " + arity + " arguments but received " + checked.size());
         }
-        if (closed) {
-            throw new IllegalStateException("Callable is closed.");
+        synchronized (this) {
+            if (closed) {
+                throw new IllegalStateException("Callable is closed.");
+            }
+            activeInvocations++;
         }
-        if (localInvocation != null) {
-            return Objects.requireNonNull(localInvocation.apply(checked), "callable result");
+        try {
+            if (localInvocation != null) {
+                return Objects.requireNonNull(localInvocation.apply(checked), "callable result");
+            }
+            NativeIdentity identity = requireNativeIdentity();
+            return Objects.requireNonNull(
+                    identity
+                            .backend()
+                            .invoke(identity.contextHandle(), identity.bridgeHandle(), checked),
+                    "native callable result");
+        } finally {
+            finishInvocation();
         }
-        NativeIdentity identity = requireNativeIdentity();
-        return Objects.requireNonNull(
-                identity
-                        .backend()
-                        .invoke(identity.contextHandle(), identity.bridgeHandle(), checked),
-                "native callable result");
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
+    public void close() {
+        NativeIdentity release = null;
+        synchronized (this) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (activeInvocations == 0 && nativeIdentity != null) {
+                nativeReleased = true;
+                release = nativeIdentity;
+            }
         }
-        closed = true;
-        if (nativeIdentity != null) {
-            nativeIdentity
-                    .backend()
-                    .release(nativeIdentity.contextHandle(), nativeIdentity.bridgeHandle());
+        release(release);
+    }
+
+    private void finishInvocation() {
+        NativeIdentity release = null;
+        synchronized (this) {
+            activeInvocations--;
+            if (closed && activeInvocations == 0 && nativeIdentity != null && !nativeReleased) {
+                nativeReleased = true;
+                release = nativeIdentity;
+            }
+        }
+        release(release);
+    }
+
+    private static void release(NativeIdentity identity) {
+        if (identity != null) {
+            identity.backend().release(identity.contextHandle(), identity.bridgeHandle());
         }
     }
 

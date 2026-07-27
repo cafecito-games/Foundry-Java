@@ -3,6 +3,7 @@ package games.cafecito.foundry.runtime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import games.cafecito.foundry.generated.GeneratedNativeDispatch;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -155,6 +156,27 @@ class FoundryNativeDispatchTest {
                                 -1,
                                 false,
                                 false));
+    }
+
+    @Test
+    void realGeneratedCatalogInitializesAcrossEverySentinelShape() {
+        FoundryNativeDispatch constructor =
+                GeneratedNativeDispatch.require("builtin_classes/AABB/constructors/#0");
+        FoundryNativeDispatch utility =
+                GeneratedNativeDispatch.require("utility_functions/abs#4776452");
+        FoundryNativeDispatch voidMethod =
+                GeneratedNativeDispatch.require("classes/Button/methods/set_text#83702148");
+        FoundryNativeDispatch nameOnlyProperty =
+                GeneratedNativeDispatch.require("classes/BitMap/properties/data");
+
+        assertEquals(FoundryNativeDispatch.Kind.BUILTIN_CONSTRUCTOR, constructor.kind());
+        assertEquals("", constructor.nativeName());
+        assertEquals(FoundryNativeDispatch.Kind.UTILITY_FUNCTION, utility.kind());
+        assertEquals("", utility.ownerNativeType());
+        assertEquals("void", voidMethod.returnNativeType());
+        assertEquals("", nameOnlyProperty.getterIdentity());
+        assertEquals("_get_data", nameOnlyProperty.getterNativeName());
+        assertEquals(-1, nameOnlyProperty.getterCompatibilityHash());
     }
 
     private static FoundryNativeDispatch method(

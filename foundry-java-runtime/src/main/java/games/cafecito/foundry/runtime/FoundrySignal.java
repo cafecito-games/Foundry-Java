@@ -13,7 +13,10 @@ public final class FoundrySignal implements AutoCloseable {
     private final Map<Long, FoundryCallable> listeners = new LinkedHashMap<>();
     private final NativeIdentity nativeIdentity;
     private long nextConnection;
+    private int activeNativeOperations;
     private boolean closed;
+    private boolean nativeReleaseInProgress;
+    private boolean nativeReleased;
 
     public FoundrySignal() {
         nativeIdentity = null;
@@ -51,6 +54,7 @@ public final class FoundrySignal implements AutoCloseable {
 
     public Connection connect(FoundryCallable callable) {
         FoundryCallable checked = Objects.requireNonNull(callable, "callable");
+        NativeIdentity identity;
         synchronized (lock) {
             requireOpen();
             if (nativeIdentity == null) {
@@ -58,36 +62,53 @@ public final class FoundrySignal implements AutoCloseable {
                 listeners.put(id, checked);
                 return new Connection(id, false);
             }
-            long connectionHandle =
-                    nativeIdentity
-                            .backend()
-                            .connect(
-                                    nativeIdentity.contextHandle(),
-                                    nativeIdentity.bridgeHandle(),
-                                    checked);
-            if (connectionHandle == 0) {
-                throw new IllegalStateException("Native Signal returned a null connection handle.");
-            }
-            return new Connection(connectionHandle, true);
+            identity = beginNativeOperation();
         }
+        long connectionHandle;
+        try {
+            connectionHandle =
+                    identity
+                            .backend()
+                            .connect(identity.contextHandle(), identity.bridgeHandle(), checked);
+        } finally {
+            NativeOperationCompletion completion = finishNativeOperation();
+            releaseNative(completion.release());
+        }
+        if (connectionHandle == 0) {
+            throw new IllegalStateException("Native Signal returned a null connection handle.");
+        }
+        synchronized (lock) {
+            if (closed) {
+                throw new IllegalStateException("Signal closed while connecting.");
+            }
+        }
+        return new Connection(connectionHandle, true);
     }
 
     public void emit(Variant... arguments) {
         List<Variant> values =
                 List.copyOf(List.of(Objects.requireNonNull(arguments, "arguments").clone()));
         List<FoundryCallable> snapshot;
+        NativeIdentity identity = null;
         synchronized (lock) {
             requireOpen();
             if (nativeIdentity != null) {
-                nativeIdentity
-                        .backend()
-                        .emit(
-                                nativeIdentity.contextHandle(),
-                                nativeIdentity.bridgeHandle(),
-                                values);
-                return;
+                identity = beginNativeOperation();
+                snapshot = null;
+            } else {
+                snapshot = new ArrayList<>(listeners.values());
             }
-            snapshot = new ArrayList<>(listeners.values());
+        }
+        if (identity != null) {
+            try {
+                identity
+                        .backend()
+                        .emit(identity.contextHandle(), identity.bridgeHandle(), values);
+            } finally {
+                NativeOperationCompletion completion = finishNativeOperation();
+                releaseNative(completion.release());
+            }
+            return;
         }
         for (FoundryCallable listener : snapshot) {
             listener.call(values);
@@ -96,19 +117,15 @@ public final class FoundrySignal implements AutoCloseable {
 
     @Override
     public void close() {
+        NativeIdentity release;
         synchronized (lock) {
-            if (closed) {
-                return;
+            if (!closed) {
+                closed = true;
+                listeners.clear();
             }
-            closed = true;
-            listeners.clear();
-            if (nativeIdentity != null) {
-                nativeIdentity
-                        .backend()
-                        .release(
-                                nativeIdentity.contextHandle(), nativeIdentity.bridgeHandle());
-            }
+            release = reserveNativeRelease();
         }
+        releaseNative(release);
     }
 
     private void requireOpen() {
@@ -124,10 +141,53 @@ public final class FoundrySignal implements AutoCloseable {
         return nativeIdentity;
     }
 
+    private NativeIdentity beginNativeOperation() {
+        activeNativeOperations++;
+        return nativeIdentity;
+    }
+
+    private NativeOperationCompletion finishNativeOperation() {
+        synchronized (lock) {
+            activeNativeOperations--;
+            return new NativeOperationCompletion(reserveNativeRelease());
+        }
+    }
+
+    private NativeIdentity reserveNativeRelease() {
+        if (closed
+                && activeNativeOperations == 0
+                && nativeIdentity != null
+                && !nativeReleaseInProgress
+                && !nativeReleased) {
+            nativeReleaseInProgress = true;
+            return nativeIdentity;
+        }
+        return null;
+    }
+
+    private void releaseNative(NativeIdentity identity) {
+        if (identity == null) {
+            return;
+        }
+        try {
+            identity.backend().release(identity.contextHandle(), identity.bridgeHandle());
+        } catch (RuntimeException | Error failure) {
+            synchronized (lock) {
+                nativeReleaseInProgress = false;
+            }
+            throw failure;
+        }
+        synchronized (lock) {
+            nativeReleaseInProgress = false;
+            nativeReleased = true;
+        }
+    }
+
     public final class Connection implements AutoCloseable {
         private final long id;
         private final boolean nativeConnection;
         private boolean disconnected;
+        private boolean disconnecting;
 
         private Connection(long id, boolean nativeConnection) {
             this.id = id;
@@ -144,20 +204,40 @@ public final class FoundrySignal implements AutoCloseable {
         }
 
         public void disconnect() {
+            NativeIdentity identity;
             synchronized (lock) {
-                if (disconnected) {
+                if (disconnected || disconnecting) {
                     return;
                 }
-                disconnected = true;
                 if (nativeConnection) {
-                    NativeIdentity identity = requireNativeIdentity();
-                    identity
-                            .backend()
-                            .disconnect(
-                                    identity.contextHandle(), identity.bridgeHandle(), id);
+                    if (closed) {
+                        disconnected = true;
+                        return;
+                    }
+                    disconnecting = true;
+                    identity = beginNativeOperation();
                 } else {
+                    disconnected = true;
                     listeners.remove(id);
+                    return;
                 }
+            }
+            try {
+                identity
+                        .backend()
+                        .disconnect(identity.contextHandle(), identity.bridgeHandle(), id);
+                synchronized (lock) {
+                    disconnected = true;
+                    disconnecting = false;
+                }
+            } catch (RuntimeException | Error failure) {
+                synchronized (lock) {
+                    disconnecting = false;
+                }
+                throw failure;
+            } finally {
+                NativeOperationCompletion completion = finishNativeOperation();
+                releaseNative(completion.release());
             }
         }
 
@@ -190,4 +270,6 @@ public final class FoundrySignal implements AutoCloseable {
             Objects.requireNonNull(backend, "backend");
         }
     }
+
+    private record NativeOperationCompletion(NativeIdentity release) {}
 }

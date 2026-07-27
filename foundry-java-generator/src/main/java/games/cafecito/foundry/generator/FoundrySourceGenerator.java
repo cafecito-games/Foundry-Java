@@ -655,7 +655,7 @@ public final class FoundrySourceGenerator {
         }
         List<FoundryApi.Entity> returnValues = children(callable, "return_value");
         return returnValues.isEmpty()
-                ? ""
+                ? "void"
                 : requiredString(
                         returnValues.get(0).source(), "type", returnValues.get(0).identity());
     }

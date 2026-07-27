@@ -9,7 +9,10 @@ import games.cafecito.foundry.types.Variant;
 import games.cafecito.foundry.types.VariantCodec;
 import games.cafecito.foundry.types.VariantConversionException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class CallAndSignalTest {
@@ -167,6 +170,55 @@ class CallAndSignalTest {
     }
 
     @Test
+    void nativeCallableDefersReleaseUntilAnActiveInvocationCompletes() throws Exception {
+        CountDownLatch invocationStarted = new CountDownLatch(1);
+        CountDownLatch allowInvocationToFinish = new CountDownLatch(1);
+        List<String> events = Collections.synchronizedList(new ArrayList<>());
+        FoundryCallable callable =
+                FoundryCallable.nativeBacked(
+                        11,
+                        41,
+                        0,
+                        new FoundryCallable.NativeBackend() {
+                            @Override
+                            public Variant invoke(
+                                    long contextHandle,
+                                    long bridgeHandle,
+                                    List<Variant> arguments) {
+                                events.add("invoke:start");
+                                invocationStarted.countDown();
+                                try {
+                                    assertTrue(
+                                            allowInvocationToFinish.await(5, TimeUnit.SECONDS));
+                                } catch (InterruptedException failure) {
+                                    Thread.currentThread().interrupt();
+                                    throw new AssertionError(failure);
+                                }
+                                events.add("invoke:end");
+                                return Variant.nil();
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long bridgeHandle) {
+                                events.add("release");
+                            }
+                        });
+        Thread invocation = new Thread(() -> callable.call(List.of()));
+
+        invocation.start();
+        assertTrue(invocationStarted.await(5, TimeUnit.SECONDS));
+        callable.close();
+        assertTrue(callable.isClosed());
+        assertTrue(events.equals(List.of("invoke:start")));
+
+        allowInvocationToFinish.countDown();
+        invocation.join(5_000);
+
+        assertFalse(invocation.isAlive());
+        assertEquals(List.of("invoke:start", "invoke:end", "release"), events);
+    }
+
+    @Test
     void signalBackendsKeepLocalBehaviorAndPreserveNativeIdentity() {
         FoundrySignal local = new FoundrySignal();
         List<String> events = new ArrayList<>();
@@ -241,6 +293,61 @@ class CallAndSignalTest {
                         "release:12:99"),
                 events);
         assertThrows(IllegalStateException.class, nativeValue::emit);
+    }
+
+    @Test
+    void nativeSignalDoesNotHoldItsMonitorAcrossBackendCalls() throws Exception {
+        CountDownLatch closeFinished = new CountDownLatch(1);
+        Thread[] closer = new Thread[1];
+        FoundrySignal[] signal = new FoundrySignal[1];
+        signal[0] =
+                FoundrySignal.nativeBacked(
+                        12,
+                        99,
+                        new FoundrySignal.NativeBackend() {
+                            @Override
+                            public long connect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    FoundryCallable callable) {
+                                return 1;
+                            }
+
+                            @Override
+                            public void disconnect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    long connectionHandle) {}
+
+                            @Override
+                            public void emit(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    List<Variant> arguments) {
+                                closer[0] =
+                                        new Thread(
+                                                () -> {
+                                                    signal[0].close();
+                                                    closeFinished.countDown();
+                                                });
+                                closer[0].start();
+                                try {
+                                    assertTrue(closeFinished.await(5, TimeUnit.SECONDS));
+                                } catch (InterruptedException failure) {
+                                    Thread.currentThread().interrupt();
+                                    throw new AssertionError(failure);
+                                }
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long signalHandle) {}
+                        });
+
+        signal[0].emit();
+        closer[0].join(5_000);
+
+        assertFalse(closer[0].isAlive());
+        assertThrows(IllegalStateException.class, signal[0]::emit);
     }
 
     static final class CallableObject extends FoundryObject {
