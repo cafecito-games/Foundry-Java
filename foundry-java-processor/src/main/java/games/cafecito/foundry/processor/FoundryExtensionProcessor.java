@@ -32,6 +32,7 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
         return Set.of(
                 ExtensionValidator.CLASS,
                 ExtensionValidator.CONSTANT,
+                ExtensionValidator.ENUM_VALUE,
                 ExtensionValidator.METHOD,
                 ExtensionValidator.PROPERTY,
                 ExtensionValidator.SIGNAL,

@@ -213,6 +213,7 @@ class FoundrySourceGeneratorTest {
         assertNotNull(utilities);
         assertNotNull(engine);
         assertNotNull(globalEnum);
+        assertTrue(globalEnum.contains("@games.cafecito.foundry.annotations.GeneratedByFoundry"));
         assertTrue(node.contains("public class Node extends Object"));
         assertTrue(node.contains("getChildren(boolean includeInternal)"));
         assertTrue(node.contains("getChildren()"));

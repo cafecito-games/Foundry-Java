@@ -33,6 +33,10 @@ class FoundryAnnotationApiTest {
                 RetentionPolicy.SOURCE,
                 new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.FIELD});
         assertAnnotation(
+                FoundryEnumValue.class,
+                RetentionPolicy.CLASS,
+                new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.FIELD});
+        assertAnnotation(
                 FoundrySignal.class,
                 RetentionPolicy.SOURCE,
                 new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.TYPE});
@@ -85,6 +89,10 @@ class FoundryAnnotationApiTest {
         assertEquals(String.class, method(FoundryConstant.class, "name").getReturnType());
         assertEquals(String.class, method(FoundryConstant.class, "enumName").getReturnType());
         assertEquals(boolean.class, method(FoundryConstant.class, "bitfield").getReturnType());
+        Map<String, Object> enumValueDefaults = new HashMap<>();
+        enumValueDefaults.put("value", null);
+        assertMembers(FoundryEnumValue.class, enumValueDefaults);
+        assertEquals(long.class, method(FoundryEnumValue.class, "value").getReturnType());
         assertMembers(FoundrySignal.class, Map.of("name", ""));
         assertMembers(FoundryOverride.class, Map.of("name", ""));
         assertEquals(

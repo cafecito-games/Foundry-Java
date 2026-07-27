@@ -1890,6 +1890,7 @@ public final class FoundrySourceGenerator {
         source.append("/** Foundry global enum ")
                 .append(javaStringBody(sourceName(enumEntity)))
                 .append(". */\n")
+                .append("@games.cafecito.foundry.annotations.GeneratedByFoundry\n")
                 .append("public enum ")
                 .append(name)
                 .append(" {\n");
