@@ -18,6 +18,7 @@ games.cafecito.foundry.runtime.FoundryBindingContext|public games.cafecito.found
 games.cafecito.foundry.runtime.FoundryBindingContext|public games.cafecito.foundry.runtime.FoundryBindingContext(long, games.cafecito.foundry.runtime.FoundryEngine);
 games.cafecito.foundry.runtime.FoundryBindingContext|public games.cafecito.foundry.runtime.FoundryEngine engine();
 games.cafecito.foundry.runtime.FoundryBindingContext|public games.cafecito.foundry.types.Variant call(long, java.lang.String, java.util.List<games.cafecito.foundry.types.Variant>);
+games.cafecito.foundry.runtime.FoundryBindingContext|public java.lang.String foundryTypeForJavaName(java.lang.String);
 games.cafecito.foundry.runtime.FoundryBindingContext|public long contextHandle();
 games.cafecito.foundry.runtime.FoundryBindingContext|public void close();
 games.cafecito.foundry.runtime.FoundryBindingContext|public void invalidateObject(long);

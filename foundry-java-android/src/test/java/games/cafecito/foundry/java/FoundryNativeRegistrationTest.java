@@ -31,7 +31,6 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.junit.jupiter.api.Test;
@@ -277,8 +276,7 @@ class FoundryNativeRegistrationTest {
                         String[].class,
                         String.class,
                         Variant[].class);
-        Method toString =
-                privateStatic("nativeExtensionToStringV1", String.class, Object.class);
+        Method toString = privateStatic("nativeExtensionToStringV1", String.class, Object.class);
         RegistrationGateway gateway = new RegistrationGateway();
         FoundryNativeEngine engine =
                 new FoundryNativeEngine(15, GeneratedNativeDispatch::require, gateway);
@@ -286,7 +284,8 @@ class FoundryNativeRegistrationTest {
         RecordingAccess access = new RecordingAccess();
 
         access.result = Long.valueOf(91);
-        assertEquals(91, ((Variant) get.invoke(null, 15L, access, access, "mode", "long")).asLong());
+        assertEquals(
+                91, ((Variant) get.invoke(null, 15L, access, access, "mode", "long")).asLong());
         set.invoke(null, 15L, access, access, "letter", "char", Variant.of(65L));
         assertEquals(Character.valueOf('A'), access.propertyValue);
 
@@ -343,7 +342,10 @@ class FoundryNativeRegistrationTest {
                 };
         Constructor<FoundryNativeEngine> constructor =
                 FoundryNativeEngine.class.getDeclaredConstructor(
-                        long.class, Function.class, FoundryNativeEngine.NativeGateway.class, Consumer.class);
+                        long.class,
+                        Function.class,
+                        FoundryNativeEngine.NativeGateway.class,
+                        Consumer.class);
         constructor.setAccessible(true);
         Function<String, FoundryNativeDispatch> dispatchLookup = GeneratedNativeDispatch::require;
         FoundryNativeEngine engine =
@@ -359,16 +361,13 @@ class FoundryNativeRegistrationTest {
     }
 
     @Test
-    void resolvesGeneratedAndWholeCatalogObjectTypesOnlyDuringRegistration()
-            throws Exception {
+    void resolvesGeneratedAndWholeCatalogObjectTypesOnlyDuringRegistration() throws Exception {
         Method resolve =
-                privateStatic(
-                        "nativeRegistrationFoundryTypeV1", String.class, String.class);
+                privateStatic("nativeRegistrationFoundryTypeV1", String.class, String.class);
         RegistrationGateway gateway = new RegistrationGateway();
         FoundryNativeEngine engine =
                 new FoundryNativeEngine(17, GeneratedNativeDispatch::require, gateway);
-        FoundryClassDescriptor first =
-                descriptor("demo.RenamedExtension", "ExportedExtension");
+        FoundryClassDescriptor first = descriptor("demo.RenamedExtension", "ExportedExtension");
         FoundryClassDescriptor second = descriptor("demo.Consumer", "Consumer");
         List<List<String>> resolutionHistory = new ArrayList<>();
         gateway.registrationProbe =
@@ -379,20 +378,16 @@ class FoundryNativeRegistrationTest {
                                         invokeString(resolve, Node3D.class.getName()),
                                         invokeString(resolve, first.javaName())));
                     } else {
-                        resolutionHistory.add(
-                                List.of(invokeString(resolve, first.javaName())));
+                        resolutionHistory.add(List.of(invokeString(resolve, first.javaName())));
                     }
                 };
         FoundryRegistryCoordinator coordinator =
-                new FoundryRegistryCoordinator(
-                        bootstrap(first, second), ignored -> engine);
+                new FoundryRegistryCoordinator(bootstrap(first, second), ignored -> engine);
 
         assertTrue(coordinator.initialize(17, 0));
 
         assertEquals(
-                List.of(
-                        List.of("ExportedExtension"),
-                        List.of("Node3D", "ExportedExtension")),
+                List.of(List.of("ExportedExtension"), List.of("Node3D", "ExportedExtension")),
                 resolutionHistory);
         assertEquals(null, resolve.invoke(null, Node3D.class.getName()));
         coordinator.invalidate(17);
@@ -401,8 +396,7 @@ class FoundryNativeRegistrationTest {
     @Test
     void failedRegistrationDoesNotPublishItsJavaObjectType() throws Exception {
         Method resolve =
-                privateStatic(
-                        "nativeRegistrationFoundryTypeV1", String.class, String.class);
+                privateStatic("nativeRegistrationFoundryTypeV1", String.class, String.class);
         RegistrationGateway gateway = new RegistrationGateway();
         FoundryNativeEngine engine =
                 new FoundryNativeEngine(18, GeneratedNativeDispatch::require, gateway);
@@ -411,8 +405,7 @@ class FoundryNativeRegistrationTest {
         gateway.registrationFailure = new IllegalArgumentException("object_type");
 
         assertThrows(
-                IllegalArgumentException.class,
-                () -> engine.registerExtensionClass(18, failed));
+                IllegalArgumentException.class, () -> engine.registerExtensionClass(18, failed));
 
         gateway.registrationFailure = null;
         gateway.registrationProbe =
@@ -426,11 +419,9 @@ class FoundryNativeRegistrationTest {
     }
 
     @Test
-    void resolvesForwardAndCyclicRenamedTypesFromTheWholeValidatedCatalog()
-            throws Exception {
+    void resolvesForwardAndCyclicRenamedTypesFromTheWholeValidatedCatalog() throws Exception {
         Method resolve =
-                privateStatic(
-                        "nativeRegistrationFoundryTypeV1", String.class, String.class);
+                privateStatic("nativeRegistrationFoundryTypeV1", String.class, String.class);
         FoundryClassDescriptor alpha =
                 descriptorWithMemberType(
                         "demo.AlphaExtension", "RenamedAlpha", "demo.ZetaExtension");
@@ -448,13 +439,11 @@ class FoundryNativeRegistrationTest {
                                         invokeString(resolve, zeta.javaName()),
                                         invokeString(resolve, alpha.javaName()));
                     } else {
-                        gateway.resolvedTypes =
-                                List.of(invokeString(resolve, alpha.javaName()));
+                        gateway.resolvedTypes = List.of(invokeString(resolve, alpha.javaName()));
                     }
                 };
         FoundryRegistryCoordinator coordinator =
-                new FoundryRegistryCoordinator(
-                        bootstrap(alpha, zeta), ignored -> engine);
+                new FoundryRegistryCoordinator(bootstrap(alpha, zeta), ignored -> engine);
 
         assertTrue(coordinator.initialize(19, 0));
 
@@ -462,8 +451,7 @@ class FoundryNativeRegistrationTest {
         coordinator.invalidate(19);
     }
 
-    private static FoundryRegistryBootstrap bootstrap(
-            FoundryClassDescriptor... descriptors) {
+    private static FoundryRegistryBootstrap bootstrap(FoundryClassDescriptor... descriptors) {
         FoundryModuleDescriptor module =
                 new FoundryModuleDescriptor(
                         FoundryModuleDescriptor.CURRENT_FORMAT,
@@ -495,13 +483,7 @@ class FoundryNativeRegistrationTest {
 
     private static FoundryClassDescriptor descriptor(String javaName, String foundryName) {
         return new FoundryClassDescriptor(
-                javaName,
-                foundryName,
-                "Node3D",
-                "CORE",
-                List.of(),
-                noOpAccess(),
-                List.of());
+                javaName, foundryName, "Node3D", "CORE", List.of(), noOpAccess(), List.of());
     }
 
     private static String invokeString(Method method, String argument) {
@@ -523,7 +505,9 @@ class FoundryNativeRegistrationTest {
     private static FoundryExtensionAccess noOpAccess() {
         return new FoundryExtensionAccess() {
             @Override
-            public Object construct(FoundryBindingContext context, games.cafecito.foundry.runtime.ObjectLease lease) {
+            public Object construct(
+                    FoundryBindingContext context,
+                    games.cafecito.foundry.runtime.ObjectLease lease) {
                 return new Object();
             }
 
@@ -649,8 +633,7 @@ class FoundryNativeRegistrationTest {
                 long contextHandle, long callbackHandle, Throwable failure) {}
 
         @Override
-        public void registerExtensionClass(
-                long contextHandle, FoundryClassDescriptor descriptor) {
+        public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {
             registrationProbe.accept(descriptor);
             if (registrationFailure != null) {
                 throw registrationFailure;

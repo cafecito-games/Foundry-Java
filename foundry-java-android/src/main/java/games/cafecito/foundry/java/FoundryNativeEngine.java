@@ -1372,13 +1372,12 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
     private static Object registrationArgument(String javaType, Variant value) {
         return switch (javaType) {
             case "boolean" -> value.asBoolean();
-            case "byte" -> (byte) registrationInteger(value, Byte.MIN_VALUE, Byte.MAX_VALUE, "byte");
+            case "byte" ->
+                    (byte) registrationInteger(value, Byte.MIN_VALUE, Byte.MAX_VALUE, "byte");
             case "short" ->
                     (short) registrationInteger(value, Short.MIN_VALUE, Short.MAX_VALUE, "short");
             case "int" ->
-                    (int)
-                            registrationInteger(
-                                    value, Integer.MIN_VALUE, Integer.MAX_VALUE, "int");
+                    (int) registrationInteger(value, Integer.MIN_VALUE, Integer.MAX_VALUE, "int");
             case "long" -> value.asLong();
             case "char" ->
                     (char)
@@ -1394,7 +1393,8 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
         };
     }
 
-    private static long registrationInteger(Variant value, long minimum, long maximum, String type) {
+    private static long registrationInteger(
+            Variant value, long minimum, long maximum, String type) {
         long numeric = value.asLong();
         if (numeric < minimum || numeric > maximum) {
             throw new IllegalArgumentException(
@@ -1416,12 +1416,13 @@ public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingC
             case "int" -> Variant.of(exactResult(value, Integer.class, javaType));
             case "long" -> Variant.of(exactResult(value, Long.class, javaType));
             case "char" ->
-                    Variant.of(
-                            (long) exactResult(value, Character.class, javaType).charValue());
+                    Variant.of((long) exactResult(value, Character.class, javaType).charValue());
             case "float" -> Variant.of(exactResult(value, Float.class, javaType));
             case "double" -> Variant.of(exactResult(value, Double.class, javaType));
             case "String", "java.lang.String" ->
-                    value == null ? Variant.nil() : Variant.of(exactResult(value, String.class, javaType));
+                    value == null
+                            ? Variant.nil()
+                            : Variant.of(exactResult(value, String.class, javaType));
             default -> Variant.of(value);
         };
     }

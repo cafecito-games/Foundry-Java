@@ -86,8 +86,7 @@ class FoundryJavaInitializerTest {
         assertFalse(rules.contains("-keep class *"));
         assertFalse(rules.contains("FoundryPlugin"));
         assertTrue(
-                rules.contains(
-                        "-dontwarn games.cafecito.foundry.annotations.GeneratedByFoundry"));
+                rules.contains("-dontwarn games.cafecito.foundry.annotations.GeneratedByFoundry"));
     }
 
     @Test

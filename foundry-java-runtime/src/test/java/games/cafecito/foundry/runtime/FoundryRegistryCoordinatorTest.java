@@ -104,20 +104,14 @@ class FoundryRegistryCoordinatorTest {
         RecordingEngine engine = new RecordingEngine();
         AtomicReference<FoundryBindingContext> contextReference = new AtomicReference<>();
         FoundryClassDescriptor alpha =
-                typeWithMemberType(
-                        "example.Alpha", "RenamedAlpha", "example.Zeta");
+                typeWithMemberType("example.Alpha", "RenamedAlpha", "example.Zeta");
         FoundryClassDescriptor zeta =
-                typeWithMemberType(
-                        "example.Zeta", "RenamedZeta", "example.Alpha");
+                typeWithMemberType("example.Zeta", "RenamedZeta", "example.Alpha");
         engine.registerReentry =
                 () -> {
                     FoundryBindingContext context = contextReference.get();
-                    assertEquals(
-                            "RenamedAlpha",
-                            context.foundryTypeForJavaName("example.Alpha"));
-                    assertEquals(
-                            "RenamedZeta",
-                            context.foundryTypeForJavaName("example.Zeta"));
+                    assertEquals("RenamedAlpha", context.foundryTypeForJavaName("example.Alpha"));
+                    assertEquals("RenamedZeta", context.foundryTypeForJavaName("example.Zeta"));
                 };
         FoundryRegistryCoordinator coordinator =
                 new FoundryRegistryCoordinator(
