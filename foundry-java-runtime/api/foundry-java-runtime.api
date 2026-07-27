@@ -1,5 +1,5 @@
-games.cafecito.foundry.generated|public-api-lines 33114
-games.cafecito.foundry.generated|public-api-sha256 3f30bded9ab7ce5a2877109c3f21e94c19c587dc147dd98527e50221f42de852
+games.cafecito.foundry.generated|public-api-lines 33116
+games.cafecito.foundry.generated|public-api-sha256 e817c371f8840a5c999d207dd00e058f97a743f7cf601e1d35d19e720b45e433
 games.cafecito.foundry.runtime.CallbackRegistry|public boolean isEnabled();
 games.cafecito.foundry.runtime.CallbackRegistry|public boolean unregister(long);
 games.cafecito.foundry.runtime.CallbackRegistry|public final class games.cafecito.foundry.runtime.CallbackRegistry {
@@ -39,13 +39,23 @@ games.cafecito.foundry.runtime.FoundryCallException|public games.cafecito.foundr
 games.cafecito.foundry.runtime.FoundryCallException|public int argumentIndex();
 games.cafecito.foundry.runtime.FoundryCallException|public java.lang.String expectedType();
 games.cafecito.foundry.runtime.FoundryCallException|public java.lang.String methodIdentity();
+games.cafecito.foundry.runtime.FoundryCallable$NativeBackend|public abstract games.cafecito.foundry.types.Variant invoke(long, long, java.util.List<games.cafecito.foundry.types.Variant>);
+games.cafecito.foundry.runtime.FoundryCallable$NativeBackend|public abstract void release(long, long);
+games.cafecito.foundry.runtime.FoundryCallable$NativeBackend|public interface games.cafecito.foundry.runtime.FoundryCallable$NativeBackend {
+games.cafecito.foundry.runtime.FoundryCallable|public boolean isLocal();
+games.cafecito.foundry.runtime.FoundryCallable|public boolean isNativeBacked();
 games.cafecito.foundry.runtime.FoundryCallable|public boolean isVariadic();
-games.cafecito.foundry.runtime.FoundryCallable|public final class games.cafecito.foundry.runtime.FoundryCallable {
+games.cafecito.foundry.runtime.FoundryCallable|public final class games.cafecito.foundry.runtime.FoundryCallable implements java.lang.AutoCloseable {
 games.cafecito.foundry.runtime.FoundryCallable|public games.cafecito.foundry.types.Variant call(java.util.List<games.cafecito.foundry.types.Variant>);
 games.cafecito.foundry.runtime.FoundryCallable|public int arity();
+games.cafecito.foundry.runtime.FoundryCallable|public long nativeBridgeHandle();
+games.cafecito.foundry.runtime.FoundryCallable|public long nativeContextHandle();
 games.cafecito.foundry.runtime.FoundryCallable|public static <T, R> games.cafecito.foundry.runtime.FoundryCallable unary(games.cafecito.foundry.types.VariantCodec<T>, games.cafecito.foundry.types.VariantCodec<R>, java.util.function.Function<T, R>);
 games.cafecito.foundry.runtime.FoundryCallable|public static games.cafecito.foundry.runtime.FoundryCallable fixed(int, java.util.function.Function<java.util.List<games.cafecito.foundry.types.Variant>, games.cafecito.foundry.types.Variant>);
+games.cafecito.foundry.runtime.FoundryCallable|public static games.cafecito.foundry.runtime.FoundryCallable nativeBacked(long, long, int, games.cafecito.foundry.runtime.FoundryCallable$NativeBackend);
 games.cafecito.foundry.runtime.FoundryCallable|public static games.cafecito.foundry.runtime.FoundryCallable variadic(java.util.function.Function<java.util.List<games.cafecito.foundry.types.Variant>, games.cafecito.foundry.types.Variant>);
+games.cafecito.foundry.runtime.FoundryCallable|public synchronized boolean isClosed();
+games.cafecito.foundry.runtime.FoundryCallable|public void close();
 games.cafecito.foundry.runtime.FoundryClassDescriptor|public final boolean equals(java.lang.Object);
 games.cafecito.foundry.runtime.FoundryClassDescriptor|public final class games.cafecito.foundry.runtime.FoundryClassDescriptor extends java.lang.Record {
 games.cafecito.foundry.runtime.FoundryClassDescriptor|public final int hashCode();
@@ -126,6 +136,41 @@ games.cafecito.foundry.runtime.FoundryModuleDescriptor|public java.util.List<gam
 games.cafecito.foundry.runtime.FoundryModuleDescriptor|public static final int CURRENT_FORMAT;
 games.cafecito.foundry.runtime.FoundryModuleProvider|public abstract games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor();
 games.cafecito.foundry.runtime.FoundryModuleProvider|public interface games.cafecito.foundry.runtime.FoundryModuleProvider {
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public final class games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind extends java.lang.Enum<games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind> {
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public int wireCode();
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind BUILTIN_CONSTANT;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind BUILTIN_CONSTRUCTOR;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind BUILTIN_MEMBER;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind BUILTIN_METHOD;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind BUILTIN_OPERATOR;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind CLASS_METHOD;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind CLASS_PROPERTY;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind CLASS_SIGNAL;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static final games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind UTILITY_FUNCTION;
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind valueOf(java.lang.String);
+games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind|public static games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind[] values();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public boolean staticCall();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public boolean vararg();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public final boolean equals(java.lang.Object);
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public final class games.cafecito.foundry.runtime.FoundryNativeDispatch extends java.lang.Record {
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public final int hashCode();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public final java.lang.String toString();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind kind();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public games.cafecito.foundry.runtime.FoundryNativeDispatch(java.lang.String, games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind, java.lang.String, java.lang.String, long, int, java.util.List<java.lang.String>, int, java.lang.String, java.lang.String, java.lang.String, long, java.lang.String, java.lang.String, long, boolean, boolean);
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public int constructorIndex();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public int minimumArgumentCount();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String getterIdentity();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String getterNativeName();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String identity();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String nativeName();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String ownerNativeType();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String returnNativeType();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String setterIdentity();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.lang.String setterNativeName();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public java.util.List<java.lang.String> argumentNativeTypes();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public long compatibilityHash();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public long getterCompatibilityHash();
+games.cafecito.foundry.runtime.FoundryNativeDispatch|public long setterCompatibilityHash();
 games.cafecito.foundry.runtime.FoundryNativeHandle|public <U> games.cafecito.foundry.runtime.FoundryNativeHandle<T> requireType(java.lang.Class<U>);
 games.cafecito.foundry.runtime.FoundryNativeHandle|public boolean isNull();
 games.cafecito.foundry.runtime.FoundryNativeHandle|public final boolean equals(java.lang.Object);
@@ -178,9 +223,20 @@ games.cafecito.foundry.runtime.FoundrySignal$Connection|public boolean isConnect
 games.cafecito.foundry.runtime.FoundrySignal$Connection|public final class games.cafecito.foundry.runtime.FoundrySignal$Connection implements java.lang.AutoCloseable {
 games.cafecito.foundry.runtime.FoundrySignal$Connection|public void close();
 games.cafecito.foundry.runtime.FoundrySignal$Connection|public void disconnect();
-games.cafecito.foundry.runtime.FoundrySignal|public final class games.cafecito.foundry.runtime.FoundrySignal {
+games.cafecito.foundry.runtime.FoundrySignal$NativeBackend|public abstract long connect(long, long, games.cafecito.foundry.runtime.FoundryCallable);
+games.cafecito.foundry.runtime.FoundrySignal$NativeBackend|public abstract void disconnect(long, long, long);
+games.cafecito.foundry.runtime.FoundrySignal$NativeBackend|public abstract void emit(long, long, java.util.List<games.cafecito.foundry.types.Variant>);
+games.cafecito.foundry.runtime.FoundrySignal$NativeBackend|public abstract void release(long, long);
+games.cafecito.foundry.runtime.FoundrySignal$NativeBackend|public interface games.cafecito.foundry.runtime.FoundrySignal$NativeBackend {
+games.cafecito.foundry.runtime.FoundrySignal|public boolean isLocal();
+games.cafecito.foundry.runtime.FoundrySignal|public boolean isNativeBacked();
+games.cafecito.foundry.runtime.FoundrySignal|public final class games.cafecito.foundry.runtime.FoundrySignal implements java.lang.AutoCloseable {
 games.cafecito.foundry.runtime.FoundrySignal|public games.cafecito.foundry.runtime.FoundrySignal$Connection connect(games.cafecito.foundry.runtime.FoundryCallable);
 games.cafecito.foundry.runtime.FoundrySignal|public games.cafecito.foundry.runtime.FoundrySignal();
+games.cafecito.foundry.runtime.FoundrySignal|public long nativeBridgeHandle();
+games.cafecito.foundry.runtime.FoundrySignal|public long nativeContextHandle();
+games.cafecito.foundry.runtime.FoundrySignal|public static games.cafecito.foundry.runtime.FoundrySignal nativeBacked(long, long, games.cafecito.foundry.runtime.FoundrySignal$NativeBackend);
+games.cafecito.foundry.runtime.FoundrySignal|public void close();
 games.cafecito.foundry.runtime.FoundrySignal|public void emit(games.cafecito.foundry.types.Variant...);
 games.cafecito.foundry.runtime.FoundryTypedSignal$Of0$Listener|public abstract void accept();
 games.cafecito.foundry.runtime.FoundryTypedSignal$Of0$Listener|public interface games.cafecito.foundry.runtime.FoundryTypedSignal$Of0$Listener {

@@ -953,6 +953,11 @@ val allowedBootstrapAndroidClasses =
         "games/cafecito/foundry/java/FoundryJavaInitializer.class",
         "games/cafecito/foundry/java/FoundryJavaStartupProvider\$Primer.class",
         "games/cafecito/foundry/java/FoundryJavaStartupProvider.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$1.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$JniNativeGateway.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$NativeGateway.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$SignalBackend.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine.class",
     )
 val requiredAndroidNativeLibraries =
     setOf(

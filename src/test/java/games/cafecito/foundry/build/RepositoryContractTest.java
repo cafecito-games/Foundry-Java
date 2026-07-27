@@ -335,13 +335,56 @@ class RepositoryContractTest {
                                 + "FoundryJavaStartupProvider\\$Primer.class\",\n"
                                 + "        \"games/cafecito/foundry/java/"
                                 + "FoundryJavaStartupProvider.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$1.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$JniNativeGateway.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$NativeGateway.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine\\$SignalBackend.class\",\n"
+                                + "        \"games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine.class\",\n"
                                 + "    )"));
+        int allowlistStart = rootBuild.indexOf("val allowedBootstrapAndroidClasses =");
+        int allowlistEnd =
+                rootBuild.indexOf("val requiredAndroidNativeLibraries =", allowlistStart);
+        String allowlist = rootBuild.substring(allowlistStart, allowlistEnd);
+        assertFalse(allowlist.contains("games/cafecito/foundry/generated/"));
+        assertFalse(allowlist.contains("games/cafecito/foundry/runtime/"));
+        assertFalse(allowlist.contains("FoundryGenerated"));
         assertTrue(rootBuild.contains("expectedFixedConfiguration"));
         assertTrue(rootBuild.contains("expectedConsumerRules"));
         assertTrue(rootBuild.contains("Release AAR manifest must not declare an application"));
         assertTrue(rootBuild.contains("Release AAR manifest must not declare a provider"));
         assertFalse(rootBuild.contains("substringAfterLast('/').contains(\"Host\")"));
         assertTrue(rootBuild.contains("libfoundry_android.so"));
+    }
+
+    @Test
+    void nativeDispatchSourceOwnershipIsExplicitAndNonReflective() throws IOException {
+        String generator =
+                read(
+                        "foundry-java-generator/src/main/java/games/cafecito/foundry/generator/"
+                                + "FoundrySourceGenerator.java");
+        String nativeEngine =
+                read(
+                        "foundry-java-android/src/main/java/games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine.java");
+
+        assertTrue(generator.contains("GeneratedNativeDispatch.java"));
+        assertTrue(generator.contains("GeneratedNativeDispatchShard"));
+        assertTrue(
+                Files.isRegularFile(
+                        ROOT.resolve(
+                                "foundry-java-runtime/src/main/java/games/cafecito/foundry/runtime/"
+                                        + "FoundryNativeDispatch.java")));
+        assertTrue(
+                nativeEngine.contains(
+                        "import games.cafecito.foundry.generated.GeneratedNativeDispatch;"));
+        assertTrue(nativeEngine.contains("GeneratedNativeDispatch::require"));
+        assertFalse(nativeEngine.contains("Class.forName"));
+        assertFalse(nativeEngine.contains("getDeclaredMethod"));
     }
 
     private static String read(String relativePath) throws IOException {
