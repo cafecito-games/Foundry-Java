@@ -198,13 +198,13 @@ public abstract class RegistryIndexTask extends DefaultTask {
             try (ZipFile archive = new ZipFile(artifact.toFile())) {
                 byte[] configuration = null;
                 Set<String> bridgeAbis = new java.util.TreeSet<>();
+                Set<String> forbiddenHostEntries = new java.util.TreeSet<>();
                 for (ZipEntry entry :
                         archive.stream().filter(item -> !item.isDirectory()).toList()) {
                     String name = entry.getName();
                     if (name.equals("libfoundry_android.so")
                             || name.endsWith("/libfoundry_android.so")) {
-                        throw new GradleException(
-                                artifact + ": forbidden host payload " + name + ".");
+                        forbiddenHostEntries.add(name);
                     }
                     String bridgeAbi = bridgeAbi(name);
                     if (bridgeAbi != null && !bridgeAbis.add(bridgeAbi)) {
@@ -238,7 +238,15 @@ public abstract class RegistryIndexTask extends DefaultTask {
                         configuration = nestedConfiguration;
                     }
                 }
-                if (configuration != null || !bridgeAbis.isEmpty()) {
+                boolean bindingClaimant = configuration != null || !bridgeAbis.isEmpty();
+                if (bindingClaimant && !forbiddenHostEntries.isEmpty()) {
+                    throw new GradleException(
+                            artifact
+                                    + ": forbidden host payload "
+                                    + String.join(", ", forbiddenHostEntries)
+                                    + ".");
+                }
+                if (bindingClaimant) {
                     payloads.add(
                             new PayloadScan(
                                     new DescriptorValidator.AndroidPayload(

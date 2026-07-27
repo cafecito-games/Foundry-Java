@@ -12,7 +12,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
 import java.util.zip.CRC32;
@@ -218,6 +220,78 @@ class FoundryJavaPluginTest {
     }
 
     @Test
+    void hostOnlyAarKeepsItsNativeRuntimeAndContributesModuleDescriptors() throws IOException {
+        Path host =
+                aar(
+                        temporaryDirectory.resolve("foundry-host.aar"),
+                        "META-INF/foundry-java/modules/host.descriptor",
+                        descriptor("host", "example.HostRegistry"),
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_android.so", new byte[] {1})));
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("foundry-java-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project =
+                projectWithPayloads("host-and-binding", List.of(host, binding), List.of("x86_64"));
+
+        run(project, "generateFoundryJavaRegistry");
+
+        assertEquals(
+                List.of("module=demo|example.DemoRegistry", "module=host|example.HostRegistry"),
+                Files.readAllLines(project.resolve(INDEX)).stream()
+                        .filter(line -> line.startsWith("module="))
+                        .toList());
+        assertArrayEquals(
+                BINDING_CONFIGURATION, Files.readAllBytes(project.resolve(CONFIGURATION)));
+        String bootstrap = Files.readString(project.resolve(BOOTSTRAP));
+        assertTrue(bootstrap.contains("example.DemoRegistry.PROVIDER"));
+        assertTrue(bootstrap.contains("example.HostRegistry.PROVIDER"));
+    }
+
+    @Test
+    void bindingClaimantsRejectEverySortedForbiddenHostEntry() throws IOException {
+        List<String> forbiddenEntries =
+                List.of("jni/arm64-v8a/libfoundry_android.so", "jni/x86_64/libfoundry_android.so");
+        List<List<RawZipEntry>> claimantPayloads =
+                List.of(
+                        List.of(
+                                new RawZipEntry(
+                                        "FoundryJava.foundryextension", BINDING_CONFIGURATION)),
+                        List.of(new RawZipEntry("jni/x86_64/libfoundry_java.so", new byte[] {1})),
+                        List.of(
+                                new RawZipEntry(
+                                        "FoundryJava.foundryextension", BINDING_CONFIGURATION),
+                                new RawZipEntry("jni/x86_64/libfoundry_java.so", new byte[] {1})));
+        for (int index = 0; index < claimantPayloads.size(); index++) {
+            List<RawZipEntry> entries = new ArrayList<>(claimantPayloads.get(index));
+            entries.add(new RawZipEntry("jni/x86_64/libfoundry_android.so", new byte[] {2}));
+            entries.add(new RawZipEntry("jni/arm64-v8a/libfoundry_android.so", new byte[] {3}));
+            Path claimant =
+                    aar(
+                            temporaryDirectory.resolve("claimant-" + index + ".aar"),
+                            null,
+                            null,
+                            entries);
+            Path project =
+                    projectWithPayloads(
+                            "forbidden-claimant-" + index, List.of(claimant), List.of("x86_64"));
+
+            BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+            assertTrue(failure.getOutput().contains(claimant.toAbsolutePath().toString()));
+            int first = failure.getOutput().indexOf(forbiddenEntries.get(0));
+            int second = failure.getOutput().indexOf(forbiddenEntries.get(1));
+            assertTrue(first >= 0);
+            assertTrue(second > first);
+            assertFalse(Files.exists(project.resolve(INDEX)));
+        }
+    }
+
+    @Test
     void duplicateBridgeAndConfigurationPayloadsFailBeforeGeneration() throws IOException {
         Path first =
                 bindingAar(
@@ -374,13 +448,22 @@ class FoundryJavaPluginTest {
     @Test
     void minifiedReleasePackagesOneIndexConfigAndSelectedAbiWithCustomApplicationId()
             throws IOException {
+        Path host =
+                aar(
+                        temporaryDirectory.resolve("minified-host.aar"),
+                        null,
+                        null,
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_android.so", new byte[] {1})));
         Path binding =
                 bindingAar(
                         temporaryDirectory.resolve("minified-binding.aar"),
                         "demo",
                         "example.DemoRegistry",
                         List.of("arm64-v8a", "x86_64"));
-        Path project = androidProject("minified-release", binding, List.of("x86_64"));
+        Path project =
+                androidProject("minified-release", List.of(host, binding), List.of("x86_64"));
         writeBootstrapStubs(project);
 
         run(project, "assembleRelease", "--configuration-cache");
@@ -414,10 +497,8 @@ class FoundryJavaPluginTest {
                     archive.getInputStream(archive.getEntry("assets/FoundryJava.foundryextension"))
                             .readAllBytes());
             assertTrue(archive.getEntry("lib/x86_64/libfoundry_java.so") != null);
+            assertTrue(archive.getEntry("lib/x86_64/libfoundry_android.so") != null);
             assertFalse(archive.stream().anyMatch(entry -> entry.getName().contains("arm64-v8a")));
-            assertFalse(
-                    archive.stream()
-                            .anyMatch(entry -> entry.getName().endsWith("libfoundry_android.so")));
         }
         String mapping =
                 Files.readString(project.resolve("build/outputs/mapping/release/mapping.txt"));
@@ -459,13 +540,23 @@ class FoundryJavaPluginTest {
 
     @Test
     void agp891DownstreamUsesPublicVariantsAndPackagesTheValidatedPayload() throws Exception {
+        Path host =
+                aar(
+                        temporaryDirectory.resolve("agp-8.9.1-host.aar"),
+                        null,
+                        null,
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_android.so", new byte[] {1})));
         Path binding =
                 bindingAar(
                         temporaryDirectory.resolve("agp-8.9.1-binding.aar"),
                         "demo",
                         "example.DemoRegistry",
                         List.of("arm64-v8a", "x86_64"));
-        Path project = androidProject("agp-8.9.1-downstream", binding, List.of("x86_64"));
+        Path project =
+                androidProject("agp-8.9.1-downstream", List.of(host, binding), List.of("x86_64"));
+        writeIsolatedGradleJvm(project, "agp891");
         Files.writeString(
                 project.resolve("build.gradle"),
                 Files.readString(project.resolve("build.gradle"))
@@ -505,6 +596,7 @@ class FoundryJavaPluginTest {
                         .orElseThrow();
         try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(apk.toFile())) {
             assertTrue(archive.getEntry("lib/x86_64/libfoundry_java.so") != null);
+            assertTrue(archive.getEntry("lib/x86_64/libfoundry_android.so") != null);
             assertFalse(archive.stream().anyMatch(entry -> entry.getName().contains("arm64-v8a")));
             assertEquals(
                     List.of("assets/FoundryJava.foundryextension"),
@@ -516,6 +608,166 @@ class FoundryJavaPluginTest {
                     BINDING_CONFIGURATION,
                     archive.getInputStream(archive.getEntry("assets/FoundryJava.foundryextension"))
                             .readAllBytes());
+        }
+    }
+
+    @Test
+    void stagedMavenTopologyPreservesTheHostAndReusesConfigurationCache() throws Exception {
+        Path repository = temporaryDirectory.resolve("staged-maven-repository");
+        Path plugin = pluginJar(temporaryDirectory.resolve("foundry-java-gradle-plugin-1.jar"));
+        Path annotations = emptyJar(temporaryDirectory.resolve("foundry-java-annotations-1.jar"));
+        Path apiModel = emptyJar(temporaryDirectory.resolve("foundry-java-api-model-1.jar"));
+        Path runtime = emptyJar(temporaryDirectory.resolve("foundry-java-runtime-1.jar"));
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("foundry-java-android-1.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("arm64-v8a", "x86_64"));
+        Path host =
+                aar(
+                        temporaryDirectory.resolve("foundry-host-1.aar"),
+                        null,
+                        null,
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_android.so", new byte[] {1})));
+        publishMavenArtifact(
+                repository,
+                "games.cafecito",
+                "foundry-java-gradle-plugin",
+                "1",
+                "jar",
+                plugin,
+                List.of());
+        publishMavenArtifact(
+                repository,
+                "games.cafecito.foundry.java",
+                "games.cafecito.foundry.java.gradle.plugin",
+                "1",
+                "pom",
+                null,
+                List.of(
+                        new MavenDependency(
+                                "games.cafecito", "foundry-java-gradle-plugin", "1", "compile")));
+        publishMavenArtifact(
+                repository,
+                "games.cafecito",
+                "foundry-java-annotations",
+                "1",
+                "jar",
+                annotations,
+                List.of());
+        publishMavenArtifact(
+                repository,
+                "games.cafecito",
+                "foundry-java-api-model",
+                "1",
+                "jar",
+                apiModel,
+                List.of(
+                        new MavenDependency(
+                                "games.cafecito", "foundry-java-annotations", "1", "compile")));
+        publishMavenArtifact(
+                repository,
+                "games.cafecito",
+                "foundry-java-runtime",
+                "1",
+                "jar",
+                runtime,
+                List.of(
+                        new MavenDependency(
+                                "games.cafecito", "foundry-java-api-model", "1", "compile"),
+                        new MavenDependency(
+                                "games.cafecito", "foundry-java-annotations", "1", "runtime")));
+        publishMavenArtifact(
+                repository,
+                "games.cafecito",
+                "foundry-java-android",
+                "1",
+                "aar",
+                binding,
+                List.of(
+                        new MavenDependency(
+                                "games.cafecito", "foundry-java-runtime", "1", "compile")));
+        publishMavenArtifact(
+                repository, "games.cafecito.host", "foundry-host", "1", "aar", host, List.of());
+        Path project = androidProject("staged-maven-topology");
+        writeIsolatedGradleJvm(project, "staged-maven");
+        Files.writeString(
+                project.resolve("settings.gradle"),
+                """
+                pluginManagement {
+                    repositories {
+                        maven { url = uri('%s') }
+                        google()
+                        mavenCentral()
+                        gradlePluginPortal()
+                    }
+                }
+                dependencyResolutionManagement {
+                    repositories {
+                        maven { url = uri('%s') }
+                        google()
+                        mavenCentral()
+                    }
+                }
+                rootProject.name = 'staged-maven-topology'
+                """
+                        .formatted(repository.toUri(), repository.toUri()));
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                                .replace(
+                                        "id 'com.android.application'",
+                                        "id 'com.android.application' version '8.10.0'")
+                                .replace(
+                                        "id 'games.cafecito.foundry.java'",
+                                        "id 'games.cafecito.foundry.java' version '1'")
+                        + """
+
+                        dependencies {
+                            implementation 'games.cafecito:foundry-java-android:1'
+                            implementation 'games.cafecito.host:foundry-host:1'
+                        }
+                        foundryJava { requestedAbis.set(['x86_64']) }
+                        """);
+        writeBootstrapStubs(project);
+
+        BuildResult first =
+                runWithoutPluginClasspath(project, "assembleRelease", "--configuration-cache");
+        BuildResult second =
+                runWithoutPluginClasspath(project, "assembleRelease", "--configuration-cache");
+
+        assertEquals(
+                TaskOutcome.SUCCESS,
+                first.task(":generateReleaseFoundryJavaRegistry").getOutcome());
+        assertTrue(second.getOutput().contains("Reusing configuration cache."));
+        Path generatedAssets =
+                project.resolve("build/generated/assets/generateReleaseFoundryJavaRegistry");
+        assertTrue(
+                Files.readString(generatedAssets.resolve("foundry_java/registry-index-v2.txt"))
+                        .contains("module=demo|example.DemoRegistry"));
+        assertArrayEquals(
+                BINDING_CONFIGURATION,
+                Files.readAllBytes(generatedAssets.resolve("FoundryJava.foundryextension")));
+        assertTrue(
+                Files.readString(
+                                project.resolve(
+                                        "build/generated/java/"
+                                                + "generateReleaseFoundryJavaRegistry/"
+                                                + "games/cafecito/foundry/generated/"
+                                                + "FoundryGeneratedBootstrap.java"))
+                        .contains("example.DemoRegistry.PROVIDER"));
+        Path apk =
+                Files.list(project.resolve("build/outputs/apk/release"))
+                        .filter(path -> path.getFileName().toString().endsWith(".apk"))
+                        .findFirst()
+                        .orElseThrow();
+        try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(apk.toFile())) {
+            assertTrue(archive.getEntry("lib/x86_64/libfoundry_java.so") != null);
+            assertTrue(archive.getEntry("lib/x86_64/libfoundry_android.so") != null);
+            assertFalse(archive.stream().anyMatch(entry -> entry.getName().contains("arm64-v8a")));
         }
     }
 
@@ -786,18 +1038,32 @@ class FoundryJavaPluginTest {
 
     private Path androidProject(String name, Path binding, List<String> requestedAbis)
             throws IOException {
+        return androidProject(name, List.of(binding), requestedAbis);
+    }
+
+    private Path androidProject(String name, List<Path> artifacts, List<String> requestedAbis)
+            throws IOException {
         Path project = androidProject(name);
         String abis =
                 requestedAbis.stream()
                         .map(abi -> "'" + abi + "'")
                         .reduce((left, right) -> left + ", " + right)
                         .orElse("");
+        String dependencies =
+                artifacts.stream()
+                        .map(
+                                artifact ->
+                                        "    implementation files('"
+                                                + artifact.toAbsolutePath()
+                                                + "')")
+                        .reduce((left, right) -> left + "\n" + right)
+                        .orElse("");
         Files.writeString(
                 project.resolve("build.gradle"),
                 Files.readString(project.resolve("build.gradle"))
-                        + "\ndependencies { implementation files('"
-                        + binding.toAbsolutePath()
-                        + "') }\n"
+                        + "\ndependencies {\n"
+                        + dependencies
+                        + "\n}\n"
                         + "foundryJava { requestedAbis.set(["
                         + abis
                         + "]) }\n");
@@ -852,6 +1118,23 @@ class FoundryJavaPluginTest {
                 .withArguments(arguments)
                 .forwardOutput()
                 .build();
+    }
+
+    private BuildResult runWithoutPluginClasspath(Path project, String... arguments) {
+        return GradleRunner.create()
+                .withProjectDir(project.toFile())
+                .withArguments(arguments)
+                .forwardOutput()
+                .build();
+    }
+
+    private static void writeIsolatedGradleJvm(Path project, String identity) throws IOException {
+        Files.writeString(
+                project.resolve("gradle.properties"),
+                "org.gradle.jvmargs=-Xmx768m -XX:MaxMetaspaceSize=768m"
+                        + " -Dfoundry.testkit.identity="
+                        + identity
+                        + "\n");
     }
 
     private Path moduleJar(Path output, String module, String registry) throws IOException {
@@ -981,6 +1264,126 @@ class FoundryJavaPluginTest {
         }
         writeRawZip(output, entries);
         return output;
+    }
+
+    private Path aar(
+            Path output,
+            String descriptorPath,
+            String descriptorContents,
+            List<RawZipEntry> payloads)
+            throws IOException {
+        List<RawZipEntry> entries =
+                new ArrayList<>(
+                        List.of(
+                                new RawZipEntry(
+                                        "AndroidManifest.xml",
+                                        "<manifest package=\"games.cafecito.fixture\" />\n"
+                                                .getBytes(StandardCharsets.UTF_8)),
+                                new RawZipEntry(
+                                        "classes.jar",
+                                        classesJar(descriptorPath, descriptorContents, false))));
+        entries.addAll(payloads);
+        writeRawZip(output, entries);
+        return output;
+    }
+
+    private Path pluginJar(Path output) throws Exception {
+        Path classes =
+                Path.of(
+                        FoundryJavaPlugin.class
+                                .getProtectionDomain()
+                                .getCodeSource()
+                                .getLocation()
+                                .toURI());
+        Path descriptor =
+                Path.of(
+                        FoundryJavaPlugin.class
+                                .getClassLoader()
+                                .getResource(
+                                        "META-INF/gradle-plugins/"
+                                                + "games.cafecito.foundry.java.properties")
+                                .toURI());
+        Path resources = descriptor.getParent().getParent().getParent();
+        Set<String> added = new HashSet<>();
+        try (JarOutputStream archive = new JarOutputStream(Files.newOutputStream(output))) {
+            addJarTree(archive, classes, added);
+            addJarTree(archive, resources, added);
+        }
+        return output;
+    }
+
+    private static void addJarTree(JarOutputStream archive, Path root, Set<String> added)
+            throws IOException {
+        try (var paths = Files.walk(root)) {
+            for (Path path : paths.filter(Files::isRegularFile).sorted().toList()) {
+                String name = root.relativize(path).toString().replace('\\', '/');
+                if (!added.add(name)) {
+                    continue;
+                }
+                JarEntry entry = new JarEntry(name);
+                entry.setTime(0);
+                archive.putNextEntry(entry);
+                archive.write(Files.readAllBytes(path));
+                archive.closeEntry();
+            }
+        }
+    }
+
+    private static Path emptyJar(Path output) throws IOException {
+        try (JarOutputStream ignored = new JarOutputStream(Files.newOutputStream(output))) {
+            return output;
+        }
+    }
+
+    private static void publishMavenArtifact(
+            Path repository,
+            String group,
+            String artifact,
+            String version,
+            String packaging,
+            Path binary,
+            List<MavenDependency> dependencies)
+            throws IOException {
+        Path directory =
+                repository.resolve(group.replace('.', '/')).resolve(artifact).resolve(version);
+        Files.createDirectories(directory);
+        if (binary != null) {
+            Files.copy(binary, directory.resolve(artifact + "-" + version + "." + packaging));
+        }
+        String dependencyXml =
+                dependencies.stream()
+                        .map(
+                                dependency ->
+                                        """
+                                        <dependency>
+                                          <groupId>%s</groupId>
+                                          <artifactId>%s</artifactId>
+                                          <version>%s</version>
+                                          <scope>%s</scope>
+                                        </dependency>
+                                        """
+                                                .formatted(
+                                                        dependency.group(),
+                                                        dependency.artifact(),
+                                                        dependency.version(),
+                                                        dependency.scope()))
+                        .reduce((left, right) -> left + right)
+                        .orElse("");
+        Files.writeString(
+                directory.resolve(artifact + "-" + version + ".pom"),
+                """
+                <project xmlns="http://maven.apache.org/POM/4.0.0">
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>%s</groupId>
+                  <artifactId>%s</artifactId>
+                  <version>%s</version>
+                  <packaging>%s</packaging>
+                  <dependencies>
+                %s
+                  </dependencies>
+                </project>
+                """
+                        .formatted(group, artifact, version, packaging, dependencyXml));
     }
 
     private static byte[] classesJar(
@@ -1122,6 +1525,8 @@ class FoundryJavaPluginTest {
                 """
                 .formatted(module, registry, API_SHA);
     }
+
+    private record MavenDependency(String group, String artifact, String version, String scope) {}
 
     private record RawZipEntry(String name, byte[] contents) {}
 }
