@@ -218,6 +218,94 @@ class FoundryJavaPluginTest {
     }
 
     @Test
+    void hostOnlyAarKeepsItsNativeRuntimeAndContributesModuleDescriptors() throws IOException {
+        Path host =
+                aar(
+                        temporaryDirectory.resolve("foundry-host.aar"),
+                        "META-INF/foundry-java/modules/host.descriptor",
+                        descriptor("host", "example.HostRegistry"),
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_android.so", new byte[] {1})));
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("foundry-java-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project =
+                projectWithPayloads(
+                        "host-and-binding", List.of(host, binding), List.of("x86_64"));
+
+        run(project, "generateFoundryJavaRegistry");
+
+        assertEquals(
+                List.of(
+                        "module=demo|example.DemoRegistry",
+                        "module=host|example.HostRegistry"),
+                Files.readAllLines(project.resolve(INDEX)).stream()
+                        .filter(line -> line.startsWith("module="))
+                        .toList());
+        assertArrayEquals(
+                BINDING_CONFIGURATION, Files.readAllBytes(project.resolve(CONFIGURATION)));
+        String bootstrap = Files.readString(project.resolve(BOOTSTRAP));
+        assertTrue(bootstrap.contains("example.DemoRegistry.PROVIDER"));
+        assertTrue(bootstrap.contains("example.HostRegistry.PROVIDER"));
+    }
+
+    @Test
+    void bindingClaimantsRejectEverySortedForbiddenHostEntry() throws IOException {
+        List<String> forbiddenEntries =
+                List.of(
+                        "jni/arm64-v8a/libfoundry_android.so",
+                        "jni/x86_64/libfoundry_android.so");
+        List<List<RawZipEntry>> claimantPayloads =
+                List.of(
+                        List.of(
+                                new RawZipEntry(
+                                        "FoundryJava.foundryextension",
+                                        BINDING_CONFIGURATION)),
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_java.so", new byte[] {1})),
+                        List.of(
+                                new RawZipEntry(
+                                        "FoundryJava.foundryextension",
+                                        BINDING_CONFIGURATION),
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_java.so", new byte[] {1})));
+        for (int index = 0; index < claimantPayloads.size(); index++) {
+            List<RawZipEntry> entries = new ArrayList<>(claimantPayloads.get(index));
+            entries.add(
+                    new RawZipEntry(
+                            "jni/x86_64/libfoundry_android.so", new byte[] {2}));
+            entries.add(
+                    new RawZipEntry(
+                            "jni/arm64-v8a/libfoundry_android.so", new byte[] {3}));
+            Path claimant =
+                    aar(
+                            temporaryDirectory.resolve("claimant-" + index + ".aar"),
+                            null,
+                            null,
+                            entries);
+            Path project =
+                    projectWithPayloads(
+                            "forbidden-claimant-" + index,
+                            List.of(claimant),
+                            List.of("x86_64"));
+
+            BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+            assertTrue(failure.getOutput().contains(claimant.toAbsolutePath().toString()));
+            int first = failure.getOutput().indexOf(forbiddenEntries.get(0));
+            int second = failure.getOutput().indexOf(forbiddenEntries.get(1));
+            assertTrue(first >= 0);
+            assertTrue(second > first);
+            assertFalse(Files.exists(project.resolve(INDEX)));
+        }
+    }
+
+    @Test
     void duplicateBridgeAndConfigurationPayloadsFailBeforeGeneration() throws IOException {
         Path first =
                 bindingAar(
@@ -979,6 +1067,30 @@ class FoundryJavaPluginTest {
             entries.add(new RawZipEntry(duplicatePath, new byte[] {0}));
             entries.add(new RawZipEntry(duplicatePath, new byte[] {0}));
         }
+        writeRawZip(output, entries);
+        return output;
+    }
+
+    private Path aar(
+            Path output,
+            String descriptorPath,
+            String descriptorContents,
+            List<RawZipEntry> payloads)
+            throws IOException {
+        List<RawZipEntry> entries =
+                new ArrayList<>(
+                        List.of(
+                                new RawZipEntry(
+                                        "AndroidManifest.xml",
+                                        "<manifest package=\"games.cafecito.fixture\" />\n"
+                                                .getBytes(StandardCharsets.UTF_8)),
+                                new RawZipEntry(
+                                        "classes.jar",
+                                        classesJar(
+                                                descriptorPath,
+                                                descriptorContents,
+                                                false))));
+        entries.addAll(payloads);
         writeRawZip(output, entries);
         return output;
     }
