@@ -67,6 +67,7 @@ add_library(
     STATIC
         foundry_java_handles.cpp
         foundry_java_interface.cpp
+        foundry_java_transport.cpp
 )
 target_compile_features(foundry_java_runtime PUBLIC cxx_std_17)
 target_include_directories(

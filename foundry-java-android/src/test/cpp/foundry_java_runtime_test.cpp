@@ -1,6 +1,7 @@
 #include "foundry_java_runtime.h"
 #include "foundry_java_abi_layout.h"
 #include "foundry_java_interface.h"
+#include "foundry_java_transport.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -437,6 +438,93 @@ void test_bridge_services_resolve_all_or_nothing() {
 			"resolution must report the first exact missing interface name");
 }
 
+void test_typed_handles_reject_wrong_identity_and_destroy_once() {
+	foundry_java::NativeHandleStore handles;
+	std::atomic<int> destroy_count = 0;
+	foundry_java::NativeValue value = foundry_java::NativeValue::storage(24);
+	value.constructed = true;
+	const auto handle = handles.insert(
+			11,
+			7,
+			foundry_java::HandleKind::VARIANT,
+			"Variant",
+			std::move(value),
+			true,
+			[&](foundry_java::HandleRecord &record) {
+				expect(record.value.constructed, "destructor must receive constructed storage");
+				record.value.constructed = false;
+				destroy_count++;
+			});
+	expect(handle != 0, "native handles must be opaque and nonzero");
+	expect(
+			static_cast<bool>(
+					handles.acquire(handle, 11, 7, foundry_java::HandleKind::VARIANT, "Variant")),
+			"matching handle identity must acquire");
+	expect(
+			!handles.acquire(handle, 12, 7, foundry_java::HandleKind::VARIANT, "Variant"),
+			"cross-context handle must be rejected");
+	expect(
+			!handles.acquire(handle, 11, 8, foundry_java::HandleKind::VARIANT, "Variant"),
+			"stale generation must be rejected");
+	expect(
+			!handles.acquire(handle, 11, 7, foundry_java::HandleKind::OBJECT, "Variant"),
+			"wrong handle kind must be rejected");
+	expect(
+			!handles.acquire(handle, 11, 7, foundry_java::HandleKind::VARIANT, "String"),
+			"wrong native type token must be rejected");
+	expect(
+			!handles.release(handle, 12, 7, foundry_java::HandleKind::VARIANT, "Variant"),
+			"wrong-context release must fail closed");
+	expect(
+			handles.release(handle, 11, 7, foundry_java::HandleKind::VARIANT, "Variant"),
+			"matching release must succeed");
+	expect(destroy_count == 1, "owned storage must be destroyed exactly once");
+	expect(
+			!handles.release(handle, 11, 7, foundry_java::HandleKind::VARIANT, "Variant"),
+			"released handle must stay dead");
+	expect(destroy_count == 1, "repeated release must not destroy twice");
+}
+
+void test_handle_teardown_waits_for_active_lease() {
+	foundry_java::NativeHandleStore handles;
+	std::atomic<int> destroy_count = 0;
+	const auto handle = handles.insert(
+			22,
+			4,
+			foundry_java::HandleKind::NATIVE_STRUCTURE,
+			"PhysicsServer3DExtensionMotionResult",
+			foundry_java::NativeValue::storage(128),
+			true,
+			[&](foundry_java::HandleRecord &) { destroy_count++; });
+	auto lease = handles.acquire(
+			handle,
+			22,
+			4,
+			foundry_java::HandleKind::NATIVE_STRUCTURE,
+			"PhysicsServer3DExtensionMotionResult");
+	expect(static_cast<bool>(lease), "matching native-structure handle must acquire");
+
+	std::atomic<bool> teardown_finished = false;
+	std::thread teardown([&] {
+		expect(handles.teardown(22, 4) == 1, "teardown must own the matching live handle");
+		teardown_finished = true;
+	});
+	while (handles.acquire(
+				   handle,
+				   22,
+				   4,
+				   foundry_java::HandleKind::NATIVE_STRUCTURE,
+				   "PhysicsServer3DExtensionMotionResult")) {
+		std::this_thread::yield();
+	}
+	expect(!teardown_finished, "teardown must wait for the active handle lease");
+	expect(destroy_count == 0, "teardown cannot destroy active storage");
+	lease = {};
+	teardown.join();
+	expect(teardown_finished, "teardown must finish after the lease drains");
+	expect(destroy_count == 1, "teardown must destroy owned storage exactly once");
+}
+
 } // namespace
 
 namespace foundry_java {
@@ -488,6 +576,8 @@ int main() {
 	test_extension_entry_validates_and_orders_lifecycle();
 	test_generated_abi_layout_is_complete();
 	test_bridge_services_resolve_all_or_nothing();
+	test_typed_handles_reject_wrong_identity_and_destroy_once();
+	test_handle_teardown_waits_for_active_lease();
 	std::cout << "Foundry Java native runtime tests passed\n";
 	return 0;
 }
