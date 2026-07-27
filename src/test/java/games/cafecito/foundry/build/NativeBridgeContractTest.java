@@ -472,6 +472,7 @@ class NativeBridgeContractTest {
         assertTrue(jni.contains("JniTransitionState transition"));
         assertTrue(bootstrap.contains("BootstrapReservation"));
         assertTrue(bootstrap.contains("bootstrap.begin(environment, class_loader, java_vm)"));
+        assertTrue(jni.contains("this->requested_global = loader_guard.release();"));
         assertFalse(bootstrap.contains("IsSameObject"));
         assertFalse(bootstrap.contains("std::lock_guard lock(foundry_java::state.mutex)"));
         assertTrue(transitions.contains("impl->phase = Impl::Phase::BOOTSTRAP"));

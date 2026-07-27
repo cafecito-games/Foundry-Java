@@ -296,7 +296,7 @@ public:
 			return false;
 		}
 		this->environment = environment;
-		requested_global = loader_guard.release();
+		this->requested_global = loader_guard.release();
 		java_vm = reinterpret_cast<JavaVM *>(java_vm_token);
 		active = true;
 		return true;
