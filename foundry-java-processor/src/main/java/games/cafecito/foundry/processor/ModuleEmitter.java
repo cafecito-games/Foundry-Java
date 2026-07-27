@@ -317,6 +317,7 @@ final class ModuleEmitter {
                                                 method.exportedName(),
                                                 method.javaName(),
                                                 signature(
+                                                        model,
                                                         method.returnType(),
                                                         method.parameters()))));
         model.overrides()
@@ -328,6 +329,7 @@ final class ModuleEmitter {
                                                 method.exportedName(),
                                                 method.javaName(),
                                                 signature(
+                                                        model,
                                                         method.returnType(),
                                                         method.parameters()))));
         model.constants()
@@ -351,7 +353,7 @@ final class ModuleEmitter {
                                                 "property",
                                                 property.exportedName(),
                                                 property.fieldName(),
-                                                property.type(),
+                                                model.transportType(property.type()),
                                                 new PropertyMemberDetails(
                                                         property.getter(),
                                                         property.setter(),
@@ -368,7 +370,7 @@ final class ModuleEmitter {
                                                 "signal",
                                                 signal.exportedName(),
                                                 signal.javaName(),
-                                                signature("void", signal.parameters()))));
+                                                signature(model, "void", signal.parameters()))));
         return members.stream()
                 .sorted(
                         Comparator.comparingInt((Member member) -> memberRank(member.kind()))
@@ -394,11 +396,15 @@ final class ModuleEmitter {
         };
     }
 
-    private String signature(String returnType, List<ExtensionModel.ParameterModel> parameters) {
-        return returnType
+    private String signature(
+            ExtensionModel model,
+            String returnType,
+            List<ExtensionModel.ParameterModel> parameters) {
+        return model.transportType(returnType)
                 + "("
                 + parameters.stream()
                         .map(ExtensionModel.ParameterModel::type)
+                        .map(model::transportType)
                         .reduce((left, right) -> left + "," + right)
                         .orElse("")
                 + ")";

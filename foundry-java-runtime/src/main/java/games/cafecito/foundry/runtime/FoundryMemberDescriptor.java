@@ -2,7 +2,13 @@ package games.cafecito.foundry.runtime;
 
 import java.util.Objects;
 
-/** Immutable generated description of one exported Java member. */
+/**
+ * Immutable generated description of one exported Java member.
+ *
+ * <p>{@link #signature()} is the canonical Foundry transport signature. Java enum positions remain
+ * enum-typed in generated and authored Java, while their descriptor positions use primitive {@code
+ * long}. Enum null/NIL values are unsupported by that transport contract.
+ */
 public record FoundryMemberDescriptor(
         String kind,
         String foundryName,
@@ -15,7 +21,7 @@ public record FoundryMemberDescriptor(
      * @param kind generated member kind
      * @param foundryName exported Foundry name
      * @param javaName backing Java name
-     * @param signature canonical Java-facing signature
+     * @param signature canonical Foundry transport signature
      */
     public FoundryMemberDescriptor(
             String kind, String foundryName, String javaName, String signature) {

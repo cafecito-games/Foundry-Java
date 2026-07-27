@@ -67,12 +67,35 @@ public final class DemoModuleRegistry
                                                             Long.MIN_VALUE,
                                                             true)),
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "method",
+                                                    "convert_mode",
+                                                    "convertMode",
+                                                    "long(long,long)"),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "method", "reset", "reset", "void()"),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "override",
+                                                    "_engine_mode",
+                                                    "onEngineMode",
+                                                    "long(long)"),
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "override",
                                                     "_process",
                                                     "onProcess",
                                                     "void(double)"),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "property",
+                                                    "movement_mode",
+                                                    "movementMode",
+                                                    "long",
+                                                    new games.cafecito.foundry.runtime.FoundryPropertyDetails(
+                                                            decode("bW92ZW1lbnRNb2Rl"),
+                                                            decode("bW92ZW1lbnRNb2Rl"),
+                                                            -1,
+                                                            decode(""),
+                                                            decode(""),
+                                                            decode(""),
+                                                            decode(""))),
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "property",
                                                     "speed",
@@ -86,6 +109,11 @@ public final class DemoModuleRegistry
                                                             decode("bW90aW9uXw"),
                                                             decode("U3BlZWQ"),
                                                             decode("c3BlZWRf"))),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "signal",
+                                                    "mode_changed",
+                                                    "ModeChanged",
+                                                    "void(long,long)"),
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "signal",
                                                     "reset_done",
