@@ -389,6 +389,8 @@ class FoundryRegistryCoordinatorTest {
         Thread invoke = new Thread(() -> coordinator.invoke(41, callback, new long[0]));
         invoke.start();
         assertTrue(callbackStarted.await(2, TimeUnit.SECONDS));
+        boolean staleAdmissionObservation =
+                contextReference.get().callbackRegistry().isEnabled();
         Thread invalidate = new Thread(() -> coordinator.invalidate(41));
         invalidate.start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -398,6 +400,14 @@ class FoundryRegistryCoordinatorTest {
         }
 
         assertFalse(contextReference.get().callbackRegistry().isEnabled());
+        assertTrue(staleAdmissionObservation);
+        assertThrows(
+                CallbackRegistry.CallbackUnavailableException.class,
+                () ->
+                        contextReference
+                                .get()
+                                .callbackRegistry()
+                                .invoke(callback, List.of()));
         assertFalse(engine.events.contains("unregister:A"));
         assertEquals(0, coordinator.invoke(41, callback, new long[0]));
         assertEquals(1, userCalls.get());
@@ -410,6 +420,71 @@ class FoundryRegistryCoordinatorTest {
         assertFalse(invalidate.isAlive());
         assertEquals(List.of("register:A", "unregister:A"), engine.events);
         assertFalse(contextReference.get().isAlive());
+        assertEquals(1, engine.contextCloses.get());
+    }
+
+    @Test
+    void callbackAdmissionCannotCrossACommittedTerminalReservation() throws Exception {
+        RecordingEngine engine = new RecordingEngine();
+        AtomicReference<FoundryBindingContext> contextReference = new AtomicReference<>();
+        CountDownLatch invocationCheckedState = new CountDownLatch(1);
+        CountDownLatch releaseInvocationAdmission = new CountDownLatch(1);
+        CountDownLatch terminalReserved = new CountDownLatch(1);
+        CountDownLatch releaseTerminalCleanup = new CountDownLatch(1);
+        FoundryRegistryCoordinator coordinator =
+                new FoundryRegistryCoordinator(
+                        bootstrap(provider("demo", type("example.A", "A", "CORE"))),
+                        context -> {
+                            engine.contextHandle = context;
+                            return engine;
+                        },
+                        (handle, activeEngine) -> {
+                            FoundryBindingContext context =
+                                    new FoundryBindingContext(handle, activeEngine);
+                            contextReference.set(context);
+                            return context;
+                        },
+                        context -> engine.contextCloses.incrementAndGet(),
+                        () -> {
+                            invocationCheckedState.countDown();
+                            await(releaseInvocationAdmission);
+                        },
+                        () -> {
+                            terminalReserved.countDown();
+                            await(releaseTerminalCleanup);
+                        });
+        assertTrue(coordinator.initialize(41, FoundryInitializationLevel.CORE.code()));
+        AtomicInteger userCalls = new AtomicInteger();
+        long callback =
+                contextReference
+                        .get()
+                        .callbackRegistry()
+                        .register(
+                                FoundryCallable.fixed(
+                                        0,
+                                        arguments -> {
+                                            userCalls.incrementAndGet();
+                                            return Variant.nil();
+                                        }));
+        Thread invoke = new Thread(() -> coordinator.invoke(41, callback, new long[0]));
+        invoke.start();
+        assertTrue(invocationCheckedState.await(2, TimeUnit.SECONDS));
+        Thread invalidate = new Thread(() -> coordinator.invalidate(41));
+        invalidate.start();
+        assertTrue(terminalReserved.await(2, TimeUnit.SECONDS));
+
+        releaseInvocationAdmission.countDown();
+        invoke.join(TimeUnit.SECONDS.toMillis(2));
+
+        assertFalse(invoke.isAlive());
+        assertEquals(0, userCalls.get());
+        assertFalse(engine.events.contains("unregister:A"));
+
+        releaseTerminalCleanup.countDown();
+        invalidate.join(TimeUnit.SECONDS.toMillis(2));
+
+        assertFalse(invalidate.isAlive());
+        assertEquals(List.of("register:A", "unregister:A"), engine.events);
         assertEquals(1, engine.contextCloses.get());
     }
 

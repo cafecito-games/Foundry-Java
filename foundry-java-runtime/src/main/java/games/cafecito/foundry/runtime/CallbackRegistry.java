@@ -71,12 +71,22 @@ public final class CallbackRegistry {
     }
 
     boolean disableAndDrain() {
-        boolean interrupted = false;
+        closeAdmission();
+        return drain();
+    }
+
+    void closeAdmission() {
         synchronized (lifecycle) {
             if (enabled) {
                 enabled = false;
                 callbacks.clear();
             }
+        }
+    }
+
+    boolean drain() {
+        boolean interrupted = false;
+        synchronized (lifecycle) {
             int callerInvocations = invocationDepth.get();
             while (activeInvocations > callerInvocations) {
                 try {

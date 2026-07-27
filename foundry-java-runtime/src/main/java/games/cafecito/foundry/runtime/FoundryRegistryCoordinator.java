@@ -20,6 +20,8 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
     private final LongFunction<? extends FoundryEngine> engineFactory;
     private final BiFunction<Long, FoundryEngine, FoundryBindingContext> contextFactory;
     private final LongConsumer terminalObserver;
+    private final Runnable beforeCallbackAdmission;
+    private final Runnable afterTerminalReservation;
     private final FoundryRuntimeCallbacks callbacks = new FoundryRuntimeCallbacks();
     private final EnumMap<FoundryInitializationLevel, List<FoundryClassDescriptor>> registered =
             new EnumMap<>(FoundryInitializationLevel.class);
@@ -54,10 +56,24 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             LongFunction<? extends FoundryEngine> engineFactory,
             BiFunction<Long, FoundryEngine, FoundryBindingContext> contextFactory,
             LongConsumer terminalObserver) {
+        this(bootstrap, engineFactory, contextFactory, terminalObserver, () -> {}, () -> {});
+    }
+
+    FoundryRegistryCoordinator(
+            FoundryRegistryBootstrap bootstrap,
+            LongFunction<? extends FoundryEngine> engineFactory,
+            BiFunction<Long, FoundryEngine, FoundryBindingContext> contextFactory,
+            LongConsumer terminalObserver,
+            Runnable beforeCallbackAdmission,
+            Runnable afterTerminalReservation) {
         plan = FoundryRegistrationPlan.create(Objects.requireNonNull(bootstrap, "bootstrap"));
         this.engineFactory = Objects.requireNonNull(engineFactory, "engineFactory");
         this.contextFactory = Objects.requireNonNull(contextFactory, "contextFactory");
         this.terminalObserver = Objects.requireNonNull(terminalObserver, "terminalObserver");
+        this.beforeCallbackAdmission =
+                Objects.requireNonNull(beforeCallbackAdmission, "beforeCallbackAdmission");
+        this.afterTerminalReservation =
+                Objects.requireNonNull(afterTerminalReservation, "afterTerminalReservation");
     }
 
     @Override
@@ -122,6 +138,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             TerminalCleanup cleanup =
                     reserveTerminal(requestedContextHandle, Completion.CORE_DEINITIALIZE);
             if (cleanup != null) {
+                afterTerminalReservation.run();
                 performTerminalCleanup(requestedContextHandle, cleanup);
             }
             return;
@@ -161,6 +178,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                 return 0;
             }
         }
+        beforeCallbackAdmission.run();
         try {
             return callbacks.invoke(requestedContextHandle, callbackHandle, argumentHandles);
         } finally {
@@ -172,6 +190,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
     public void invalidate(long requestedContextHandle) {
         TerminalCleanup cleanup = reserveTerminal(requestedContextHandle, Completion.INVALIDATE);
         if (cleanup != null) {
+            afterTerminalReservation.run();
             performTerminalCleanup(requestedContextHandle, cleanup);
         }
     }
@@ -233,6 +252,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                     terminal = true;
                     terminalRequested = true;
                     pendingCompletion = completion;
+                    closeCallbackAdmission(context);
                 }
                 return null;
             }
@@ -247,6 +267,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             }
             transitionInProgress = true;
             terminal = true;
+            closeCallbackAdmission(context);
             return cleanupFromRegistered(completion, null);
         }
     }
@@ -262,6 +283,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             registered.put(level, List.copyOf(completed));
             if (terminalRequested) {
                 terminalRequested = false;
+                closeCallbackAdmission(activeContext);
                 return cleanupFromRegistered(pendingCompletion, null);
             }
             transitionInProgress = false;
@@ -282,6 +304,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             registered.put(level, List.copyOf(completed));
             terminal = true;
             terminalRequested = false;
+            closeCallbackAdmission(activeContext);
             return cleanupFromRegistered(Completion.INVALIDATE, failure);
         }
     }
@@ -305,6 +328,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         synchronized (lifecycleLock) {
             terminal = true;
             terminalRequested = false;
+            closeCallbackAdmission(transition.context());
             List<FoundryClassDescriptor> cleanupOrder = new ArrayList<>(failedLevelCleanup);
             cleanupOrder.addAll(new MapSnapshot(registered).reverseOrder());
             return new TerminalCleanup(
@@ -330,7 +354,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
 
     private void performTerminalCleanup(
             long requestedContextHandle, TerminalCleanup cleanup) {
-        if (cleanup.context() != null && !cleanup.context().quiesceCallbacks()) {
+        if (cleanup.context() != null && !cleanup.context().drainCallbacks()) {
             retainPendingCleanup(cleanup);
             return;
         }
@@ -464,6 +488,12 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             existing.addSuppressed(failure);
         }
         return existing;
+    }
+
+    private static void closeCallbackAdmission(FoundryBindingContext activeContext) {
+        if (activeContext != null) {
+            activeContext.closeCallbackAdmission();
+        }
     }
 
     private static void reportCleanupFailure(

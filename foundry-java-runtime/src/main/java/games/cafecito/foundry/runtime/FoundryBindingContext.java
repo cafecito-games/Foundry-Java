@@ -201,8 +201,12 @@ public final class FoundryBindingContext implements AutoCloseable {
         transitions.forEach(ObjectLease.Transition::run);
     }
 
-    boolean quiesceCallbacks() {
-        return callbackRegistry.disableAndDrain();
+    void closeCallbackAdmission() {
+        callbackRegistry.closeAdmission();
+    }
+
+    boolean drainCallbacks() {
+        return callbackRegistry.drain();
     }
 
     private void requireAlive(long objectHandle) {
