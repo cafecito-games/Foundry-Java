@@ -36,6 +36,18 @@ struct VariantCategoryInfo {
 const std::array<VariantCategoryInfo, 39> &variant_categories();
 const VariantCategoryInfo *variant_category(FoundryExtensionVariantType type);
 const VariantCategoryInfo *variant_category(std::string_view native_name);
+bool replace_initialized_variant(
+		const BridgeServices &services,
+		FoundryExtensionVariantPtr destination,
+		FoundryExtensionConstVariantPtr source) noexcept;
+bool can_replace_initialized_native(
+		const BridgeServices &services,
+		FoundryExtensionVariantType type) noexcept;
+bool replace_initialized_native(
+		const BridgeServices &services,
+		FoundryExtensionVariantType type,
+		FoundryExtensionTypePtr destination,
+		FoundryExtensionConstTypePtr source) noexcept;
 
 enum class NativeTypeKind : std::uint8_t {
 	VOID,
@@ -439,6 +451,11 @@ public:
 			ContextHandle context,
 			std::uint64_t generation,
 			FoundryExtensionUninitializedVariantPtr destination);
+	TransportResult replace_variant_to(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionVariantPtr destination);
 	void destroy_native_value(
 			FoundryExtensionVariantType type,
 			FoundryExtensionTypePtr value) noexcept;

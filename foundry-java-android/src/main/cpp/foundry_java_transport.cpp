@@ -77,6 +77,82 @@ const VariantCategoryInfo *variant_category(std::string_view native_name) {
 	return found == variant_categories().end() ? nullptr : &*found;
 }
 
+bool replace_initialized_variant(
+		const BridgeServices &services,
+		FoundryExtensionVariantPtr destination,
+		FoundryExtensionConstVariantPtr source) noexcept {
+	if (destination == nullptr || source == nullptr ||
+			services.variant_destroy == nullptr ||
+			services.variant_new_copy == nullptr) {
+		return false;
+	}
+	services.variant_destroy(destination);
+	services.variant_new_copy(destination, source);
+	return true;
+}
+
+bool can_replace_initialized_native(
+		const BridgeServices &services,
+		FoundryExtensionVariantType type) noexcept {
+	switch (type) {
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_NIL:
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_BOOL:
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_INT:
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_FLOAT:
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT:
+			return true;
+		default:
+			break;
+	}
+	return services.variant_get_ptr_constructor != nullptr &&
+			services.variant_get_ptr_destructor != nullptr &&
+			services.variant_get_ptr_constructor(type, 1) != nullptr &&
+			services.variant_get_ptr_destructor(type) != nullptr;
+}
+
+bool replace_initialized_native(
+		const BridgeServices &services,
+		FoundryExtensionVariantType type,
+		FoundryExtensionTypePtr destination,
+		FoundryExtensionConstTypePtr source) noexcept {
+	if (destination == nullptr || source == nullptr) {
+		return false;
+	}
+	switch (type) {
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_NIL:
+			return true;
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_BOOL:
+			*static_cast<FoundryExtensionBool *>(destination) =
+					*static_cast<const FoundryExtensionBool *>(source);
+			return true;
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_INT:
+			*static_cast<std::int64_t *>(destination) =
+					*static_cast<const std::int64_t *>(source);
+			return true;
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_FLOAT:
+			*static_cast<double *>(destination) =
+					*static_cast<const double *>(source);
+			return true;
+		case FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT:
+			*static_cast<FoundryExtensionObjectPtr *>(destination) =
+					*static_cast<const FoundryExtensionObjectPtr *>(source);
+			return true;
+		default:
+			break;
+	}
+	if (!can_replace_initialized_native(services, type)) {
+		return false;
+	}
+	const FoundryExtensionPtrConstructor constructor =
+			services.variant_get_ptr_constructor(type, 1);
+	const FoundryExtensionPtrDestructor destructor =
+			services.variant_get_ptr_destructor(type);
+	const FoundryExtensionConstTypePtr arguments[] = { source };
+	destructor(destination);
+	constructor(destination, arguments);
+	return true;
+}
+
 NormalizedNativeType normalize_native_type(std::string_view token) {
 	const auto starts_with = [token](std::string_view prefix) {
 		return token.size() >= prefix.size() && token.substr(0, prefix.size()) == prefix;
@@ -2706,6 +2782,26 @@ TransportResult NativeTransport::copy_variant_to(
 	}
 	services->variant_new_copy(destination, lease.record().value.data());
 	return success();
+}
+
+TransportResult NativeTransport::replace_variant_to(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation,
+		FoundryExtensionVariantPtr destination) {
+	if (destination == nullptr || services == nullptr ||
+			services->variant_destroy == nullptr ||
+			services->variant_new_copy == nullptr) {
+		return failure("missing_variant_replace_output");
+	}
+	HandleLease lease = handle_store.inspect(handle, context, generation);
+	if (!lease || lease.record().kind != HandleKind::VARIANT) {
+		return failure("invalid_variant_handle");
+	}
+	return replace_initialized_variant(
+				   *services, destination, lease.record().value.data())
+			? success()
+			: failure("missing_variant_replace_output");
 }
 
 void NativeTransport::destroy_native_value(

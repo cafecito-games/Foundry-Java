@@ -1,10 +1,13 @@
 #include "foundry_java_registration.h"
+#include "foundry_java_registration_bridge.h"
+#include "foundry_java_transport.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -22,6 +25,332 @@ void expect(bool condition, const char *message) {
 		std::cerr << "FAILED: " << message << '\n';
 		std::exit(1);
 	}
+}
+
+std::vector<std::string> abi_operations;
+int abi_string_error = 0;
+int abi_string_destructor_count = 0;
+int output_variant_default_count = 0;
+int output_variant_copy_count = 0;
+int output_variant_destructor_count = 0;
+int output_native_default_count = 0;
+int output_native_copy_count = 0;
+int output_native_destructor_count = 0;
+
+const char *abi_text(const void *value) {
+	return value == nullptr ? "" : *static_cast<const char *const *>(value);
+}
+
+void abi_noop_destructor(FoundryExtensionTypePtr) {}
+
+void abi_string_destructor(FoundryExtensionTypePtr) {
+	abi_string_destructor_count++;
+}
+
+FoundryExtensionPtrDestructor abi_get_destructor(
+		FoundryExtensionVariantType type) {
+	return type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING
+			? &abi_string_destructor
+			: &abi_noop_destructor;
+}
+
+void abi_make_name(FoundryExtensionUninitializedStringNamePtr result,
+		const char *value, FoundryExtensionInt) {
+	*static_cast<const char **>(result) = value;
+}
+
+FoundryExtensionInt
+abi_make_string(FoundryExtensionUninitializedStringPtr result,
+		const char *value, FoundryExtensionInt) {
+	*static_cast<const char **>(result) = value;
+	return abi_string_error;
+}
+
+FoundryExtensionInt abi_read_string(FoundryExtensionConstStringPtr value,
+		char *result, FoundryExtensionInt maximum) {
+	const std::string text = abi_text(value);
+	if (result == nullptr) {
+		return static_cast<FoundryExtensionInt>(text.size());
+	}
+	const auto count = std::min<FoundryExtensionInt>(
+			maximum, static_cast<FoundryExtensionInt>(text.size()));
+	std::memcpy(result, text.data(), static_cast<std::size_t>(count));
+	return count;
+}
+
+void abi_string_from_name(FoundryExtensionUninitializedTypePtr result,
+		const FoundryExtensionConstTypePtr *arguments) {
+	*static_cast<const char **>(result) =
+			*static_cast<const char *const *>(arguments[0]);
+}
+
+FoundryExtensionPtrConstructor
+abi_get_constructor(FoundryExtensionVariantType type, std::int32_t index) {
+	return type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING && index == 2
+			? &abi_string_from_name
+			: nullptr;
+}
+
+void abi_register_class(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr class_name,
+		FoundryExtensionConstStringNamePtr base_name,
+		const FoundryExtensionClassCreationInfo5 *creation) {
+	abi_operations.push_back("class:" + std::string(abi_text(class_name)) + ":" +
+			abi_text(base_name));
+	expect(creation != nullptr && creation->get_virtual_func == nullptr,
+			"class5 mapping must keep the forbidden virtual callback absent");
+}
+
+void abi_register_method(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr class_name,
+		const FoundryExtensionClassMethodInfo *method) {
+	abi_operations.push_back("method:" + std::string(abi_text(class_name)) + ":" +
+			abi_text(method->name));
+	expect(method->call_func != nullptr && method->ptrcall_func == nullptr,
+			"method mapping must use only the registry variant callback");
+}
+
+void abi_register_constant(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringNamePtr enum_name,
+		FoundryExtensionConstStringNamePtr constant_name,
+		FoundryExtensionInt value,
+		FoundryExtensionBool bitfield) {
+	abi_operations.push_back("constant:" + std::string(abi_text(enum_name)) +
+			":" + abi_text(constant_name) + ":" +
+			std::to_string(value) + ":" +
+			std::to_string(bitfield));
+}
+
+void abi_register_group(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringPtr name,
+		FoundryExtensionConstStringPtr prefix) {
+	abi_operations.push_back("group:" + std::string(abi_text(name)) + ":" +
+			abi_text(prefix));
+}
+
+void abi_register_subgroup(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringPtr name,
+		FoundryExtensionConstStringPtr prefix) {
+	abi_operations.push_back("subgroup:" + std::string(abi_text(name)) + ":" +
+			abi_text(prefix));
+}
+
+void abi_register_property(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr,
+		const FoundryExtensionPropertyInfo *property,
+		FoundryExtensionConstStringNamePtr setter,
+		FoundryExtensionConstStringNamePtr getter) {
+	abi_operations.push_back("property:" + std::string(abi_text(property->name)) +
+			":" + abi_text(setter) + ":" + abi_text(getter));
+}
+
+void abi_register_indexed_property(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr,
+		const FoundryExtensionPropertyInfo *property,
+		FoundryExtensionConstStringNamePtr setter,
+		FoundryExtensionConstStringNamePtr getter,
+		FoundryExtensionInt index) {
+	abi_operations.push_back("indexed:" + std::string(abi_text(property->name)) +
+			":" + abi_text(setter) + ":" + abi_text(getter) +
+			":" + std::to_string(index));
+}
+
+void abi_register_signal(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringNamePtr signal,
+		const FoundryExtensionPropertyInfo *arguments,
+		FoundryExtensionInt count) {
+	abi_operations.push_back("signal:" + std::string(abi_text(signal)) + ":" +
+			std::to_string(count));
+	expect(count == 1 &&
+					arguments[0].type == FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT &&
+					std::string(abi_text(arguments[0].class_name)) == "Node",
+			"signal mapping must preserve resolved object metadata");
+}
+
+void abi_unregister_class(FoundryExtensionClassLibraryPtr,
+		FoundryExtensionConstStringNamePtr class_name) {
+	abi_operations.push_back("unregister:" + std::string(abi_text(class_name)));
+}
+
+void abi_initialize_nil(FoundryExtensionUninitializedVariantPtr value) {
+	*static_cast<std::uint64_t *>(value) = 0;
+}
+
+void output_variant_copy(FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionConstVariantPtr source) {
+	output_variant_copy_count++;
+	*static_cast<std::uint64_t *>(destination) =
+			*static_cast<const std::uint64_t *>(source);
+}
+
+void output_variant_nil(FoundryExtensionUninitializedVariantPtr destination) {
+	output_variant_default_count++;
+	*static_cast<std::uint64_t *>(destination) = 0;
+}
+
+void output_variant_destroy(FoundryExtensionVariantPtr) {
+	output_variant_destructor_count++;
+}
+
+void output_native_default(FoundryExtensionUninitializedTypePtr destination,
+		const FoundryExtensionConstTypePtr *) {
+	output_native_default_count++;
+	*static_cast<std::uint64_t *>(destination) = 5;
+}
+
+void output_native_copy(FoundryExtensionUninitializedTypePtr destination,
+		const FoundryExtensionConstTypePtr *arguments) {
+	output_native_copy_count++;
+	*static_cast<std::uint64_t *>(destination) =
+			*static_cast<const std::uint64_t *>(arguments[0]);
+}
+
+void output_native_destroy(FoundryExtensionTypePtr) {
+	output_native_destructor_count++;
+}
+
+FoundryExtensionPtrConstructor output_native_constructor(
+		FoundryExtensionVariantType type, std::int32_t index) {
+	if (type != FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3) {
+		return nullptr;
+	}
+	return index == 0 ? &output_native_default
+					  : index == 1 ? &output_native_copy : nullptr;
+}
+
+FoundryExtensionPtrDestructor output_native_destructor(
+		FoundryExtensionVariantType type) {
+	return type == FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3
+			? &output_native_destroy
+			: nullptr;
+}
+
+void test_public_abi_registration_adapter_maps_exact_void_services() {
+	auto native = std::make_shared<foundry_java::BridgeServices>();
+	native->string_name_new_with_utf8_chars_and_len = &abi_make_name;
+	native->string_new_with_utf8_chars_and_len2 = &abi_make_string;
+	native->string_to_utf8_chars = &abi_read_string;
+	native->variant_get_ptr_constructor = &abi_get_constructor;
+	native->variant_get_ptr_destructor = &abi_get_destructor;
+	native->variant_new_nil = &abi_initialize_nil;
+	native->classdb_register_extension_class5 = &abi_register_class;
+	native->classdb_register_extension_class_method = &abi_register_method;
+	native->classdb_register_extension_class_integer_constant =
+			&abi_register_constant;
+	native->classdb_register_extension_class_property_group = &abi_register_group;
+	native->classdb_register_extension_class_property_subgroup =
+			&abi_register_subgroup;
+	native->classdb_register_extension_class_property = &abi_register_property;
+	native->classdb_register_extension_class_property_indexed =
+			&abi_register_indexed_property;
+	native->classdb_register_extension_class_signal = &abi_register_signal;
+	native->classdb_unregister_extension_class = &abi_unregister_class;
+	foundry_java::AbiRegistrationServices services(
+			native, [](const std::string &java_type, std::string &foundry_type) {
+				if (java_type != "demo.Node") {
+					return false;
+				}
+				foundry_type = "Node";
+				return true;
+			});
+	const auto library = reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x991);
+	FoundryExtensionClassCreationInfo5 creation{};
+	foundry_java::NativeClassRegistration registration{ "Player", "Node",
+		creation };
+	abi_operations.clear();
+	expect(
+			services.register_class(library, registration),
+			"complete class5 mapping must succeed after issuing the void ABI call");
+	foundry_java::JavaTransportType object_type{
+		FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT,
+		FOUNDRY_EXTENSION_METHOD_ARGUMENT_METADATA_OBJECT_IS_REQUIRED,
+		"demo.Node",
+		"Node",
+		false,
+	};
+	foundry_java::NativeMethodRegistration method;
+	method.name = "move";
+	method.signature.return_type.is_void = true;
+	method.signature.arguments.push_back(object_type);
+	method.call = reinterpret_cast<FoundryExtensionClassMethodCall>(0x1);
+	expect(services.register_method(library, "Player", method),
+			"complete method mapping must issue the void ABI call");
+	expect(services.register_integer_constant(library, "Player",
+				   { "IDLE", "Mode", 7, false }),
+			"constant mapping must issue the void ABI call");
+	expect(services.register_property_group(library, "Player", "Movement",
+				   "move_") &&
+					services.register_property_subgroup(library, "Player", "Speed",
+							"speed_"),
+			"group mappings must issue the void ABI calls");
+	foundry_java::NativePropertyRegistration property{
+		"target", object_type, "get_target", "set_target", -1
+	};
+	expect(services.register_property(library, "Player", property),
+			"property mapping must issue the void ABI call");
+	property.index = 4;
+	expect(services.register_indexed_property(library, "Player", property),
+			"indexed property mapping must issue the void ABI call");
+	expect(
+			services.register_signal(library, "Player", { "changed", { object_type } }),
+			"signal mapping must issue the void ABI call");
+	expect(services.unregister_class(library, "Player"),
+			"unregister mapping must issue the void ABI call");
+	expect(abi_operations ==
+					std::vector<std::string>{
+							"class:Player:Node",
+							"method:Player:move",
+							"constant:Mode:IDLE:7:0",
+							"group:Movement:move_",
+							"subgroup:Speed:speed_",
+							"property:target:set_target:get_target",
+							"indexed:target:set_target:get_target:4",
+							"signal:changed:1",
+							"unregister:Player",
+					},
+			"adapter must map exactly the nine public void registration services");
+	const char *native_name_text = "_process";
+	const char *native_name_storage = native_name_text;
+	expect(services.string_name(&native_name_storage) == "_process",
+			"adapter must decode callback StringName values through public ABI");
+	std::uint64_t nil = 99;
+	services.initialize_nil(&nil);
+	expect(nil == 0,
+			"adapter must initialize callback failures through variant_new_nil");
+}
+
+void test_public_abi_registration_adapter_destroys_failed_strings_before_mutation() {
+	auto native = std::make_shared<foundry_java::BridgeServices>();
+	native->string_name_new_with_utf8_chars_and_len = &abi_make_name;
+	native->string_new_with_utf8_chars_and_len2 = &abi_make_string;
+	native->variant_get_ptr_destructor = &abi_get_destructor;
+	native->classdb_register_extension_class_signal = &abi_register_signal;
+	foundry_java::AbiRegistrationServices services(native, {});
+	foundry_java::JavaTransportType argument{
+		FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
+		FOUNDRY_EXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT64,
+		"long",
+		"",
+		false,
+	};
+	abi_operations.clear();
+	abi_string_error = 7;
+	abi_string_destructor_count = 0;
+
+	expect(
+			!services.register_signal(
+					reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x991),
+					"Player", { "changed", { argument } }),
+			"positive public ABI String errors must fail registration preparation");
+	expect(abi_operations.empty(),
+			"String preparation failure must perform zero native mutations");
+	expect(abi_string_destructor_count == 1,
+			"initialized String storage must be destroyed after an ABI error");
+	abi_string_error = 0;
 }
 
 class RecordingServices final : public foundry_java::RegistrationServices {
@@ -144,6 +473,7 @@ public:
 		released_accesses.push_back(access);
 		callback_events.emplace_back("release_access");
 		release_count.fetch_add(1);
+		retained_access_owner.reset();
 	}
 
 	foundry_java::NativeInstance create_instance(
@@ -162,7 +492,8 @@ public:
 		return created_instance;
 	}
 
-	void discard_partial_instance(foundry_java::RegistrationAccessToken,
+	void discard_partial_instance(
+			foundry_java::RegistrationAccessToken,
 			foundry_java::NativeInstance instance) noexcept override {
 		discarded_instances.push_back(instance);
 	}
@@ -233,6 +564,7 @@ public:
 	std::vector<foundry_java::RegistrationAccessToken> released_accesses;
 	std::vector<std::string> callback_events;
 	std::atomic<int> release_count{ 0 };
+	std::shared_ptr<void> retained_access_owner;
 	foundry_java::NativeInstance created_instance{
 		reinterpret_cast<FoundryExtensionObjectPtr>(0x100),
 		900,
@@ -253,6 +585,74 @@ public:
 	std::function<void()> invoke_hook;
 	std::function<void()> create_hook;
 	std::function<void()> free_hook;
+};
+
+class ReplacingCallbacks final : public NoOpCallbacks {
+public:
+	ReplacingCallbacks() {
+		services = std::make_shared<foundry_java::BridgeServices>();
+		services->variant_new_nil = &output_variant_nil;
+		services->variant_new_copy = &output_variant_copy;
+		services->variant_destroy = &output_variant_destroy;
+		services->variant_get_ptr_constructor = &output_native_constructor;
+		services->variant_get_ptr_destructor = &output_native_destructor;
+	}
+
+	bool invoke(foundry_java::RegistrationAccessToken,
+			foundry_java::RegistrationInstanceToken,
+			const std::string &,
+			const FoundryExtensionConstVariantPtr *, FoundryExtensionInt,
+			FoundryExtensionVariantPtr result,
+			FoundryExtensionCallError *) noexcept override {
+		return callback_success &&
+				foundry_java::replace_initialized_variant(
+						*services, result, &variant_source);
+	}
+
+	bool get_property(foundry_java::RegistrationAccessToken,
+			foundry_java::RegistrationInstanceToken,
+			const std::string &,
+			FoundryExtensionVariantPtr result) noexcept override {
+		return callback_success &&
+				foundry_java::replace_initialized_variant(
+						*services, result, &variant_source);
+	}
+
+	bool invoke_virtual(foundry_java::RegistrationAccessToken,
+			foundry_java::RegistrationInstanceToken,
+			const std::string &java_name,
+			const FoundryExtensionConstTypePtr *,
+			FoundryExtensionTypePtr result) noexcept override {
+		if (!callback_success) {
+			return false;
+		}
+		return java_name == "generic"
+				? foundry_java::replace_initialized_variant(
+						  *services, result, &variant_source)
+				: foundry_java::replace_initialized_native(
+						  *services, FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3,
+						  result, &native_source);
+	}
+
+	void initialize_virtual_default(
+			const foundry_java::JavaTransportType &return_type,
+			FoundryExtensionTypePtr result) noexcept override {
+		if (return_type.java_type ==
+				"games.cafecito.foundry.types.Variant") {
+			services->variant_new_nil(result);
+			return;
+		}
+		const FoundryExtensionPtrConstructor constructor =
+				services->variant_get_ptr_constructor(
+						return_type.abi_type, 0);
+		if (constructor != nullptr) {
+			constructor(result, nullptr);
+		}
+	}
+
+	std::shared_ptr<foundry_java::BridgeServices> services;
+	std::uint64_t variant_source = 42;
+	std::uint64_t native_source = 77;
 };
 
 foundry_java::RegistrationClassDescriptor valid_descriptor() {
@@ -339,7 +739,8 @@ void test_strict_java_transport_signature_parser() {
 			"void(games.cafecito.foundry.types.FoundryDictionary<java.lang."
 			"String,games.cafecito.foundry.types.FoundryArray<games.cafecito."
 			"foundry.types.Variant>>)");
-	expect(generic_method.ok() && generic_method.signature.arguments.size() == 1 &&
+	expect(
+			generic_method.ok() && generic_method.signature.arguments.size() == 1 &&
 					generic_method.signature.arguments[0].abi_type ==
 							FOUNDRY_EXTENSION_VARIANT_TYPE_DICTIONARY,
 			"generic commas and nested containers must parse as one method argument");
@@ -425,8 +826,7 @@ void test_whole_descriptor_validation_precedes_native_mutation() {
 	descriptor = valid_descriptor();
 	descriptor.members[0].foundry_name =
 			"__foundry_java_property_get_7370656564";
-	descriptor.members.push_back(
-			{
+	descriptor.members.push_back({
 					foundry_java::RegistrationMemberKind::PROPERTY,
 					"speed",
 					"speed",
@@ -483,7 +883,8 @@ void test_object_types_resolve_before_native_mutation() {
 			7, 3, reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x11),
 			std::move(descriptor));
 	expect(resolved.ok(), "resolved object type must register");
-	expect(services->properties.size() == 2 &&
+	expect(
+			services->properties.size() == 2 &&
 					services->properties[0].type.class_name == "Enemy" &&
 					services->properties[1].type.class_name == "Player",
 			"self and forward object constraints must use cataloged Foundry names");
@@ -908,6 +1309,164 @@ void test_stable_callbacks_dispatch_instances_properties_and_virtuals() {
 	expect(result == 0, "stale callback must initialize deterministic NIL");
 }
 
+void test_callback_outputs_replace_initialized_defaults_exactly_once() {
+	auto services = std::make_shared<RecordingServices>();
+	auto callbacks = std::make_shared<ReplacingCallbacks>();
+	foundry_java::RegistrationRegistry registry(services, callbacks);
+	auto descriptor = valid_descriptor();
+	descriptor.members[0].signature = "long()";
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::PROPERTY,
+			"score",
+			"score",
+			"long",
+			{},
+			foundry_java::RegistrationPropertyDetails{
+					"getScore", "", -1, "", "", "", "" },
+	});
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::OVERRIDE,
+			"_calculate",
+			"calculate",
+			"games.cafecito.foundry.types.Vector3()",
+			{},
+			{},
+	});
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::OVERRIDE,
+			"_generic",
+			"generic",
+			"games.cafecito.foundry.types.Variant()",
+			{},
+			{},
+	});
+	expect(registry
+					.register_class(
+							21, 8,
+							reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x21),
+							std::move(descriptor))
+					.ok(),
+			"initialized output fixture must register");
+	const FoundryExtensionClassCreationInfo5 creation =
+			services->class_registration.creation_info;
+	(void)creation.create_instance_func(creation.class_userdata, 1);
+	const auto method = std::find_if(
+			services->methods.begin(), services->methods.end(),
+			[](const foundry_java::NativeMethodRegistration &candidate) {
+				return candidate.java_name == "move";
+			});
+	expect(method != services->methods.end(),
+			"initialized output fixture must retain its method callback");
+
+	output_variant_copy_count = 0;
+	output_variant_destructor_count = 0;
+	std::uint64_t result = 99;
+	FoundryExtensionCallError error{};
+	method->call(method->userdata, callbacks->created_instance_userdata,
+			nullptr, 0, &result, &error);
+	expect(result == 42 && output_variant_destructor_count == 1 &&
+					output_variant_copy_count == 1,
+			"method success must destroy NIL once and copy the encoded result once");
+	const auto native_name = [](const char *name) {
+		return reinterpret_cast<FoundryExtensionConstStringNamePtr>(name);
+	};
+	result = 99;
+	expect(creation.get_func(callbacks->created_instance_userdata,
+				   native_name("score"), &result) != 0 &&
+					result == 42 && output_variant_destructor_count == 2 &&
+					output_variant_copy_count == 2,
+			"property success must destroy NIL once and copy the encoded result once");
+
+	callbacks->callback_success = false;
+	result = 99;
+	method->call(method->userdata, callbacks->created_instance_userdata,
+			nullptr, 0, &result, &error);
+	expect(result == 0 && output_variant_destructor_count == 2 &&
+					output_variant_copy_count == 2,
+			"method failure must preserve NIL without destroy or copy");
+	result = 99;
+	expect(creation.get_func(callbacks->created_instance_userdata,
+				   native_name("score"), &result) == 0 &&
+					result == 0 && output_variant_destructor_count == 2 &&
+					output_variant_copy_count == 2,
+			"property failure must preserve NIL without destroy or copy");
+	foundry_java::BridgeServices incomplete_variant = *callbacks->services;
+	incomplete_variant.variant_new_copy = nullptr;
+	result = 0;
+	expect(!foundry_java::replace_initialized_variant(
+				   incomplete_variant, &result, &callbacks->variant_source) &&
+					result == 0 && output_variant_destructor_count == 2 &&
+					output_variant_copy_count == 2,
+			"Variant replacement prevalidation failure must leave NIL untouched");
+
+	void *generic_virtual_data = creation.get_virtual_call_data_func(
+			creation.class_userdata, native_name("_generic"), 0);
+	expect(generic_virtual_data != nullptr,
+			"generic Variant virtual fixture must retain call data");
+	output_variant_default_count = 0;
+	output_variant_copy_count = 0;
+	output_variant_destructor_count = 0;
+	callbacks->callback_success = true;
+	result = 99;
+	creation.call_virtual_with_data_func(callbacks->created_instance_userdata,
+			native_name("_generic"), generic_virtual_data, nullptr, &result);
+	expect(result == 42 && output_variant_default_count == 1 &&
+					output_variant_destructor_count == 1 &&
+					output_variant_copy_count == 1,
+			"generic Variant virtual success must replace its NIL exactly once");
+	callbacks->callback_success = false;
+	result = 99;
+	creation.call_virtual_with_data_func(callbacks->created_instance_userdata,
+			native_name("_generic"), generic_virtual_data, nullptr, &result);
+	expect(result == 0 && output_variant_default_count == 2 &&
+					output_variant_destructor_count == 1 &&
+					output_variant_copy_count == 1,
+			"generic Variant virtual failure must preserve its NIL default");
+
+	void *virtual_data = creation.get_virtual_call_data_func(
+			creation.class_userdata, native_name("_calculate"), 0);
+	expect(virtual_data != nullptr,
+			"initialized output fixture must retain virtual call data");
+	output_native_default_count = 0;
+	output_native_copy_count = 0;
+	output_native_destructor_count = 0;
+	callbacks->callback_success = true;
+	result = 99;
+	creation.call_virtual_with_data_func(callbacks->created_instance_userdata,
+			native_name("_calculate"), virtual_data, nullptr, &result);
+	expect(result == 77 && output_native_default_count == 1 &&
+					output_native_destructor_count == 1 &&
+					output_native_copy_count == 1,
+			"nontrivial virtual success must destroy its default once and copy once");
+	callbacks->callback_success = false;
+	result = 99;
+	creation.call_virtual_with_data_func(callbacks->created_instance_userdata,
+			native_name("_calculate"), virtual_data, nullptr, &result);
+	expect(result == 5 && output_native_default_count == 2 &&
+					output_native_destructor_count == 1 &&
+					output_native_copy_count == 1,
+			"nontrivial virtual failure must preserve its constructed default");
+
+	foundry_java::BridgeServices incomplete = *callbacks->services;
+	incomplete.variant_get_ptr_constructor = nullptr;
+	result = 5;
+	expect(!foundry_java::replace_initialized_native(
+				   incomplete, FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3,
+				   &result, &callbacks->native_source) &&
+					result == 5 && output_native_destructor_count == 1 &&
+					output_native_copy_count == 1,
+			"replacement prevalidation failure must leave the default untouched");
+	callbacks->services->variant_get_ptr_destructor(
+			FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR3)(&callbacks->native_source);
+	expect(output_native_destructor_count == 2,
+			"temporary nontrivial replacement source must be destroyed once");
+
+	creation.free_instance_func(
+			creation.class_userdata, callbacks->created_instance_userdata);
+	expect(registry.unregister_class(21, 8, "Player").ok(),
+			"initialized output fixture must unregister");
+}
+
 void test_unregister_drains_callbacks_and_rejects_reentrant_cleanup() {
 	auto services = std::make_shared<RecordingServices>();
 	auto callbacks = std::make_shared<NoOpCallbacks>();
@@ -1073,9 +1632,9 @@ void test_shutdown_waits_for_inflight_registration_and_closes_terminal_gate() {
 			"in-flight registration must finish before shutdown rolls it back");
 	expect(registry.active_class_count() == 0 &&
 					callbacks->release_count.load() == 1,
-			"shutdown must not miss the class completed by an in-flight registration");
-	expect(registry
-							.register_class(
+			"shutdown must not miss the class completed by an in-flight "
+			"registration");
+	expect(registry.register_class(
 									15, 9,
 									reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x19),
 									valid_descriptor())
@@ -1130,15 +1689,15 @@ void test_unregister_waits_for_instance_cleanup_before_access_release() {
 		gate_condition.wait(lock, [&] { return allow_cleanup; });
 	};
 	std::thread free_thread([&] {
-		creation.free_instance_func(
-				creation.class_userdata, callbacks->created_instance_userdata);
+		creation.free_instance_func(creation.class_userdata, callbacks->created_instance_userdata);
 	});
 	{
 		std::unique_lock<std::mutex> lock(gate_mutex);
 		gate_condition.wait(lock, [&] { return cleanup_entered; });
 	}
 	foundry_java::RegistrationResult unregister_result;
-	std::thread unregister_thread([&] {
+	std::thread unregister_thread(
+			[&] {
 		unregister_result = registry.unregister_class(16, 10, "Player");
 	});
 	std::this_thread::yield();
@@ -1197,7 +1756,8 @@ void test_create_losing_unregister_race_discards_complete_instance() {
 		unregister_condition.notify_all();
 	};
 	foundry_java::RegistrationResult unregister_result;
-	std::thread unregister_thread([&] {
+	std::thread unregister_thread(
+			[&] {
 		unregister_result = registry.unregister_class(19, 13, "Player");
 	});
 	{
@@ -1213,7 +1773,8 @@ void test_create_losing_unregister_race_discards_complete_instance() {
 	unregister_thread.join();
 	expect(created_object == nullptr && unregister_result.ok(),
 			"create losing unregister race must reject and finish cleanup");
-	expect(callbacks->discarded_instances.size() == 1 &&
+	expect(
+			callbacks->discarded_instances.size() == 1 &&
 					callbacks->discarded_instances[0].object ==
 							reinterpret_cast<FoundryExtensionObjectPtr>(0x100) &&
 					callbacks->discarded_instances[0].access_instance == 900,
@@ -1268,10 +1829,12 @@ void test_concurrent_shutdown_callers_share_one_terminal_result() {
 	}
 	first.join();
 	second.join();
-	expect(first_result.ok() && second_result.ok(),
+	expect(
+			first_result.ok() && second_result.ok(),
 			"concurrent shutdown callers must share the successful terminal result");
 	expect(reentrant_result.status == foundry_java::RegistrationStatus::RETRY,
-			"same-thread reentrant shutdown must return retry instead of deadlocking");
+			"same-thread reentrant shutdown must return retry instead of "
+			"deadlocking");
 	expect(std::count(services->operations.begin(), services->operations.end(),
 				   "unregister:Player") == 1,
 			"concurrent shutdown must unregister each class exactly once");
@@ -1365,8 +1928,7 @@ void test_shutdown_reentry_from_instance_cleanup_returns_retry() {
 		gate_condition.notify_all();
 	};
 	std::thread cleanup_thread([&] {
-		creation.free_instance_func(
-				creation.class_userdata, callbacks->created_instance_userdata);
+		creation.free_instance_func(creation.class_userdata, callbacks->created_instance_userdata);
 	});
 	{
 		std::unique_lock<std::mutex> lock(gate_mutex);
@@ -1377,7 +1939,8 @@ void test_shutdown_reentry_from_instance_cleanup_returns_retry() {
 			[&] { shutdown_result = registry.shutdown(22, 16); });
 	cleanup_thread.join();
 	shutdown_thread.join();
-	expect(reentrant_result.status == foundry_java::RegistrationStatus::RETRY &&
+	expect(
+			reentrant_result.status == foundry_java::RegistrationStatus::RETRY &&
 					shutdown_result.ok(),
 			"instance cleanup owner must not wait for shutdown that is draining it");
 }
@@ -1436,6 +1999,130 @@ void test_registry_destructor_drains_owned_classes() {
 			"registry destructor must drain instances before access globals");
 }
 
+void test_failed_active_unregister_quarantines_callbacks_until_retry() {
+	auto services = std::make_shared<RecordingServices>();
+	auto callbacks = std::make_shared<NoOpCallbacks>();
+	foundry_java::RegistrationRegistry registry(services, callbacks);
+	auto descriptor = valid_descriptor();
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::OVERRIDE,
+			"_process",
+			"process",
+			"void(double)",
+			{},
+			{},
+	});
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::PROPERTY,
+			"speed",
+			"speed",
+			"double",
+			{},
+			foundry_java::RegistrationPropertyDetails{
+					"getSpeed", "setSpeed", -1, "", "", "", "" },
+	});
+	auto transport_owner = std::make_shared<int>(1);
+	std::weak_ptr<int> transport_lifetime = transport_owner;
+	callbacks->retained_access_owner = transport_owner;
+	transport_owner.reset();
+	expect(registry
+					.register_class(
+							24, 18,
+							reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x28),
+							std::move(descriptor))
+					.ok(),
+			"active unregister failure fixture must register");
+	const FoundryExtensionClassCreationInfo5 creation =
+			services->class_registration.creation_info;
+	const auto native_name = [](const char *name) {
+		return reinterpret_cast<FoundryExtensionConstStringNamePtr>(name);
+	};
+	expect(creation.create_instance_func(creation.class_userdata, 0) != nullptr,
+			"active unregister failure fixture must create an instance");
+	void *virtual_data = creation.get_virtual_call_data_func(
+			creation.class_userdata, native_name("_process"), 0);
+	expect(virtual_data != nullptr,
+			"active unregister failure fixture must resolve virtual call data");
+
+	services->fail_operation = "unregister:Player";
+	const auto failure = registry.shutdown(24, 18);
+	expect(!failure.ok() && failure.phase == "registration_unregister",
+			"failed active unregister must report native failure");
+	expect(callbacks->release_count.load() == 0 &&
+					callbacks->freed_instances.empty() &&
+					!transport_lifetime.expired(),
+			"failed unregister must retain instance, access, and transport ownership");
+
+	callbacks->invoked_names.clear();
+	callbacks->get_names.clear();
+	callbacks->set_names.clear();
+	callbacks->virtual_names.clear();
+	const int create_count = callbacks->create_count;
+	std::uint64_t argument = 7;
+	std::uint64_t result = 99;
+	const FoundryExtensionConstVariantPtr arguments[]{ &argument };
+	FoundryExtensionCallError error{
+		FOUNDRY_EXTENSION_CALL_OK,
+		-1,
+		-1,
+	};
+	services->methods[0].call(services->methods[0].userdata,
+			callbacks->created_instance_userdata, arguments, 1, &result, &error);
+	expect(error.error == FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD &&
+					result == 0 && callbacks->invoked_names.empty(),
+			"quarantined method callback must return its deterministic default");
+	result = 99;
+	expect(creation.get_func(callbacks->created_instance_userdata,
+				   native_name("speed"), &result) == 0 &&
+					result == 0 && callbacks->get_names.empty(),
+			"quarantined property getter must return its deterministic default");
+	expect(creation.set_func(callbacks->created_instance_userdata,
+				   native_name("speed"), &argument) == 0 &&
+					callbacks->set_names.empty(),
+			"quarantined property setter must reject without dispatch");
+	expect(creation.get_virtual_call_data_func(
+				   creation.class_userdata, native_name("_process"), 0) == nullptr,
+			"quarantined class must not expose new virtual call data");
+	result = 99;
+	creation.call_virtual_with_data_func(callbacks->created_instance_userdata,
+			native_name("_process"), virtual_data, nullptr, &result);
+	expect(result == 0 && callbacks->virtual_names.empty(),
+			"quarantined virtual callback must initialize its deterministic default");
+	FoundryExtensionBool string_valid = 1;
+	creation.to_string_func(callbacks->created_instance_userdata, &string_valid,
+			&result);
+	expect(string_valid == 0 && callbacks->to_string_count == 0,
+			"quarantined to_string callback must report invalid without dispatch");
+	expect(creation.create_instance_func(creation.class_userdata, 0) == nullptr &&
+					callbacks->create_count == create_count,
+			"quarantined create callback must reject without dispatch");
+
+	expect(!registry.shutdown(24, 18).ok() &&
+					callbacks->release_count.load() == 0 &&
+					callbacks->freed_instances.empty() &&
+					!transport_lifetime.expired(),
+			"failed quarantine retry must preserve all retained ownership");
+	expect(creation.create_instance_func(creation.class_userdata, 0) == nullptr &&
+					callbacks->create_count == create_count,
+			"failed quarantine retry must preserve the callback gate");
+	services->fail_operation.clear();
+	services->operations.clear();
+	expect(registry.shutdown(24, 18).ok(),
+			"later shutdown retry must unregister the quarantined class");
+	expect(services->operations ==
+					std::vector<std::string>{ "unregister:Player" },
+			"successful retry must unregister the retained class exactly once");
+	expect(callbacks->callback_events ==
+					std::vector<std::string>{ "free_instance", "release_access" } &&
+					callbacks->freed_instances ==
+							std::vector<foundry_java::RegistrationInstanceToken>{ 900 } &&
+					callbacks->released_accesses ==
+							std::vector<foundry_java::RegistrationAccessToken>{ 41 } &&
+					callbacks->release_count.load() == 1 &&
+					transport_lifetime.expired(),
+			"retry must clean instances before access and release transport exactly once");
+}
+
 void test_failed_provisional_rollback_retains_ownership_for_shutdown_retry() {
 	auto services = std::make_shared<RecordingServices>();
 	auto callbacks = std::make_shared<NoOpCallbacks>();
@@ -1482,13 +2169,17 @@ void test_failed_provisional_rollback_retains_ownership_for_shutdown_retry() {
 int main() {
 	test_strict_java_transport_signature_parser();
 	test_registration_interface_inventory_excludes_virtual_registration();
+	test_public_abi_registration_adapter_maps_exact_void_services();
+	test_public_abi_registration_adapter_destroys_failed_strings_before_mutation();
 	test_whole_descriptor_validation_precedes_native_mutation();
 	test_object_types_resolve_before_native_mutation();
 	test_registration_uses_class5_and_exact_member_order();
 	test_property_details_emit_canonical_transitions_and_indexed_forms();
 	test_provisional_failure_self_rolls_back_and_completed_classes_reverse();
+	test_failed_active_unregister_quarantines_callbacks_until_retry();
 	test_failed_provisional_rollback_retains_ownership_for_shutdown_retry();
 	test_stable_callbacks_dispatch_instances_properties_and_virtuals();
+	test_callback_outputs_replace_initialized_defaults_exactly_once();
 	test_unregister_drains_callbacks_and_rejects_reentrant_cleanup();
 	test_cross_context_rejection_and_shutdown_free_instance_before_access();
 	test_shutdown_waits_for_inflight_registration_and_closes_terminal_gate();
