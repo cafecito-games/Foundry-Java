@@ -116,6 +116,133 @@ class CallAndSignalTest {
         assertEquals(List.of(0, 1, 2), depths);
     }
 
+    @Test
+    void callableBackendsDistinguishLocalAndNativeValues() {
+        FoundryCallable local =
+                FoundryCallable.fixed(0, ignored -> Variant.of("local"));
+        List<String> events = new ArrayList<>();
+        FoundryCallable nativeValue =
+                FoundryCallable.nativeBacked(
+                        11,
+                        41,
+                        2,
+                        new FoundryCallable.NativeBackend() {
+                            @Override
+                            public Variant invoke(
+                                    long contextHandle,
+                                    long bridgeHandle,
+                                    List<Variant> arguments) {
+                                events.add(
+                                        "invoke:"
+                                                + contextHandle
+                                                + ":"
+                                                + bridgeHandle
+                                                + ":"
+                                                + arguments.size());
+                                return Variant.of("native");
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long bridgeHandle) {
+                                events.add("release:" + contextHandle + ":" + bridgeHandle);
+                            }
+                        });
+
+        assertTrue(local.isLocal());
+        assertFalse(local.isNativeBacked());
+        assertFalse(nativeValue.isLocal());
+        assertTrue(nativeValue.isNativeBacked());
+        assertEquals(11, nativeValue.nativeContextHandle());
+        assertEquals(41, nativeValue.nativeBridgeHandle());
+        assertEquals(2, nativeValue.arity());
+        assertEquals(
+                Variant.of("native"),
+                nativeValue.call(List.of(Variant.nil(), Variant.nil())));
+        nativeValue.close();
+        nativeValue.close();
+        assertEquals(List.of("invoke:11:41:2", "release:11:41"), events);
+        assertThrows(
+                IllegalStateException.class,
+                () -> nativeValue.call(List.of(Variant.nil(), Variant.nil())));
+    }
+
+    @Test
+    void signalBackendsKeepLocalBehaviorAndPreserveNativeIdentity() {
+        FoundrySignal local = new FoundrySignal();
+        List<String> events = new ArrayList<>();
+        FoundrySignal nativeValue =
+                FoundrySignal.nativeBacked(
+                        12,
+                        99,
+                        new FoundrySignal.NativeBackend() {
+                            @Override
+                            public long connect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    FoundryCallable callable) {
+                                events.add("connect:" + contextHandle + ":" + signalHandle);
+                                return 71;
+                            }
+
+                            @Override
+                            public void disconnect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    long connectionHandle) {
+                                events.add(
+                                        "disconnect:"
+                                                + contextHandle
+                                                + ":"
+                                                + signalHandle
+                                                + ":"
+                                                + connectionHandle);
+                            }
+
+                            @Override
+                            public void emit(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    List<Variant> arguments) {
+                                events.add(
+                                        "emit:"
+                                                + contextHandle
+                                                + ":"
+                                                + signalHandle
+                                                + ":"
+                                                + arguments.size());
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long signalHandle) {
+                                events.add("release:" + contextHandle + ":" + signalHandle);
+                            }
+                        });
+
+        assertTrue(local.isLocal());
+        assertFalse(local.isNativeBacked());
+        assertFalse(nativeValue.isLocal());
+        assertTrue(nativeValue.isNativeBacked());
+        assertEquals(12, nativeValue.nativeContextHandle());
+        assertEquals(99, nativeValue.nativeBridgeHandle());
+        FoundrySignal.Connection connection =
+                nativeValue.connect(FoundryCallable.variadic(ignored -> Variant.nil()));
+        assertTrue(connection.isConnected());
+        nativeValue.emit(Variant.nil());
+        connection.disconnect();
+        connection.disconnect();
+        assertFalse(connection.isConnected());
+        nativeValue.close();
+        nativeValue.close();
+        assertEquals(
+                List.of(
+                        "connect:12:99",
+                        "emit:12:99:1",
+                        "disconnect:12:99:71",
+                        "release:12:99"),
+                events);
+        assertThrows(IllegalStateException.class, nativeValue::emit);
+    }
+
     static final class CallableObject extends FoundryObject {
         CallableObject(FoundryBindingContext context, ObjectLease lease) {
             super(context, lease);

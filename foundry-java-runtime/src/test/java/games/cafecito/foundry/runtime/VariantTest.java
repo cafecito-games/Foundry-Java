@@ -172,6 +172,58 @@ class VariantTest {
     }
 
     @Test
+    void variantsPreserveNativeCallableAndSignalBridgeIdentity() {
+        FoundryCallable callable =
+                FoundryCallable.nativeBacked(
+                        11,
+                        51,
+                        -1,
+                        new FoundryCallable.NativeBackend() {
+                            @Override
+                            public Variant invoke(
+                                    long contextHandle,
+                                    long bridgeHandle,
+                                    java.util.List<Variant> arguments) {
+                                return Variant.nil();
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long bridgeHandle) {}
+                        });
+        FoundrySignal signal =
+                FoundrySignal.nativeBacked(
+                        11,
+                        52,
+                        new FoundrySignal.NativeBackend() {
+                            @Override
+                            public long connect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    FoundryCallable listener) {
+                                return 1;
+                            }
+
+                            @Override
+                            public void disconnect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    long connectionHandle) {}
+
+                            @Override
+                            public void emit(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    java.util.List<Variant> arguments) {}
+
+                            @Override
+                            public void release(long contextHandle, long signalHandle) {}
+                        });
+
+        assertEquals(51, Variant.ofCallable(callable).asCallable().nativeBridgeHandle());
+        assertEquals(52, Variant.ofSignal(signal).asSignal().nativeBridgeHandle());
+    }
+
+    @Test
     void equalityIsTypeStrict() {
         assertNotEquals(Variant.of(1L), Variant.of(1.0d));
         assertNotEquals(Variant.of(true), Variant.of(1L));

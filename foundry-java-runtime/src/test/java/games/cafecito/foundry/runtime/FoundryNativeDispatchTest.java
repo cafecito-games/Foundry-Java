@@ -1,0 +1,184 @@
+package games.cafecito.foundry.runtime;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+class FoundryNativeDispatchTest {
+    @Test
+    void freezesStableKindWireCodes() {
+        assertEquals(1, FoundryNativeDispatch.Kind.CLASS_METHOD.wireCode());
+        assertEquals(2, FoundryNativeDispatch.Kind.CLASS_PROPERTY.wireCode());
+        assertEquals(3, FoundryNativeDispatch.Kind.CLASS_SIGNAL.wireCode());
+        assertEquals(4, FoundryNativeDispatch.Kind.BUILTIN_METHOD.wireCode());
+        assertEquals(5, FoundryNativeDispatch.Kind.BUILTIN_CONSTRUCTOR.wireCode());
+        assertEquals(6, FoundryNativeDispatch.Kind.BUILTIN_OPERATOR.wireCode());
+        assertEquals(7, FoundryNativeDispatch.Kind.BUILTIN_MEMBER.wireCode());
+        assertEquals(8, FoundryNativeDispatch.Kind.BUILTIN_CONSTANT.wireCode());
+        assertEquals(9, FoundryNativeDispatch.Kind.UTILITY_FUNCTION.wireCode());
+    }
+
+    @Test
+    void copiesFormalTypesAndPreservesDefaultArgumentRange() {
+        var arguments = new java.util.ArrayList<>(List.of("StringName", "bool", "Variant"));
+        FoundryNativeDispatch dispatch =
+                method(arguments, 1, false, FoundryNativeDispatch.Kind.CLASS_METHOD);
+
+        arguments.clear();
+
+        assertEquals(List.of("StringName", "bool", "Variant"), dispatch.argumentNativeTypes());
+        assertEquals(1, dispatch.minimumArgumentCount());
+        assertThrows(
+                UnsupportedOperationException.class,
+                () -> dispatch.argumentNativeTypes().add("Object"));
+    }
+
+    @Test
+    void rejectsImpossibleFormalArityAndUnsignedHashValues() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> method(List.of("String"), 2, false, FoundryNativeDispatch.Kind.CLASS_METHOD));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new FoundryNativeDispatch(
+                                "classes/Node/methods/name#1",
+                                FoundryNativeDispatch.Kind.CLASS_METHOD,
+                                "Node",
+                                "name",
+                                0x1_0000_0000L,
+                                -1,
+                                List.of(),
+                                0,
+                                "String",
+                                "",
+                                "",
+                                -1,
+                                "",
+                                "",
+                                -1,
+                                false,
+                                false));
+    }
+
+    @Test
+    void validatesKindSpecificConstructorAndPropertyMetadata() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new FoundryNativeDispatch(
+                                "builtin_classes/String/constructors/#0",
+                                FoundryNativeDispatch.Kind.BUILTIN_CONSTRUCTOR,
+                                "String",
+                                "String",
+                                -1,
+                                -1,
+                                List.of(),
+                                0,
+                                "String",
+                                "",
+                                "",
+                                -1,
+                                "",
+                                "",
+                                -1,
+                                false,
+                                true));
+
+        FoundryNativeDispatch property =
+                new FoundryNativeDispatch(
+                        "classes/Node/properties/name",
+                        FoundryNativeDispatch.Kind.CLASS_PROPERTY,
+                        "Node",
+                        "name",
+                        -1,
+                        -1,
+                        List.of("StringName"),
+                        0,
+                        "StringName",
+                        "classes/Node/methods/get_name#1",
+                        "get_name",
+                        1,
+                        "classes/Node/methods/set_name#2",
+                        "set_name",
+                        2,
+                        false,
+                        false);
+
+        assertEquals("get_name", property.getterNativeName());
+        assertEquals("set_name", property.setterNativeName());
+    }
+
+    @Test
+    void rejectsPartialAccessorBundlesAndMetadataOnWrongKinds() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new FoundryNativeDispatch(
+                                "classes/Node/properties/name",
+                                FoundryNativeDispatch.Kind.CLASS_PROPERTY,
+                                "Node",
+                                "name",
+                                -1,
+                                -1,
+                                List.of("StringName"),
+                                0,
+                                "StringName",
+                                "classes/Node/methods/get_name#1",
+                                "",
+                                1,
+                                "",
+                                "",
+                                -1,
+                                false,
+                                false));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        new FoundryNativeDispatch(
+                                "classes/Node/signals/ready",
+                                FoundryNativeDispatch.Kind.CLASS_SIGNAL,
+                                "Node",
+                                "ready",
+                                -1,
+                                -1,
+                                List.of(),
+                                0,
+                                "Signal",
+                                "unexpected",
+                                "unexpected",
+                                1,
+                                "",
+                                "",
+                                -1,
+                                false,
+                                false));
+    }
+
+    private static FoundryNativeDispatch method(
+            List<String> arguments,
+            int minimumArgumentCount,
+            boolean vararg,
+            FoundryNativeDispatch.Kind kind) {
+        return new FoundryNativeDispatch(
+                "classes/Node/methods/demo#1",
+                kind,
+                "Node",
+                "demo",
+                1,
+                -1,
+                arguments,
+                minimumArgumentCount,
+                "Variant",
+                "",
+                "",
+                -1,
+                "",
+                "",
+                -1,
+                vararg,
+                false);
+    }
+}
