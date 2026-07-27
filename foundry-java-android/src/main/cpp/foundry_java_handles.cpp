@@ -367,6 +367,10 @@ std::uint64_t ContextOperationLease::generation() const noexcept {
 	return impl == nullptr ? 0 : impl->generation;
 }
 
+std::shared_ptr<const BridgeServices> ContextOperationLease::services() const noexcept {
+	return impl == nullptr || impl->context == nullptr ? nullptr : impl->context->services;
+}
+
 NativeTransport *ContextOperationLease::transport() const noexcept {
 	return impl == nullptr || impl->context == nullptr ? nullptr : impl->context->transport.get();
 }

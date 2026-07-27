@@ -976,6 +976,13 @@ public:
 			shutdown_during_deinitialize_result =
 					runtime->shutdown_all(FOUNDRY_EXTENSION_INITIALIZATION_CORE);
 		}
+		if (probe_cleanup_operation) {
+			ordinary_operation_during_cleanup =
+					static_cast<bool>(runtime->acquire_operation(context));
+			cleanup_operation_during_cleanup =
+					static_cast<bool>(runtime->acquire_operation(
+							context, foundry_java::ContextOperationKind::CLEANUP));
+		}
 		if (context == blocked_deinitialize_context) {
 			std::unique_lock lock(deinitialize_mutex);
 			deinitialize_started = true;
@@ -1065,6 +1072,9 @@ public:
 	bool shutdown_from_callback_result = true;
 	bool shutdown_during_deinitialize = false;
 	bool shutdown_during_deinitialize_result = true;
+	bool probe_cleanup_operation = false;
+	bool ordinary_operation_during_cleanup = true;
+	bool cleanup_operation_during_cleanup = false;
 	foundry_java::ContextHandle blocked_deinitialize_context = 0;
 	std::mutex deinitialize_mutex;
 	std::condition_variable deinitialize_condition;
@@ -1291,7 +1301,11 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 	auto callbacks = std::make_shared<RecordingCallbacks>();
 	auto errors = std::make_shared<RecordingLogger>();
 	foundry_java::BridgeRuntime runtime(callbacks, errors);
-	const auto context = runtime.create_context();
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	auto library = reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x515);
+	expect(runtime.install_native_services(services, library),
+			"teardown fixture must install stable native services");
+	const auto context = runtime.create_native_context();
 	std::atomic<bool> resources_torn_down = false;
 	std::atomic<bool> shutdown_finished = false;
 	runtime.set_context_teardown(
@@ -1306,6 +1320,10 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 			});
 	auto operation = runtime.acquire_operation(context);
 	expect(operation && operation.generation() != 0, "live context must admit native operation");
+	expect(operation.services() == services,
+			"operation lease must retain the context service table for registration adapters");
+	expect(operation.library() == library,
+			"operation lease must retain the matching class library");
 
 	std::thread shutdown([&] {
 		expect(
@@ -1322,6 +1340,28 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 	expect(
 			resources_torn_down && shutdown_finished,
 			"resource teardown must run after operation drain and Java cleanup");
+}
+
+void test_java_cleanup_admits_only_authenticated_cleanup_operations() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	callbacks->runtime = &runtime;
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	expect(
+			runtime.install_native_services(
+					services, reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x516)),
+			"cleanup admission fixture must install native services");
+	const auto context = runtime.create_native_context();
+	callbacks->probe_cleanup_operation = true;
+
+	expect(
+			runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"cleanup admission fixture must shut down");
+	expect(!callbacks->ordinary_operation_during_cleanup,
+			"JAVA_CLEANUP must reject ordinary registration operations");
+	expect(callbacks->cleanup_operation_during_cleanup,
+			"JAVA_CLEANUP must admit same-thread unregister cleanup");
 }
 
 void test_native_operation_can_finish_on_a_different_thread() {
@@ -2888,6 +2928,7 @@ int main() {
 	test_context_identity_reentrancy_and_exception_containment();
 	test_shutdown_waits_for_active_callback_lease();
 	test_shutdown_waits_for_native_operations_then_tears_down_resources();
+	test_java_cleanup_admits_only_authenticated_cleanup_operations();
 	test_native_operation_can_finish_on_a_different_thread();
 	test_shutdown_all_waits_for_concurrent_context_teardown();
 	test_extension_entry_validates_and_orders_lifecycle();

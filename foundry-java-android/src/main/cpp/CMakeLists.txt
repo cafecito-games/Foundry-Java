@@ -68,6 +68,7 @@ add_library(
         foundry_java_handles.cpp
         foundry_java_interface.cpp
         foundry_java_registration.cpp
+        foundry_java_registration_bridge.cpp
         foundry_java_transport.cpp
 )
 target_compile_features(foundry_java_runtime PUBLIC cxx_std_17)

@@ -2,6 +2,7 @@
 
 #include "foundry_java_abi_layout.h"
 #include "foundry_java_contract.h"
+#include "foundry_java_registration_bridge.h"
 #include "foundry_java_transport.h"
 
 #include <jni.h>
@@ -14,6 +15,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -22,6 +24,13 @@ namespace foundry_java {
 namespace {
 
 constexpr char INITIALIZER_CLASS[] = "games/cafecito/foundry/java/FoundryJavaInitializer";
+constexpr char ENGINE_CLASS[] =
+		"games/cafecito/foundry/java/FoundryNativeEngine";
+constexpr char SNAPSHOT_CLASS[] =
+		"games/cafecito/foundry/java/FoundryNativeEngine$NativeVariantSnapshot";
+constexpr char VARIANT_CLASS[] = "games/cafecito/foundry/types/Variant";
+
+class JniRegistrationBridge;
 
 class FoundryErrorSink final : public ErrorSink {
 public:
@@ -53,7 +62,14 @@ public:
 		}
 		const jint status = java_vm->GetEnv(reinterpret_cast<void **>(&environment), JNI_VERSION_1_6);
 		if (status == JNI_EDETACHED) {
-			if (java_vm->AttachCurrentThread(&environment, nullptr) == JNI_OK) {
+#if defined(__ANDROID__)
+			const jint attach_status =
+					java_vm->AttachCurrentThread(&environment, nullptr);
+#else
+			const jint attach_status = java_vm->AttachCurrentThread(
+					reinterpret_cast<void **>(&environment), nullptr);
+#endif
+			if (attach_status == JNI_OK) {
 				attached_here = true;
 			} else {
 				environment = nullptr;
@@ -256,6 +272,8 @@ private:
 struct JniState {
 	JniTransitionState transition;
 	std::shared_ptr<FoundryErrorSink> errors = std::make_shared<FoundryErrorSink>();
+	std::mutex registration_mutex;
+	std::shared_ptr<JniRegistrationBridge> registration;
 };
 
 JniState state;
@@ -354,6 +372,12 @@ std::shared_ptr<BridgeRuntime> live_runtime() {
 	return state.transition.runtime();
 }
 
+bool install_registration_bridge(
+		std::shared_ptr<const BridgeServices> services) noexcept;
+void reset_registration_bridge() noexcept;
+void shutdown_context_registration(ContextHandle context,
+		std::uint64_t generation) noexcept;
+
 } // namespace
 
 bool jni_bridge_is_ready() noexcept {
@@ -398,7 +422,15 @@ bool jni_bridge_install_native_services(
 		std::shared_ptr<const BridgeServices> services,
 		FoundryExtensionClassLibraryPtr library) noexcept {
 	auto runtime = live_runtime();
-	return runtime != nullptr && runtime->install_native_services(std::move(services), library);
+	if (runtime == nullptr || services == nullptr ||
+			!install_registration_bridge(services)) {
+	return false;
+	}
+	if (!runtime->install_native_services(std::move(services), library)) {
+		reset_registration_bridge();
+		return false;
+	}
+	return true;
 }
 
 bool jni_bridge_shutdown() noexcept {
@@ -426,6 +458,7 @@ bool jni_bridge_shutdown() noexcept {
 	if (attached.get() != nullptr && class_loader != nullptr) {
 		attached.get()->DeleteGlobalRef(class_loader);
 	}
+	reset_registration_bridge();
 	state.errors->install(nullptr);
 	return true;
 }
@@ -584,6 +617,10 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1(
 				foundry_java::state.errors);
 		callback_guard.release();
 		auto runtime = std::make_shared<foundry_java::BridgeRuntime>(target, foundry_java::state.errors);
+		runtime->set_context_teardown(
+				[](foundry_java::ContextHandle context, std::uint64_t generation) {
+					foundry_java::shutdown_context_registration(context, generation);
+				});
 		return bootstrap.publish(std::move(runtime)) ? JNI_TRUE : JNI_FALSE;
 	} catch (...) {
 		return JNI_FALSE;
@@ -717,11 +754,6 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownBridgeV1(
 
 namespace foundry_java {
 namespace {
-
-constexpr char ENGINE_CLASS[] = "games/cafecito/foundry/java/FoundryNativeEngine";
-constexpr char SNAPSHOT_CLASS[] =
-		"games/cafecito/foundry/java/FoundryNativeEngine$NativeVariantSnapshot";
-constexpr char VARIANT_CLASS[] = "games/cafecito/foundry/types/Variant";
 
 void throw_java(JNIEnv *environment, const char *type, const std::string &message) {
 	if (environment == nullptr || environment->ExceptionCheck()) {
@@ -1694,11 +1726,1362 @@ jobject decode_variant(
 	return decoded;
 }
 
-void throw_registration_unavailable(JNIEnv *environment) {
-	throw_java(
-			environment,
-			"java/lang/UnsupportedOperationException",
-			"registration_unavailable_before_task5");
+struct JniRegistrationMethods {
+	JavaVM *java_vm = nullptr;
+	jclass engine = nullptr;
+	jclass variant = nullptr;
+	jclass constant_details = nullptr;
+	jclass property_details = nullptr;
+	jmethodID descriptor_foundry_name = nullptr;
+	jmethodID descriptor_base_name = nullptr;
+	jmethodID registration_members = nullptr;
+	jmethodID registration_access = nullptr;
+	jmethodID registration_details = nullptr;
+	jmethodID member_kind = nullptr;
+	jmethodID member_foundry_name = nullptr;
+	jmethodID member_java_name = nullptr;
+	jmethodID member_signature = nullptr;
+	jmethodID constant_enum_name = nullptr;
+	jmethodID constant_value = nullptr;
+	jmethodID constant_bitfield = nullptr;
+	jmethodID property_getter = nullptr;
+	jmethodID property_setter = nullptr;
+	jmethodID property_index = nullptr;
+	jmethodID property_group_name = nullptr;
+	jmethodID property_group_prefix = nullptr;
+	jmethodID property_subgroup_name = nullptr;
+	jmethodID property_subgroup_prefix = nullptr;
+	jmethodID resolve_object_type = nullptr;
+	jmethodID construct = nullptr;
+	jmethodID invoke = nullptr;
+	jmethodID get_property = nullptr;
+	jmethodID set_property = nullptr;
+	jmethodID to_string = nullptr;
+
+	~JniRegistrationMethods() {
+		AttachedEnvironment attached(java_vm);
+		JNIEnv *environment = attached.get();
+		if (environment == nullptr) {
+			return;
+		}
+		for (jclass type : { engine, variant, constant_details, property_details }) {
+			if (type != nullptr) {
+				environment->DeleteGlobalRef(type);
+			}
+		}
+	}
+};
+
+bool method_failed(JNIEnv *environment, jmethodID method,
+		const char *operation) {
+	return jni_reference_failed(environment, method, state.errors, operation);
+}
+
+std::shared_ptr<JniRegistrationMethods>
+load_registration_methods(JNIEnv *environment) {
+	if (environment == nullptr) {
+		return nullptr;
+	}
+	auto methods = std::make_shared<JniRegistrationMethods>();
+	if (environment->GetJavaVM(&methods->java_vm) != JNI_OK) {
+		return nullptr;
+	}
+	const auto pin_class = [&](const char *name, const char *operation) {
+		jclass local = load_application_class(environment, name);
+		if (jni_reference_failed(environment, local, state.errors, operation)) {
+			return static_cast<jclass>(nullptr);
+		}
+		auto global = static_cast<jclass>(environment->NewGlobalRef(local));
+		environment->DeleteLocalRef(local);
+		if (jni_reference_failed(environment, global, state.errors, operation)) {
+			if (global != nullptr) {
+				environment->DeleteGlobalRef(global);
+			}
+			return static_cast<jclass>(nullptr);
+		}
+		return global;
+	};
+	methods->engine =
+			pin_class(ENGINE_CLASS, "registration engine class resolution");
+	methods->variant =
+			pin_class(VARIANT_CLASS, "registration Variant class resolution");
+	methods->constant_details =
+			pin_class("games/cafecito/foundry/runtime/FoundryConstantDetails",
+					"registration constant details class resolution");
+	methods->property_details =
+			pin_class("games/cafecito/foundry/runtime/FoundryPropertyDetails",
+					"registration property details class resolution");
+	jclass descriptor = load_application_class(
+			environment, "games/cafecito/foundry/runtime/FoundryClassDescriptor");
+	jclass member = load_application_class(
+			environment, "games/cafecito/foundry/runtime/FoundryMemberDescriptor");
+	if (methods->engine == nullptr || methods->variant == nullptr ||
+			methods->constant_details == nullptr ||
+			methods->property_details == nullptr ||
+			jni_reference_failed(environment, descriptor, state.errors,
+					"registration descriptor class resolution") ||
+			jni_reference_failed(environment, member, state.errors,
+					"registration member class resolution")) {
+		if (descriptor != nullptr) {
+			environment->DeleteLocalRef(descriptor);
+		}
+		if (member != nullptr) {
+			environment->DeleteLocalRef(member);
+		}
+		return nullptr;
+	}
+	methods->descriptor_foundry_name = environment->GetMethodID(
+			descriptor, "foundryName", "()Ljava/lang/String;");
+	methods->descriptor_base_name =
+			environment->GetMethodID(descriptor, "baseName", "()Ljava/lang/String;");
+	methods->registration_members = environment->GetStaticMethodID(
+			methods->engine, "nativeRegistrationMembersV1",
+			"(Lgames/cafecito/foundry/runtime/FoundryClassDescriptor;)"
+			"[Lgames/cafecito/foundry/runtime/FoundryMemberDescriptor;");
+	methods->registration_access = environment->GetStaticMethodID(
+			methods->engine, "nativeRegistrationAccessV1",
+			"(Lgames/cafecito/foundry/runtime/FoundryClassDescriptor;)"
+			"Lgames/cafecito/foundry/runtime/FoundryExtensionAccess;");
+	methods->registration_details = environment->GetStaticMethodID(
+			methods->engine, "nativeRegistrationDetailsV1",
+			"(Lgames/cafecito/foundry/runtime/FoundryMemberDescriptor;)"
+			"Lgames/cafecito/foundry/runtime/FoundryMemberDetails;");
+	methods->member_kind =
+			environment->GetMethodID(member, "kind", "()Ljava/lang/String;");
+	methods->member_foundry_name =
+			environment->GetMethodID(member, "foundryName", "()Ljava/lang/String;");
+	methods->member_java_name =
+			environment->GetMethodID(member, "javaName", "()Ljava/lang/String;");
+	methods->member_signature =
+			environment->GetMethodID(member, "signature", "()Ljava/lang/String;");
+	methods->constant_enum_name = environment->GetMethodID(
+			methods->constant_details, "enumName", "()Ljava/lang/String;");
+	methods->constant_value =
+			environment->GetMethodID(methods->constant_details, "value", "()J");
+	methods->constant_bitfield =
+			environment->GetMethodID(methods->constant_details, "bitfield", "()Z");
+	methods->property_getter = environment->GetMethodID(
+			methods->property_details, "getter", "()Ljava/lang/String;");
+	methods->property_setter = environment->GetMethodID(
+			methods->property_details, "setter", "()Ljava/lang/String;");
+	methods->property_index =
+			environment->GetMethodID(methods->property_details, "index", "()I");
+	methods->property_group_name = environment->GetMethodID(
+			methods->property_details, "groupName", "()Ljava/lang/String;");
+	methods->property_group_prefix = environment->GetMethodID(
+			methods->property_details, "groupPrefix", "()Ljava/lang/String;");
+	methods->property_subgroup_name = environment->GetMethodID(
+			methods->property_details, "subgroupName", "()Ljava/lang/String;");
+	methods->property_subgroup_prefix = environment->GetMethodID(
+			methods->property_details, "subgroupPrefix", "()Ljava/lang/String;");
+	methods->resolve_object_type = environment->GetStaticMethodID(
+			methods->engine, "nativeRegistrationFoundryTypeV1",
+			"(Ljava/lang/String;)Ljava/lang/String;");
+	methods->construct = environment->GetStaticMethodID(
+			methods->engine, "nativeConstructExtensionV1",
+			"(JLgames/cafecito/foundry/runtime/FoundryExtensionAccess;J)"
+			"Ljava/lang/Object;");
+	methods->invoke = environment->GetStaticMethodID(
+			methods->engine, "nativeInvokeExtensionV1",
+			"(JLgames/cafecito/foundry/runtime/FoundryExtensionAccess;"
+			"Ljava/lang/Object;Ljava/lang/String;[Ljava/lang/String;"
+			"Ljava/lang/String;[Lgames/cafecito/foundry/types/Variant;)"
+			"Lgames/cafecito/foundry/types/Variant;");
+	methods->get_property = environment->GetStaticMethodID(
+			methods->engine, "nativeGetExtensionPropertyV1",
+			"(JLgames/cafecito/foundry/runtime/FoundryExtensionAccess;"
+			"Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;)"
+			"Lgames/cafecito/foundry/types/Variant;");
+	methods->set_property = environment->GetStaticMethodID(
+			methods->engine, "nativeSetExtensionPropertyV1",
+			"(JLgames/cafecito/foundry/runtime/FoundryExtensionAccess;"
+			"Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;"
+			"Lgames/cafecito/foundry/types/Variant;)V");
+	methods->to_string = environment->GetStaticMethodID(
+			methods->engine, "nativeExtensionToStringV1",
+			"(Ljava/lang/Object;)Ljava/lang/String;");
+	const std::array<std::pair<jmethodID, const char *>, 25> required = { {
+			{ methods->descriptor_foundry_name,
+					"registration foundry name resolution" },
+			{ methods->descriptor_base_name, "registration base name resolution" },
+			{ methods->registration_members, "registration members helper resolution" },
+			{ methods->registration_access, "registration access helper resolution" },
+			{ methods->registration_details, "registration details helper resolution" },
+			{ methods->member_kind, "registration member kind resolution" },
+			{ methods->member_foundry_name,
+					"registration member foundry name resolution" },
+			{ methods->member_java_name, "registration member Java name resolution" },
+			{ methods->member_signature, "registration member signature resolution" },
+			{ methods->constant_enum_name, "registration enum name resolution" },
+			{ methods->constant_value, "registration constant value resolution" },
+			{ methods->constant_bitfield, "registration bitfield resolution" },
+			{ methods->property_getter, "registration getter resolution" },
+			{ methods->property_setter, "registration setter resolution" },
+			{ methods->property_index, "registration property index resolution" },
+			{ methods->property_group_name, "registration property group resolution" },
+			{ methods->property_group_prefix,
+					"registration property group prefix resolution" },
+			{ methods->property_subgroup_name,
+					"registration property subgroup resolution" },
+			{ methods->property_subgroup_prefix,
+					"registration property subgroup prefix resolution" },
+			{ methods->resolve_object_type,
+					"registration object type helper resolution" },
+			{ methods->construct, "registration construct helper resolution" },
+			{ methods->invoke, "registration invoke helper resolution" },
+			{ methods->get_property, "registration get helper resolution" },
+			{ methods->set_property, "registration set helper resolution" },
+			{ methods->to_string, "registration string helper resolution" },
+	} };
+	bool valid = true;
+	for (const auto &[method, operation] : required) {
+		if (method_failed(environment, method, operation)) {
+			valid = false;
+			break;
+		}
+	}
+	environment->DeleteLocalRef(member);
+	environment->DeleteLocalRef(descriptor);
+	return valid ? methods : nullptr;
+}
+
+struct JniAccess {
+	ContextHandle context = 0;
+	std::uint64_t generation = 0;
+	FoundryExtensionClassLibraryPtr library = nullptr;
+	std::shared_ptr<const BridgeServices> services;
+	NativeTransport *transport = nullptr;
+	std::shared_ptr<JniRegistrationMethods> methods;
+	jobject access = nullptr;
+	std::unordered_map<std::string, std::vector<JavaMethodSignature>>
+			methods_by_name;
+	std::unordered_map<std::string, JavaMethodSignature> virtuals_by_name;
+	std::unordered_map<std::string, JavaTransportType> properties_by_name;
+};
+
+struct JniInstance {
+	JniAccess *access = nullptr;
+	jobject target = nullptr;
+	NativeHandle object_handle = 0;
+	FoundryExtensionObjectPtr object = nullptr;
+};
+
+class CallbackHandleScope final {
+public:
+	explicit CallbackHandleScope(JniAccess *access) : access(access) {}
+
+	~CallbackHandleScope() {
+		if (access == nullptr || access->transport == nullptr) {
+			return;
+		}
+		for (NativeHandle handle : handles) {
+			access->transport->release_handle(handle, access->context,
+					access->generation);
+		}
+	}
+
+	void add(NativeHandle handle) {
+		if (handle == 0) {
+			return;
+		}
+		try {
+			handles.push_back(handle);
+		} catch (...) {
+			if (access != nullptr && access->transport != nullptr) {
+				access->transport->release_handle(handle, access->context,
+						access->generation);
+			}
+			throw;
+		}
+	}
+
+private:
+	JniAccess *access = nullptr;
+	std::vector<NativeHandle> handles;
+};
+
+class CallbackVariant final {
+public:
+	explicit CallbackVariant(std::shared_ptr<const BridgeServices> services) : services(std::move(services)),
+																			   value(NativeValue::storage(abi_layout_size("Variant"))) {}
+
+	~CallbackVariant() { reset(); }
+
+	CallbackVariant(CallbackVariant &&other) noexcept
+			: services(std::move(other.services)),
+			  value(std::move(other.value)) {
+		other.value.constructed = false;
+	}
+
+	CallbackVariant &operator=(CallbackVariant &&other) noexcept {
+		if (this != &other) {
+			reset();
+			services = std::move(other.services);
+			value = std::move(other.value);
+			other.value.constructed = false;
+		}
+		return *this;
+	}
+
+	CallbackVariant(const CallbackVariant &) = delete;
+	CallbackVariant &operator=(const CallbackVariant &) = delete;
+
+	bool copy_from(FoundryExtensionConstVariantPtr source) noexcept {
+		if (source == nullptr || services == nullptr ||
+				services->variant_new_copy == nullptr) {
+			return false;
+		}
+		services->variant_new_copy(value.data(), source);
+		value.constructed = true;
+		return true;
+	}
+
+	bool initialize_nil() noexcept {
+		if (services == nullptr || services->variant_new_nil == nullptr) {
+			return false;
+		}
+		services->variant_new_nil(value.data());
+		value.constructed = true;
+		return true;
+	}
+
+	FoundryExtensionVariantPtr data() noexcept { return value.data(); }
+
+private:
+	void reset() noexcept {
+		if (value.constructed && services != nullptr &&
+				services->variant_destroy != nullptr) {
+			services->variant_destroy(value.data());
+		}
+		value.constructed = false;
+	}
+
+	std::shared_ptr<const BridgeServices> services;
+	NativeValue value;
+};
+
+class CallbackName final {
+public:
+	CallbackName(const BridgeServices &services, const std::string &text) : value(NativeValue::storage(abi_layout_size("StringName"))) {
+		if (services.string_name_new_with_utf8_chars_and_len == nullptr ||
+				services.variant_get_ptr_destructor == nullptr) {
+			return;
+		}
+		destructor = services.variant_get_ptr_destructor(
+				FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME);
+		if (destructor == nullptr) {
+			return;
+		}
+		services.string_name_new_with_utf8_chars_and_len(
+				value.data(), text.data(),
+				static_cast<FoundryExtensionInt>(text.size()));
+		value.constructed = true;
+	}
+	~CallbackName() {
+		if (value.constructed) {
+			destructor(value.data());
+		}
+	}
+	explicit operator bool() const noexcept { return value.constructed; }
+	FoundryExtensionConstStringNamePtr get() const noexcept {
+		return value.data();
+	}
+
+private:
+	NativeValue value;
+	FoundryExtensionPtrDestructor destructor = nullptr;
+};
+
+JavaMethodSignature *find_signature(JniAccess *access, const std::string &name,
+		FoundryExtensionInt argument_count) {
+	if (access == nullptr || argument_count < 0) {
+		return nullptr;
+	}
+	const auto found = access->methods_by_name.find(name);
+	if (found == access->methods_by_name.end()) {
+		return nullptr;
+	}
+	JavaMethodSignature *result = nullptr;
+	for (JavaMethodSignature &signature : found->second) {
+		if (signature.arguments.size() ==
+				static_cast<std::size_t>(argument_count)) {
+			if (result != nullptr) {
+				return nullptr;
+			}
+			result = &signature;
+		}
+	}
+	return result;
+}
+
+NativeHandle copy_callback_variant(JniAccess &access,
+		FoundryExtensionConstVariantPtr value,
+		const JavaTransportType &type) {
+	if (value == nullptr || access.transport == nullptr) {
+		return 0;
+	}
+	if (type.java_type != "games.cafecito.foundry.types.Variant") {
+		return access.transport->copy_variant(access.context, access.generation,
+				value, type.abi_type);
+	}
+	for (const VariantCategoryInfo &category : variant_categories()) {
+		const NativeHandle result = access.transport->copy_variant(
+				access.context, access.generation, value, category.abi_type);
+		if (result != 0) {
+			return result;
+		}
+	}
+	return 0;
+}
+
+jobject decode_callback_variant(JNIEnv *environment, JniAccess &access,
+		FoundryExtensionConstVariantPtr value,
+		const JavaTransportType &type,
+		NativeHandle &temporary) {
+	temporary = copy_callback_variant(access, value, type);
+	return temporary == 0
+			? nullptr
+			: decode_variant(environment, access.context, access.generation,
+					  *access.transport, temporary, 0);
+}
+
+class JniRegistrationCallbacks final : public RegistrationCallbacks {
+public:
+	explicit JniRegistrationCallbacks(
+			std::shared_ptr<JniRegistrationMethods> methods) : methods(std::move(methods)) {}
+
+	void release_access(RegistrationAccessToken token) noexcept override {
+		auto *access = reinterpret_cast<JniAccess *>(token);
+		if (access == nullptr) {
+			return;
+		}
+		AttachedEnvironment attached(access->methods->java_vm);
+		if (attached.get() != nullptr && access->access != nullptr) {
+			attached.get()->DeleteGlobalRef(access->access);
+		}
+		delete access;
+	}
+
+	NativeInstance create_instance(
+			RegistrationAccessToken token, const std::string &class_name,
+			const std::string &base_name, bool notify_postinitialize,
+			FoundryExtensionClassInstancePtr instance_userdata) noexcept override {
+		try {
+			auto *access = reinterpret_cast<JniAccess *>(token);
+			if (access == nullptr || access->services == nullptr ||
+					access->transport == nullptr || instance_userdata == nullptr) {
+				return {};
+			}
+			auto instance = std::make_unique<JniInstance>();
+			instance->access = access;
+			const auto &services = *access->services;
+			if (services.classdb_construct_object2 == nullptr ||
+					services.object_set_instance == nullptr ||
+					services.object_destroy == nullptr) {
+				return {};
+			}
+			CallbackName native_base(services, base_name);
+			CallbackName native_class(services, class_name);
+			if (!native_base || !native_class) {
+				return {};
+			}
+			FoundryExtensionObjectPtr object =
+					services.classdb_construct_object2(native_base.get());
+			if (object == nullptr) {
+				return {};
+			}
+			services.object_set_instance(object, native_class.get(),
+					instance_userdata);
+			if (notify_postinitialize) {
+				CallbackName object_name(services, "Object");
+				CallbackName notification_name(services, "notification");
+				if (!object_name || !notification_name ||
+						services.classdb_get_method_bind == nullptr ||
+						services.object_method_bind_ptrcall == nullptr) {
+					services.object_destroy(object);
+					return {};
+				}
+				const FoundryExtensionMethodBindPtr notification =
+						services.classdb_get_method_bind(
+								object_name.get(), notification_name.get(), 4023243586);
+				if (notification == nullptr) {
+					services.object_destroy(object);
+					return {};
+				}
+				const std::int32_t postinitialize = 0;
+				const FoundryExtensionBool reversed = 0;
+				const FoundryExtensionConstTypePtr arguments[] = { &postinitialize,
+					&reversed };
+				services.object_method_bind_ptrcall(notification, object, arguments,
+						nullptr);
+			}
+			const NativeHandle object_handle = access->transport->track_object(
+					access->context, access->generation, object, class_name, false);
+			if (object_handle == 0) {
+				services.object_destroy(object);
+				return {};
+			}
+			AttachedEnvironment attached(access->methods->java_vm);
+			JNIEnv *environment = attached.get();
+			if (environment == nullptr) {
+				access->transport->release_handle(object_handle, access->context,
+						access->generation);
+				services.object_destroy(object);
+				return {};
+			}
+			jobject target = environment->CallStaticObjectMethod(
+					access->methods->engine, access->methods->construct,
+					static_cast<jlong>(access->context), access->access,
+					static_cast<jlong>(object_handle));
+			if (clear_java_exception(environment, state.errors,
+						"extension instance construction") ||
+					target == nullptr) {
+				if (target != nullptr) {
+					environment->DeleteLocalRef(target);
+				}
+				access->transport->release_handle(object_handle, access->context,
+						access->generation);
+				services.object_destroy(object);
+				return {};
+			}
+			jobject global_target = environment->NewGlobalRef(target);
+			environment->DeleteLocalRef(target);
+			if (jni_reference_failed(environment, global_target, state.errors,
+						"extension instance retention")) {
+				if (global_target != nullptr) {
+					environment->DeleteGlobalRef(global_target);
+				}
+				access->transport->release_handle(object_handle, access->context,
+						access->generation);
+				services.object_destroy(object);
+				return {};
+			}
+			instance->target = global_target;
+			instance->object_handle = object_handle;
+			instance->object = object;
+			return { object,
+				reinterpret_cast<RegistrationInstanceToken>(instance.release()) };
+		} catch (...) {
+			state.errors->error(
+					"Native failure contained during extension instance construction.");
+			return {};
+		}
+	}
+
+	void discard_partial_instance(RegistrationAccessToken token,
+			NativeInstance native) noexcept override {
+		auto *access = reinterpret_cast<JniAccess *>(token);
+		auto *instance = reinterpret_cast<JniInstance *>(native.access_instance);
+		FoundryExtensionObjectPtr object_to_destroy = native.object;
+		if (instance != nullptr) {
+			if (object_to_destroy == nullptr) {
+				object_to_destroy = instance->object;
+			}
+			AttachedEnvironment attached(instance->access->methods->java_vm);
+			if (attached.get() != nullptr && instance->target != nullptr) {
+				attached.get()->DeleteGlobalRef(instance->target);
+			}
+			if (instance->object_handle != 0) {
+				instance->access->transport->release_handle(
+						instance->object_handle, instance->access->context,
+						instance->access->generation);
+			}
+			delete instance;
+		}
+		if (object_to_destroy != nullptr && access != nullptr &&
+				access->services != nullptr &&
+				access->services->object_destroy != nullptr) {
+			access->services->object_destroy(object_to_destroy);
+		}
+	}
+
+	void free_instance(RegistrationAccessToken,
+			RegistrationInstanceToken token) noexcept override {
+		auto *instance = reinterpret_cast<JniInstance *>(token);
+		if (instance == nullptr || instance->access == nullptr) {
+			return;
+		}
+		AttachedEnvironment attached(instance->access->methods->java_vm);
+		if (attached.get() != nullptr && instance->target != nullptr) {
+			attached.get()->DeleteGlobalRef(instance->target);
+		}
+		if (instance->object_handle != 0) {
+			instance->access->transport->release_handle(instance->object_handle,
+					instance->access->context,
+					instance->access->generation);
+		}
+		delete instance;
+	}
+
+	bool invoke(RegistrationAccessToken access_token,
+			RegistrationInstanceToken instance_token,
+			const std::string &java_name,
+			const FoundryExtensionConstVariantPtr *arguments,
+			FoundryExtensionInt argument_count,
+			FoundryExtensionVariantPtr result,
+			FoundryExtensionCallError *error) noexcept override {
+		try {
+			auto *access = reinterpret_cast<JniAccess *>(access_token);
+			auto *instance = reinterpret_cast<JniInstance *>(instance_token);
+			JavaMethodSignature *signature =
+					find_signature(access, java_name, argument_count);
+			if (access == nullptr || instance == nullptr || signature == nullptr ||
+					(argument_count > 0 && arguments == nullptr) ||
+					(!signature->return_type.is_void && result == nullptr)) {
+				if (error != nullptr) {
+					error->error = FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT;
+				}
+				return false;
+			}
+			AttachedEnvironment attached(access->methods->java_vm);
+			JNIEnv *environment = attached.get();
+			ScopedLocalFrame frame(environment, 64 + argument_count * 4);
+			if (environment == nullptr || !frame) {
+				return false;
+			}
+			jobjectArray java_arguments =
+					environment->NewObjectArray(static_cast<jsize>(argument_count),
+							access->methods->variant, nullptr);
+			jclass string_class = environment->FindClass("java/lang/String");
+			jobjectArray java_types = environment->NewObjectArray(
+					static_cast<jsize>(argument_count), string_class, nullptr);
+			if (java_arguments == nullptr || string_class == nullptr ||
+					java_types == nullptr) {
+				clear_java_exception(environment, state.errors,
+						"extension callback argument allocation");
+				return false;
+			}
+			CallbackHandleScope temporary_handles(access);
+			for (FoundryExtensionInt index = 0; index < argument_count; index++) {
+				NativeHandle handle = 0;
+				jobject decoded = decode_callback_variant(
+						environment, *access, arguments[index],
+						signature->arguments[static_cast<std::size_t>(index)], handle);
+				if (handle != 0) {
+					temporary_handles.add(handle);
+				}
+				jstring type = new_java_string(
+						environment,
+						signature->arguments[static_cast<std::size_t>(index)].java_type);
+				if (decoded == nullptr || type == nullptr ||
+						environment->ExceptionCheck()) {
+					clear_java_exception(environment, state.errors,
+							"extension callback argument decoding");
+					return false;
+				}
+				environment->SetObjectArrayElement(java_arguments,
+						static_cast<jsize>(index), decoded);
+				environment->SetObjectArrayElement(java_types,
+						static_cast<jsize>(index), type);
+			}
+			jstring name = new_java_string(environment, java_name);
+			jstring return_type =
+					new_java_string(environment, signature->return_type.java_type);
+			jobject returned = environment->CallStaticObjectMethod(
+					access->methods->engine, access->methods->invoke,
+					static_cast<jlong>(access->context), access->access, instance->target,
+					name, java_types, return_type, java_arguments);
+			bool success = !clear_java_exception(environment, state.errors,
+								   "extension method callback") &&
+					returned != nullptr;
+			if (success && !signature->return_type.is_void) {
+				const NativeHandle encoded =
+						encode_variant(environment, access->context, access->generation,
+								*access->transport, returned, 0);
+				temporary_handles.add(encoded);
+				success =
+						encoded != 0 && access->transport->replace_variant_to(
+								encoded, access->context, access->generation, result)
+												.ok;
+			}
+			if (!success) {
+				clear_java_exception(environment, state.errors,
+						"extension callback result encoding");
+			}
+			return success;
+		} catch (...) {
+			state.errors->error(
+					"Native failure contained during extension method callback.");
+			return false;
+		}
+	}
+
+	bool invoke_virtual(RegistrationAccessToken access_token,
+			RegistrationInstanceToken instance_token,
+			const std::string &java_name,
+			const FoundryExtensionConstTypePtr *arguments,
+			FoundryExtensionTypePtr result) noexcept override {
+		try {
+			auto *access = reinterpret_cast<JniAccess *>(access_token);
+			auto *instance = reinterpret_cast<JniInstance *>(instance_token);
+			if (access == nullptr || instance == nullptr ||
+					access->services == nullptr || access->transport == nullptr ||
+					access->services->variant_new_copy == nullptr ||
+					access->services->variant_destroy == nullptr) {
+				return false;
+			}
+			const auto found = access->virtuals_by_name.find(java_name);
+			if (found == access->virtuals_by_name.end()) {
+				return false;
+			}
+			const JavaMethodSignature &signature = found->second;
+			if ((!signature.arguments.empty() && arguments == nullptr) ||
+					(!signature.return_type.is_void && result == nullptr)) {
+				return false;
+			}
+			CallbackHandleScope temporary_handles(access);
+			std::vector<CallbackVariant> variants;
+			std::vector<FoundryExtensionConstVariantPtr> variant_pointers;
+			variants.reserve(signature.arguments.size());
+			variant_pointers.reserve(signature.arguments.size());
+			for (std::size_t index = 0; index < signature.arguments.size(); index++) {
+				if (arguments[index] == nullptr) {
+					return false;
+				}
+				variants.emplace_back(access->services);
+				CallbackVariant &value = variants.back();
+				if (signature.arguments[index].java_type ==
+						"games.cafecito.foundry.types.Variant") {
+					if (!value.copy_from(arguments[index])) {
+						return false;
+					}
+					variant_pointers.push_back(value.data());
+					continue;
+				}
+				const NativeHandle handle = access->transport->construct_variant(
+						access->context, access->generation,
+						signature.arguments[index].abi_type, arguments[index]);
+				if (handle == 0) {
+					return false;
+				}
+				temporary_handles.add(handle);
+				HandleLease lease = access->transport->handles().inspect(
+						handle, access->context, access->generation);
+				if (!lease || !value.copy_from(lease.record().value.data())) {
+					return false;
+				}
+				variant_pointers.push_back(value.data());
+			}
+			FoundryExtensionCallError error{};
+			CallbackVariant variant_result(access->services);
+			if (!variant_result.initialize_nil()) {
+				return false;
+			}
+			const bool invoked = invoke(
+					access_token, instance_token, java_name, variant_pointers.data(),
+					static_cast<FoundryExtensionInt>(variant_pointers.size()),
+					variant_result.data(), &error);
+			bool success = invoked;
+			if (success && !signature.return_type.is_void) {
+				if (signature.return_type.java_type ==
+						"games.cafecito.foundry.types.Variant") {
+					success = replace_initialized_variant(
+							*access->services, result, variant_result.data());
+				} else {
+					const VariantCategoryInfo *category =
+							variant_category(signature.return_type.abi_type);
+					if (category == nullptr ||
+							!can_replace_initialized_native(
+									*access->services,
+									signature.return_type.abi_type)) {
+						return false;
+					}
+					const NativeHandle handle = access->transport->copy_variant(
+							access->context, access->generation, variant_result.data(),
+							signature.return_type.abi_type);
+					temporary_handles.add(handle);
+					NativeValue typed_result = NativeValue::storage(
+							abi_layout_size(category->native_name));
+					success =
+							handle != 0 &&
+							access->transport
+									->inspect_variant(handle, access->context, access->generation,
+											signature.return_type.abi_type,
+											typed_result.data())
+									.ok;
+					if (success) {
+						typed_result.constructed = true;
+						success = replace_initialized_native(
+								*access->services,
+								signature.return_type.abi_type,
+								result, typed_result.data());
+					}
+					if (typed_result.constructed) {
+						access->transport->destroy_native_value(
+								signature.return_type.abi_type,
+								typed_result.data());
+					}
+				}
+			}
+			return success;
+		} catch (...) {
+			state.errors->error(
+					"Native failure contained during extension virtual callback.");
+			return false;
+		}
+	}
+
+	void
+	initialize_virtual_default(const JavaTransportType &return_type,
+			FoundryExtensionTypePtr result) noexcept override {
+		if (result == nullptr || return_type.is_void) {
+			return;
+		}
+		if (return_type.java_type == "games.cafecito.foundry.types.Variant") {
+			if (methods_services != nullptr &&
+					methods_services->variant_new_nil != nullptr) {
+				methods_services->variant_new_nil(result);
+			}
+			return;
+		}
+		if (return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_BOOL) {
+			*static_cast<FoundryExtensionBool *>(result) = 0;
+			return;
+		}
+		if (return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_INT) {
+			*static_cast<std::int64_t *>(result) = 0;
+			return;
+		}
+		if (return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_FLOAT) {
+			*static_cast<double *>(result) = 0;
+			return;
+		}
+		if (return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT) {
+			*static_cast<FoundryExtensionObjectPtr *>(result) = nullptr;
+			return;
+		}
+		const FoundryExtensionPtrConstructor constructor =
+				methods_services == nullptr ||
+						methods_services->variant_get_ptr_constructor == nullptr
+				? nullptr
+				: methods_services->variant_get_ptr_constructor(
+						  return_type.abi_type, 0);
+		if (constructor != nullptr) {
+			constructor(result, nullptr);
+		}
+	}
+
+	bool get_property(RegistrationAccessToken access_token,
+			RegistrationInstanceToken instance_token,
+			const std::string &java_name,
+			FoundryExtensionVariantPtr result) noexcept override {
+		try {
+			auto *access = reinterpret_cast<JniAccess *>(access_token);
+			auto *instance = reinterpret_cast<JniInstance *>(instance_token);
+			if (access == nullptr || instance == nullptr) {
+				return false;
+			}
+			const auto found = access->properties_by_name.find(java_name);
+			if (found == access->properties_by_name.end()) {
+				return false;
+			}
+			AttachedEnvironment attached(access->methods->java_vm);
+			JNIEnv *environment = attached.get();
+			if (environment == nullptr) {
+				return false;
+			}
+			jstring name = new_java_string(environment, java_name);
+			jstring type = new_java_string(environment, found->second.java_type);
+			jobject returned = environment->CallStaticObjectMethod(
+					access->methods->engine, access->methods->get_property,
+					static_cast<jlong>(access->context), access->access, instance->target,
+					name, type);
+			bool success = !clear_java_exception(environment, state.errors,
+								   "extension property get") &&
+					returned != nullptr;
+			CallbackHandleScope encoded_handles(access);
+			const NativeHandle encoded =
+					success
+					? encode_variant(environment, access->context, access->generation,
+							  *access->transport, returned, 0)
+					: 0;
+			encoded_handles.add(encoded);
+			success =
+					encoded != 0 && access->transport->replace_variant_to(
+							encoded, access->context, access->generation, result)
+											.ok;
+			if (!success) {
+				clear_java_exception(environment, state.errors,
+						"extension property result encoding");
+			}
+			for (jobject local :
+					{ returned, static_cast<jobject>(name), static_cast<jobject>(type) }) {
+				if (local != nullptr) {
+					environment->DeleteLocalRef(local);
+				}
+			}
+			return success;
+		} catch (...) {
+			state.errors->error(
+					"Native failure contained during extension property get.");
+			return false;
+		}
+	}
+
+	bool set_property(RegistrationAccessToken access_token,
+			RegistrationInstanceToken instance_token,
+			const std::string &java_name,
+			FoundryExtensionConstVariantPtr value) noexcept override {
+		try {
+			auto *access = reinterpret_cast<JniAccess *>(access_token);
+			auto *instance = reinterpret_cast<JniInstance *>(instance_token);
+			if (access == nullptr || instance == nullptr) {
+				return false;
+			}
+			const auto found = access->properties_by_name.find(java_name);
+			if (found == access->properties_by_name.end()) {
+				return false;
+			}
+			AttachedEnvironment attached(access->methods->java_vm);
+			JNIEnv *environment = attached.get();
+			if (environment == nullptr) {
+				return false;
+			}
+			CallbackHandleScope temporary_handles(access);
+			NativeHandle temporary = 0;
+			jobject decoded = decode_callback_variant(environment, *access, value,
+					found->second, temporary);
+			temporary_handles.add(temporary);
+			jstring name = new_java_string(environment, java_name);
+			jstring type = new_java_string(environment, found->second.java_type);
+			if (decoded != nullptr && name != nullptr && type != nullptr) {
+				environment->CallStaticVoidMethod(
+						access->methods->engine, access->methods->set_property,
+						static_cast<jlong>(access->context), access->access,
+						instance->target, name, type, decoded);
+			}
+			const bool callback_exception = clear_java_exception(
+					environment, state.errors, "extension property set");
+			const bool success = decoded != nullptr && !callback_exception;
+			for (jobject local :
+					{ decoded, static_cast<jobject>(name), static_cast<jobject>(type) }) {
+				if (local != nullptr) {
+					environment->DeleteLocalRef(local);
+				}
+			}
+			return success;
+		} catch (...) {
+			state.errors->error(
+					"Native failure contained during extension property set.");
+			return false;
+		}
+	}
+
+	bool to_string(RegistrationAccessToken access_token,
+			RegistrationInstanceToken instance_token,
+			FoundryExtensionStringPtr result) noexcept override {
+		try {
+			auto *access = reinterpret_cast<JniAccess *>(access_token);
+			auto *instance = reinterpret_cast<JniInstance *>(instance_token);
+			if (access == nullptr || instance == nullptr || result == nullptr ||
+					access->services->string_new_with_utf8_chars_and_len2 == nullptr) {
+				return false;
+			}
+			AttachedEnvironment attached(access->methods->java_vm);
+			JNIEnv *environment = attached.get();
+			if (environment == nullptr) {
+				return false;
+			}
+			auto text = static_cast<jstring>(environment->CallStaticObjectMethod(
+					access->methods->engine, access->methods->to_string,
+					instance->target));
+			if (clear_java_exception(environment, state.errors,
+						"extension toString") ||
+					text == nullptr) {
+				return false;
+			}
+			const std::string utf8 = java_utf8(environment, text);
+			environment->DeleteLocalRef(text);
+			if (clear_java_exception(environment, state.errors,
+						"extension toString conversion")) {
+				return false;
+			}
+			return access->services->string_new_with_utf8_chars_and_len2(
+						   result, utf8.data(),
+						   static_cast<FoundryExtensionInt>(utf8.size())) == 0;
+		} catch (...) {
+			state.errors->error(
+					"Native failure contained during extension toString.");
+			return false;
+		}
+	}
+
+	void set_services(std::shared_ptr<const BridgeServices> services) {
+		methods_services = std::move(services);
+	}
+
+private:
+	std::shared_ptr<JniRegistrationMethods> methods;
+	std::shared_ptr<const BridgeServices> methods_services;
+};
+
+std::string call_text(JNIEnv *environment, jobject target, jmethodID method) {
+	if (target == nullptr || method == nullptr) {
+		return {};
+	}
+	auto value =
+			static_cast<jstring>(environment->CallObjectMethod(target, method));
+	if (value == nullptr || environment->ExceptionCheck()) {
+		if (value != nullptr) {
+			environment->DeleteLocalRef(value);
+		}
+		return {};
+	}
+	std::string result = java_utf8(environment, value);
+	environment->DeleteLocalRef(value);
+	return result;
+}
+
+class JniRegistrationBridge final
+		: public std::enable_shared_from_this<JniRegistrationBridge> {
+public:
+	static std::shared_ptr<JniRegistrationBridge>
+	create(JNIEnv *environment, std::shared_ptr<const BridgeServices> services) {
+		auto methods = load_registration_methods(environment);
+		if (methods == nullptr || services == nullptr) {
+			return nullptr;
+		}
+		auto bridge = std::shared_ptr<JniRegistrationBridge>(
+				new JniRegistrationBridge(std::move(methods), std::move(services)));
+		std::weak_ptr<JniRegistrationBridge> weak = bridge;
+		bridge->native_services = std::make_shared<AbiRegistrationServices>(
+				bridge->services,
+				[weak](const std::string &java_type, std::string &foundry_type) {
+					auto live = weak.lock();
+					return live != nullptr &&
+							live->resolve_object_type(java_type, foundry_type);
+				});
+		bridge->callbacks =
+				std::make_shared<JniRegistrationCallbacks>(bridge->methods);
+		bridge->callbacks->set_services(bridge->services);
+		bridge->registry = std::make_unique<RegistrationRegistry>(
+				bridge->native_services, bridge->callbacks);
+		return bridge;
+	}
+
+	RegistrationResult
+	register_extension_class(JNIEnv *environment, ContextHandle context,
+			const ContextOperationLease &operation,
+			jobject java_descriptor) noexcept {
+		try {
+			if (environment == nullptr || java_descriptor == nullptr ||
+					operation.services() != services ||
+					operation.transport() == nullptr || operation.library() == nullptr) {
+				return { RegistrationStatus::INVALID_DESCRIPTOR,
+					"registration_descriptor" };
+			}
+			RegistrationClassDescriptor descriptor;
+			descriptor.foundry_name = call_text(environment, java_descriptor,
+					methods->descriptor_foundry_name);
+			descriptor.base_name = call_text(environment, java_descriptor,
+					methods->descriptor_base_name);
+			auto java_members =
+					static_cast<jobjectArray>(environment->CallStaticObjectMethod(
+							methods->engine, methods->registration_members, java_descriptor));
+			jobject java_access = environment->CallStaticObjectMethod(
+					methods->engine, methods->registration_access, java_descriptor);
+			if (java_members == nullptr || java_access == nullptr ||
+					environment->ExceptionCheck()) {
+				clear_java_exception(environment, state.errors,
+						"registration descriptor extraction");
+				if (java_members != nullptr) {
+					environment->DeleteLocalRef(java_members);
+				}
+				if (java_access != nullptr) {
+					environment->DeleteLocalRef(java_access);
+				}
+				return { RegistrationStatus::INVALID_DESCRIPTOR,
+					"registration_descriptor" };
+			}
+			auto access = std::make_unique<JniAccess>();
+			access->context = context;
+			access->generation = operation.generation();
+			access->library = operation.library();
+			access->services = operation.services();
+			access->transport = operation.transport();
+			access->methods = methods;
+			const jsize member_count = environment->GetArrayLength(java_members);
+			descriptor.members.reserve(static_cast<std::size_t>(member_count));
+			bool decoded = !environment->ExceptionCheck();
+			for (jsize index = 0; decoded && index < member_count; index++) {
+				jobject member =
+						environment->GetObjectArrayElement(java_members, index);
+				if (member == nullptr || environment->ExceptionCheck()) {
+					decoded = false;
+					break;
+				}
+				RegistrationMemberDescriptor native;
+				const std::string kind =
+						call_text(environment, member, methods->member_kind);
+				native.foundry_name =
+						call_text(environment, member, methods->member_foundry_name);
+				native.java_name =
+						call_text(environment, member, methods->member_java_name);
+				native.signature =
+						call_text(environment, member, methods->member_signature);
+				if (kind == "method") {
+					native.kind = RegistrationMemberKind::METHOD;
+				} else if (kind == "override") {
+					native.kind = RegistrationMemberKind::OVERRIDE;
+				} else if (kind == "constant") {
+					native.kind = RegistrationMemberKind::CONSTANT;
+				} else if (kind == "property") {
+					native.kind = RegistrationMemberKind::PROPERTY;
+				} else if (kind == "signal") {
+					native.kind = RegistrationMemberKind::SIGNAL;
+				} else {
+					decoded = false;
+				}
+				jobject details = decoded ? environment->CallStaticObjectMethod(
+													methods->engine,
+													methods->registration_details, member)
+										  : nullptr;
+				if (decoded && native.kind == RegistrationMemberKind::CONSTANT) {
+					if (details == nullptr ||
+							!environment->IsInstanceOf(details, methods->constant_details)) {
+						decoded = false;
+					} else {
+						native.constant = RegistrationConstantDetails{
+							call_text(environment, details, methods->constant_enum_name),
+							static_cast<std::int64_t>(environment->CallLongMethod(
+									details, methods->constant_value)),
+							environment->CallBooleanMethod(
+									details, methods->constant_bitfield) == JNI_TRUE,
+						};
+					}
+				} else if (decoded && native.kind == RegistrationMemberKind::PROPERTY &&
+						details != nullptr &&
+						environment->IsInstanceOf(details,
+								methods->property_details)) {
+					native.property = RegistrationPropertyDetails{
+						call_text(environment, details, methods->property_getter),
+						call_text(environment, details, methods->property_setter),
+						static_cast<std::int32_t>(
+								environment->CallIntMethod(details, methods->property_index)),
+						call_text(environment, details, methods->property_group_name),
+						call_text(environment, details, methods->property_group_prefix),
+						call_text(environment, details, methods->property_subgroup_name),
+						call_text(environment, details,
+								methods->property_subgroup_prefix),
+					};
+				}
+				if (environment->ExceptionCheck()) {
+					decoded = false;
+				}
+				if (details != nullptr) {
+					environment->DeleteLocalRef(details);
+				}
+				environment->DeleteLocalRef(member);
+				if (!decoded) {
+					break;
+				}
+				if (native.kind == RegistrationMemberKind::METHOD ||
+						native.kind == RegistrationMemberKind::OVERRIDE) {
+					const JavaSignatureParseResult signature =
+							parse_java_method_signature(native.signature);
+					if (!signature.ok()) {
+						decoded = false;
+						break;
+					}
+					auto &signatures = access->methods_by_name[native.java_name];
+					const bool duplicate_arity =
+							std::any_of(signatures.begin(), signatures.end(),
+									[&signature](const JavaMethodSignature &candidate) {
+										return candidate.arguments.size() ==
+												signature.signature.arguments.size();
+									});
+					if (duplicate_arity) {
+						decoded = false;
+						break;
+					}
+					signatures.push_back(signature.signature);
+					if (native.kind == RegistrationMemberKind::OVERRIDE) {
+						if (!access->virtuals_by_name
+										.emplace(native.java_name, signature.signature)
+										.second) {
+							decoded = false;
+							break;
+						}
+					}
+				} else if (native.kind == RegistrationMemberKind::PROPERTY) {
+					const JavaTypeParseResult type =
+							parse_java_property_type(native.signature);
+					if (!type.ok()) {
+						decoded = false;
+						break;
+					}
+					const std::string getter =
+							native.property ? native.property->getter : native.java_name;
+					if (!access->properties_by_name.emplace(getter, type.type).second) {
+						decoded = false;
+						break;
+					}
+					if (native.property && !native.property->setter.empty() &&
+							!access->properties_by_name
+									.emplace(native.property->setter, type.type)
+									.second) {
+						decoded = false;
+						break;
+					}
+				}
+				descriptor.members.push_back(std::move(native));
+			}
+			environment->DeleteLocalRef(java_members);
+			if (!decoded) {
+				clear_java_exception(environment, state.errors,
+						"registration descriptor validation");
+				environment->DeleteLocalRef(java_access);
+				return { RegistrationStatus::INVALID_DESCRIPTOR,
+					"registration_descriptor" };
+			}
+			access->access = environment->NewGlobalRef(java_access);
+			environment->DeleteLocalRef(java_access);
+			if (jni_reference_failed(environment, access->access, state.errors,
+						"registration access retention")) {
+				if (access->access != nullptr) {
+					environment->DeleteGlobalRef(access->access);
+				}
+				return { RegistrationStatus::NATIVE_FAILURE, "registration_access" };
+			}
+			JniAccess *stable_access = access.release();
+			descriptor.access =
+					reinterpret_cast<RegistrationAccessToken>(stable_access);
+			const RegistrationResult result =
+					registry->register_class(context, operation.generation(),
+							operation.library(), std::move(descriptor));
+			if (result.status == RegistrationStatus::INVALID_DESCRIPTOR ||
+					result.status == RegistrationStatus::CONFLICT ||
+					result.status == RegistrationStatus::RETRY ||
+					result.status == RegistrationStatus::STALE) {
+				callbacks->release_access(
+						reinterpret_cast<RegistrationAccessToken>(stable_access));
+			}
+			return result;
+		} catch (...) {
+			return { RegistrationStatus::NATIVE_FAILURE, "registration_jni" };
+		}
+	}
+
+	RegistrationResult
+	unregister_extension_class(ContextHandle context, std::uint64_t generation,
+			const std::string &class_name) noexcept {
+		return registry->unregister_class(context, generation, class_name);
+	}
+
+	RegistrationResult shutdown(ContextHandle context,
+			std::uint64_t generation) noexcept {
+		return registry->shutdown(context, generation);
+	}
+
+private:
+	JniRegistrationBridge(std::shared_ptr<JniRegistrationMethods> methods,
+			std::shared_ptr<const BridgeServices> services) : methods(std::move(methods)),
+															  services(std::move(services)) {}
+
+	bool resolve_object_type(const std::string &java_type,
+			std::string &foundry_type) noexcept {
+		try {
+			AttachedEnvironment attached(methods->java_vm);
+			JNIEnv *environment = attached.get();
+			if (environment == nullptr) {
+				return false;
+			}
+			jstring name = new_java_string(environment, java_type);
+			auto resolved = static_cast<jstring>(
+					name == nullptr
+							? nullptr
+							: environment->CallStaticObjectMethod(
+									  methods->engine, methods->resolve_object_type, name));
+			const bool success =
+					resolved != nullptr &&
+					!clear_java_exception(environment, state.errors,
+							"registration object type resolution");
+			if (success) {
+				foundry_type = java_utf8(environment, resolved);
+			}
+			if (resolved != nullptr) {
+				environment->DeleteLocalRef(resolved);
+			}
+			if (name != nullptr) {
+				environment->DeleteLocalRef(name);
+			}
+			return success && !foundry_type.empty();
+		} catch (...) {
+			state.errors->error("Native failure contained during registration object "
+								"type resolution.");
+			return false;
+		}
+	}
+
+	std::shared_ptr<JniRegistrationMethods> methods;
+	std::shared_ptr<const BridgeServices> services;
+	std::shared_ptr<AbiRegistrationServices> native_services;
+	std::shared_ptr<JniRegistrationCallbacks> callbacks;
+	std::unique_ptr<RegistrationRegistry> registry;
+};
+
+std::shared_ptr<JniRegistrationBridge> registration_bridge() {
+	std::lock_guard lock(state.registration_mutex);
+	return state.registration;
+}
+
+bool install_registration_bridge(
+		std::shared_ptr<const BridgeServices> services) noexcept {
+	try {
+		{
+			std::lock_guard lock(state.registration_mutex);
+			if (state.registration != nullptr) {
+				return true;
+			}
+		}
+		AttachedEnvironment attached(
+				reinterpret_cast<JavaVM *>(state.transition.java_vm()));
+		auto bridge = JniRegistrationBridge::create(attached.get(), services);
+		if (bridge == nullptr) {
+			return false;
+		}
+		std::lock_guard lock(state.registration_mutex);
+		if (state.registration == nullptr) {
+			state.registration = std::move(bridge);
+		}
+		return true;
+	} catch (...) {
+		return false;
+	}
+}
+
+void reset_registration_bridge() noexcept {
+	std::shared_ptr<JniRegistrationBridge> released;
+	{
+		std::lock_guard lock(state.registration_mutex);
+		released = std::move(state.registration);
+	}
+	released.reset();
+}
+
+void shutdown_context_registration(ContextHandle context,
+		std::uint64_t generation) noexcept {
+	auto bridge = registration_bridge();
+	if (bridge == nullptr) {
+		return;
+	}
+	const RegistrationResult result = bridge->shutdown(context, generation);
+	if (!result.ok()) {
+		state.errors->error(
+				"Foundry Java registration teardown failed: " + result.phase + ".");
+	}
+}
+
+void throw_registration_result(JNIEnv *environment,
+		const RegistrationResult &result) {
+	if (result.ok()) {
+		return;
+	}
+	throw_java(environment,
+			result.status == RegistrationStatus::INVALID_DESCRIPTOR
+					? "java/lang/IllegalArgumentException"
+					: "java/lang/IllegalStateException",
+			result.phase.empty() ? "registration_failed" : result.phase);
 }
 
 } // namespace
@@ -2631,20 +4014,51 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeReportCallbackExcepti
 FOUNDRY_JAVA_JNI_EXPORT void JNICALL
 Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeRegisterExtensionClassV1(
 		JNIEnv *environment,
-		jclass,
-		jlong,
-		jobject) {
-	// Task 4 freezes and exports this exact seam. The approved Task 5 registration
-	// workstream supplies its transactional descriptor body.
-	foundry_java::throw_registration_unavailable(environment);
+		jclass, jlong context, jobject descriptor) {
+	try {
+		auto operation = foundry_java::require_operation(environment, context);
+		auto bridge = foundry_java::registration_bridge();
+		if (!operation || bridge == nullptr) {
+			if (operation && bridge == nullptr) {
+				foundry_java::throw_java(environment, "java/lang/IllegalStateException",
+						"registration_bridge_unavailable");
+			}
+			return;
+		}
+		foundry_java::throw_registration_result(
+				environment,
+				bridge->register_extension_class(
+						environment, static_cast<foundry_java::ContextHandle>(context),
+						operation, descriptor));
+	} catch (...) {
+		foundry_java::throw_java(environment, "java/lang/IllegalStateException",
+				"registration_jni");
+	}
 }
 
 FOUNDRY_JAVA_JNI_EXPORT void JNICALL
 Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeUnregisterExtensionClassV1(
 		JNIEnv *environment,
-		jclass,
-		jlong,
-		jstring) {
-	// See nativeRegisterExtensionClassV1: failing explicitly is the Task 4 contract.
-	foundry_java::throw_registration_unavailable(environment);
+		jclass, jlong context, jstring class_name) {
+	try {
+		auto operation = foundry_java::require_operation(
+				environment, context, foundry_java::ContextOperationKind::CLEANUP);
+		auto bridge = foundry_java::registration_bridge();
+		if (!operation || bridge == nullptr || class_name == nullptr) {
+			if (operation && bridge == nullptr) {
+				foundry_java::throw_java(environment, "java/lang/IllegalStateException",
+						"registration_bridge_unavailable");
+} else if (operation && class_name == nullptr) {
+				foundry_java::throw_java(environment,
+						"java/lang/IllegalArgumentException",
+						"registration_class_name");
+			}
+			return;
+		}
+		foundry_java::throw_registration_result(
+				environment, bridge->unregister_extension_class(static_cast<foundry_java::ContextHandle>(context), operation.generation(), foundry_java::java_utf8(environment, class_name)));
+	} catch (...) {
+		foundry_java::throw_java(environment, "java/lang/IllegalStateException",
+				"registration_jni");
+	}
 }

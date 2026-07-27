@@ -7,11 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import games.cafecito.foundry.generated.GeneratedNativeDispatch;
+import games.cafecito.foundry.runtime.FoundryBindingContext;
 import games.cafecito.foundry.runtime.FoundryCallable;
 import games.cafecito.foundry.runtime.FoundryClassDescriptor;
 import games.cafecito.foundry.runtime.FoundryEngine;
+import games.cafecito.foundry.runtime.FoundryExtensionAccess;
 import games.cafecito.foundry.runtime.FoundryNativeDispatch;
 import games.cafecito.foundry.runtime.FoundrySignal;
+import games.cafecito.foundry.runtime.ObjectLease;
 import games.cafecito.foundry.types.FoundryArray;
 import games.cafecito.foundry.types.FoundryDictionary;
 import games.cafecito.foundry.types.Rid;
@@ -701,23 +704,44 @@ class FoundryNativeEngineTest {
     }
 
     @Test
-    void rejectsNullRegistrationBeforeGatewayAndPropagatesGatewayUnavailability() {
+    void rejectsNullRegistrationBeforeGatewayAndDelegatesValidRequests() {
         RecordingGateway gateway = new RecordingGateway();
         FoundryNativeEngine engine =
                 new FoundryNativeEngine(11, ignored -> utility("Variant", 0, true), gateway);
+        FoundryClassDescriptor descriptor = registrationDescriptor();
 
         NullPointerException register =
                 assertThrows(
-                        NullPointerException.class,
-                        () -> engine.registerExtensionClass(11, null));
-        UnsupportedOperationException unregister =
-                assertThrows(
-                        UnsupportedOperationException.class,
-                        () -> engine.unregisterExtensionClass(11, "Demo"));
+                        NullPointerException.class, () -> engine.registerExtensionClass(11, null));
+        engine.registerExtensionClass(11, descriptor);
+        engine.unregisterExtensionClass(11, "Demo");
 
         assertEquals("descriptor", register.getMessage());
-        assertTrue(unregister.getMessage().contains("registration_unavailable_before_task5"));
-        assertEquals(0, gateway.registrations);
+        assertEquals(List.of("register:Demo", "unregister:Demo"), gateway.registrationEvents);
+        assertEquals(2, gateway.registrations);
+    }
+
+    @Test
+    void propagatesRegistrationGatewayFailuresWithoutTranslation() {
+        RecordingGateway gateway = new RecordingGateway();
+        FoundryNativeEngine engine =
+                new FoundryNativeEngine(11, ignored -> utility("Variant", 0, true), gateway);
+        IllegalArgumentException invalid = new IllegalArgumentException("object_type");
+        IllegalStateException nativeFailure = new IllegalStateException("registration_unregister");
+        gateway.registrationFailures.add(invalid);
+        gateway.registrationFailures.add(nativeFailure);
+
+        assertEquals(
+                invalid,
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> engine.registerExtensionClass(11, registrationDescriptor())));
+        assertEquals(
+                nativeFailure,
+                assertThrows(
+                        IllegalStateException.class,
+                        () -> engine.unregisterExtensionClass(11, "Demo")));
+        assertEquals(2, gateway.registrations);
     }
 
     @Test
@@ -747,6 +771,31 @@ class FoundryNativeEngineTest {
                         .map(Class::getTypeName)
                         .collect(Collectors.joining(",", "(", ")"))
                 + returnType.getTypeName();
+    }
+
+    private static FoundryClassDescriptor registrationDescriptor() {
+        FoundryExtensionAccess access =
+                new FoundryExtensionAccess() {
+                    @Override
+                    public Object construct(FoundryBindingContext context, ObjectLease lease) {
+                        return new Object();
+                    }
+
+                    @Override
+                    public Object invoke(Object target, String name, Object[] arguments) {
+                        return null;
+                    }
+
+                    @Override
+                    public Object getProperty(Object target, String name) {
+                        return null;
+                    }
+
+                    @Override
+                    public void setProperty(Object target, String name, Object value) {}
+                };
+        return new FoundryClassDescriptor(
+                "demo.Demo", "Demo", "Node", "SCENE", List.of(), access, List.of());
     }
 
     private static FoundryNativeDispatch utility(
@@ -844,8 +893,11 @@ class FoundryNativeEngineTest {
                 new java.util.ArrayDeque<>();
         private final java.util.ArrayDeque<RuntimeException> releaseFailures =
                 new java.util.ArrayDeque<>();
+        private final java.util.ArrayDeque<RuntimeException> registrationFailures =
+                new java.util.ArrayDeque<>();
         private final java.util.ArrayList<String> dispatchIdentities = new java.util.ArrayList<>();
         private final java.util.ArrayList<Long> releasedHandles = new java.util.ArrayList<>();
+        private final java.util.ArrayList<String> registrationEvents = new java.util.ArrayList<>();
         private int calls;
         private int encodes;
         private int registrations;
@@ -947,16 +999,22 @@ class FoundryNativeEngineTest {
 
         @Override
         public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {
-            throw registrationFailure();
+            registrations++;
+            registrationEvents.add("register:" + descriptor.foundryName());
+            failRegistrationIfRequested();
         }
 
         @Override
         public void unregisterExtensionClass(long contextHandle, String foundryName) {
-            throw registrationFailure();
+            registrations++;
+            registrationEvents.add("unregister:" + foundryName);
+            failRegistrationIfRequested();
         }
 
-        private UnsupportedOperationException registrationFailure() {
-            return new UnsupportedOperationException("registration_unavailable_before_task5");
+        private void failRegistrationIfRequested() {
+            if (!registrationFailures.isEmpty()) {
+                throw registrationFailures.removeFirst();
+            }
         }
     }
 

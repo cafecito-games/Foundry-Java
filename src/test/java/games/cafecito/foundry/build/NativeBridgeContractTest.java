@@ -159,6 +159,10 @@ class NativeBridgeContractTest {
                     "foundry_java_interface.cpp",
                     "foundry_java_interface.h",
                     "foundry_java_jni.cpp",
+                    "foundry_java_registration.cpp",
+                    "foundry_java_registration.h",
+                    "foundry_java_registration_bridge.cpp",
+                    "foundry_java_registration_bridge.h",
                     "foundry_java_runtime.h",
                     "foundry_java_transport.cpp",
                     "foundry_java_transport.h");
@@ -317,7 +321,45 @@ class NativeBridgeContractTest {
         assertFalse(boundary.contains("java/lang/reflect"));
         assertFalse(jni.contains("games/cafecito/foundry/generated"));
         assertFalse(jni.contains("GeneratedNativeDispatch"));
-        assertFalse(jni.contains("Ljava/lang/Object;"));
+        assertEquals(
+                5,
+                occurrences(jni, "Ljava/lang/Object;"),
+                "Object descriptors are limited to the frozen typed registration helpers");
+    }
+
+    @Test
+    void jniRegistrationBodiesUseTheTransactionalRegistryAndContextTeardown() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        int registerStart = jni.indexOf("FoundryNativeEngine_nativeRegisterExtensionClassV1(");
+        int unregisterStart =
+                jni.indexOf(
+                        "FoundryNativeEngine_nativeUnregisterExtensionClassV1(", registerStart + 1);
+        assertTrue(registerStart >= 0);
+        assertTrue(unregisterStart > registerStart);
+        String register = jni.substring(registerStart, unregisterStart);
+        String unregister = jni.substring(unregisterStart);
+        String normalizedJni = jni.replaceAll("\\s+", " ");
+
+        assertFalse(jni.contains("registration_unavailable_before_task5"));
+        assertTrue(register.contains("require_operation("));
+        assertTrue(register.contains("register_extension_class("));
+        assertTrue(
+                unregister
+                        .replaceAll("\\s+", " ")
+                        .contains(
+                                "require_operation( environment, context, "
+                                        + "foundry_java::ContextOperationKind::CLEANUP)"));
+        assertTrue(unregister.contains("unregister_extension_class("));
+        assertTrue(jni.contains("runtime->set_context_teardown("));
+        assertTrue(jni.contains("shutdown_context_registration("));
+        assertTrue(
+                normalizedJni.contains(
+                        "result.status == RegistrationStatus::INVALID_DESCRIPTOR ? "
+                                + "\"java/lang/IllegalArgumentException\" : "
+                                + "\"java/lang/IllegalStateException\""));
+        assertTrue(
+                normalizedJni.contains(
+                        "result.phase.empty() ? \"registration_failed\" : result.phase"));
     }
 
     @Test
