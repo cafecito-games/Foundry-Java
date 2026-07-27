@@ -19,6 +19,14 @@ public final class FoundryRegistrationPlan {
                     .thenComparing(entry -> entry.descriptor().foundryName())
                     .thenComparing(ClassEntry::module)
                     .thenComparing(ClassEntry::registry);
+    private static final Comparator<FoundryMemberDescriptor> MEMBER_ORDER =
+            Comparator.comparing(FoundryMemberDescriptor::kind)
+                    .thenComparing(FoundryMemberDescriptor::foundryName)
+                    .thenComparing(FoundryMemberDescriptor::javaName)
+                    .thenComparing(FoundryMemberDescriptor::signature)
+                    .thenComparing(
+                            FoundryMemberDescriptor::details,
+                            FoundryRegistrationPlan::compareDetails);
 
     private final List<ClassEntry> entries;
     private final Map<FoundryInitializationLevel, List<FoundryClassDescriptor>> byLevel;
@@ -44,23 +52,24 @@ public final class FoundryRegistrationPlan {
         Set<String> foundryNames = new HashSet<>();
         for (FoundryModuleDescriptor module : bootstrap.descriptors()) {
             for (FoundryClassDescriptor descriptor : module.classes()) {
-                FoundryInitializationLevel level = parseLevel(module.module(), descriptor);
+                FoundryClassDescriptor normalized = normalizeMembers(module.module(), descriptor);
+                FoundryInitializationLevel level = parseLevel(module.module(), normalized);
                 ClassEntry entry =
-                        new ClassEntry(module.module(), module.registry(), descriptor, level);
-                ClassEntry previous = byJavaName.putIfAbsent(descriptor.javaName(), entry);
+                        new ClassEntry(module.module(), module.registry(), normalized, level);
+                ClassEntry previous = byJavaName.putIfAbsent(normalized.javaName(), entry);
                 if (previous != null) {
                     throw new IllegalArgumentException(
                             "Duplicate Foundry Java class identity "
-                                    + descriptor.javaName()
+                                    + normalized.javaName()
                                     + " in modules "
                                     + previous.module()
                                     + " and "
                                     + module.module()
                                     + ".");
                 }
-                if (!foundryNames.add(descriptor.foundryName())) {
+                if (!foundryNames.add(normalized.foundryName())) {
                     throw new IllegalArgumentException(
-                            "Duplicate Foundry class identity " + descriptor.foundryName() + ".");
+                            "Duplicate Foundry class identity " + normalized.foundryName() + ".");
                 }
             }
         }
@@ -161,6 +170,114 @@ public final class FoundryRegistrationPlan {
                             + ".",
                     failure);
         }
+    }
+
+    private static FoundryClassDescriptor normalizeMembers(
+            String module, FoundryClassDescriptor descriptor) {
+        Set<String> foundryNames = new HashSet<>();
+        for (FoundryMemberDescriptor member : descriptor.members()) {
+            validateKind(module, descriptor, member);
+            if (!foundryNames.add(member.foundryName())) {
+                throw new IllegalArgumentException(
+                        "Foundry class "
+                                + descriptor.javaName()
+                                + " in module "
+                                + module
+                                + " repeats exported member "
+                                + member.foundryName()
+                                + ".");
+            }
+        }
+        List<FoundryMemberDescriptor> members =
+                descriptor.members().stream().sorted(MEMBER_ORDER).toList();
+        return new FoundryClassDescriptor(
+                descriptor.javaName(),
+                descriptor.foundryName(),
+                descriptor.baseName(),
+                descriptor.initializationLevel(),
+                descriptor.after(),
+                descriptor.access(),
+                members);
+    }
+
+    private static void validateKind(
+            String module, FoundryClassDescriptor descriptor, FoundryMemberDescriptor member) {
+        switch (member.kind()) {
+            case "constant", "method", "override", "property", "signal" -> {
+                return;
+            }
+            default ->
+                    throw new IllegalArgumentException(
+                            "Foundry class "
+                                    + descriptor.javaName()
+                                    + " in module "
+                                    + module
+                                    + " uses unknown member kind "
+                                    + member.kind()
+                                    + ".");
+        }
+    }
+
+    private static int compareDetails(FoundryMemberDetails left, FoundryMemberDetails right) {
+        int rank = Integer.compare(detailsRank(left), detailsRank(right));
+        if (rank != 0) {
+            return rank;
+        }
+        if (left instanceof FoundryConstantDetails leftConstant
+                && right instanceof FoundryConstantDetails rightConstant) {
+            int comparison = leftConstant.enumName().compareTo(rightConstant.enumName());
+            if (comparison != 0) {
+                return comparison;
+            }
+            comparison = Long.compare(leftConstant.value(), rightConstant.value());
+            if (comparison != 0) {
+                return comparison;
+            }
+            return Boolean.compare(leftConstant.bitfield(), rightConstant.bitfield());
+        }
+        if (left instanceof FoundryPropertyDetails leftProperty
+                && right instanceof FoundryPropertyDetails rightProperty) {
+            int comparison = leftProperty.getter().compareTo(rightProperty.getter());
+            if (comparison != 0) {
+                return comparison;
+            }
+            comparison = leftProperty.setter().compareTo(rightProperty.setter());
+            if (comparison != 0) {
+                return comparison;
+            }
+            comparison = Integer.compare(leftProperty.index(), rightProperty.index());
+            if (comparison != 0) {
+                return comparison;
+            }
+            comparison = leftProperty.groupName().compareTo(rightProperty.groupName());
+            if (comparison != 0) {
+                return comparison;
+            }
+            comparison = leftProperty.groupPrefix().compareTo(rightProperty.groupPrefix());
+            if (comparison != 0) {
+                return comparison;
+            }
+            comparison = leftProperty.subgroupName().compareTo(rightProperty.subgroupName());
+            if (comparison != 0) {
+                return comparison;
+            }
+            return leftProperty.subgroupPrefix().compareTo(rightProperty.subgroupPrefix());
+        }
+        return 0;
+    }
+
+    private static int detailsRank(FoundryMemberDetails details) {
+        if (details == FoundryMemberDetails.none()) {
+            return 0;
+        }
+        if (details instanceof FoundryConstantDetails) {
+            return 1;
+        }
+        if (details instanceof FoundryPropertyDetails) {
+            return 2;
+        }
+        throw new IllegalArgumentException(
+                "Unsupported Foundry member details " + details.getClass().getName() + ".");
     }
 
     private record ClassEntry(
