@@ -24,6 +24,16 @@ class FoundryModuleGenerationTest {
                         .get(
                                 "games/cafecito/foundry/generated/demomodule/"
                                         + "DemoModuleRegistry.java");
+        assertTrue(
+                registry.contains(
+                        "implements games.cafecito.foundry.runtime.FoundryModuleProvider"));
+        assertTrue(
+                registry.contains(
+                        "public static final games.cafecito.foundry.runtime.FoundryModuleProvider"
+                                + " PROVIDER"));
+        assertTrue(
+                registry.contains(
+                        "games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor()"));
         assertEquals(FoundryTrampolineGenerationTest.golden("DemoModuleRegistry.golden"), registry);
         assertTrue(
                 registry.contains("demo.SpinningCube_FoundryTrampoline.construct(context, lease)"));
@@ -32,6 +42,18 @@ class FoundryModuleGenerationTest {
                 result,
                 "META-INF/foundry-java/modules/demo-module.descriptor",
                 "demo-module.descriptor");
+        String descriptor =
+                new String(
+                        result.classOutput()
+                                .get("META-INF/foundry-java/modules/demo-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(descriptor.startsWith("format=2\n"));
+        assertTrue(
+                descriptor.contains(
+                        "api_sha256=85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51\n"));
+        assertTrue(descriptor.contains("generator_version=1\n"));
+        assertTrue(descriptor.contains("runtime_contract_version=1\n"));
+        assertTrue(descriptor.contains("bridge_contract_version=1\n"));
         assertResource(
                 result,
                 "META-INF/proguard/foundry-java-demo-module.pro",

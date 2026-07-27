@@ -54,7 +54,8 @@ public final class FoundryExtensionProcessor extends AbstractProcessor {
         if (validator == null) {
             validator = new ExtensionValidator(processingEnv);
             sourceEmitter = new SourceEmitter(processingEnv.getFiler());
-            moduleEmitter = new ModuleEmitter(processingEnv.getFiler());
+            moduleEmitter =
+                    new ModuleEmitter(processingEnv.getFiler(), processingEnv.getElementUtils());
         }
         TypeElement foundryClass =
                 processingEnv.getElementUtils().getTypeElement(ExtensionValidator.CLASS);
