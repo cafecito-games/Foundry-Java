@@ -28,6 +28,23 @@ android {
         }
     }
 
+    buildTypes {
+        getByName("debug") {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=ON"
+                }
+            }
+        }
+        getByName("release") {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=OFF"
+                }
+            }
+        }
+    }
+
     testOptions {
         targetSdk = 36
     }
@@ -97,6 +114,7 @@ val nativeHostTest =
         inputs.files(
             fileTree("src/main/cpp"),
             fileTree("src/test/cpp"),
+            fileTree("src/androidTest/cpp"),
             rootProject.fileTree("api/current"),
         )
         inputs.file(nativeTestScript)
@@ -111,6 +129,7 @@ val nativeSanitizerTest =
         inputs.files(
             fileTree("src/main/cpp"),
             fileTree("src/test/cpp"),
+            fileTree("src/androidTest/cpp"),
             rootProject.fileTree("api/current"),
         )
         inputs.file(nativeTestScript)
