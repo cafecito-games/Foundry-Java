@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -3123,6 +3124,83 @@ void throw_registration_result(JNIEnv *environment,
 namespace foundry_java {
 namespace {
 
+class ScopedTransportHandle final {
+public:
+	ScopedTransportHandle(
+			NativeTransport &transport,
+			ContextHandle context,
+			std::uint64_t generation) noexcept :
+			transport(&transport),
+			context(context),
+			generation(generation) {
+	}
+
+	~ScopedTransportHandle() {
+		release();
+	}
+
+	ScopedTransportHandle(const ScopedTransportHandle &) = delete;
+	ScopedTransportHandle &operator=(const ScopedTransportHandle &) = delete;
+
+	bool adopt(NativeHandle value) noexcept {
+		if (handle != 0) {
+			if (value != 0) {
+				transport->release_handle(value, context, generation);
+			}
+			return false;
+		}
+		handle = value;
+		return handle != 0;
+	}
+
+	bool inspect() {
+		lease = transport->handles().inspect(handle, context, generation);
+		return static_cast<bool>(lease);
+	}
+
+	FoundryExtensionVariantPtr variant() const {
+		return const_cast<FoundryExtensionVariantPtr>(lease.record().value.data());
+	}
+
+	explicit operator bool() const noexcept {
+		return handle != 0;
+	}
+
+	bool release() noexcept {
+		lease = {};
+		if (handle == 0) {
+			return false;
+		}
+		const NativeHandle released = std::exchange(handle, 0);
+		return transport->release_handle(released, context, generation);
+	}
+
+private:
+	NativeTransport *transport = nullptr;
+	ContextHandle context = 0;
+	std::uint64_t generation = 0;
+	NativeHandle handle = 0;
+	HandleLease lease;
+};
+
+template <typename Ready, typename Failed>
+decltype(auto) with_scoped_object_receiver_variant(
+		NativeTransport &transport,
+		ContextHandle context,
+		std::uint64_t generation,
+		NativeHandle object_handle,
+		const std::string &expected_object_type,
+		Ready &&ready,
+		Failed &&failed) {
+	ScopedTransportHandle receiver(transport, context, generation);
+	if (!receiver.adopt(transport.construct_object_variant(
+				context, generation, object_handle, expected_object_type)) ||
+			!receiver.inspect()) {
+		return std::forward<Failed>(failed)();
+	}
+	return std::forward<Ready>(ready)(receiver.variant());
+}
+
 jobject call_result(
 		JNIEnv *environment,
 		jobject value,
@@ -3327,6 +3405,86 @@ std::string expected_call_type(
 }
 
 } // namespace
+
+#if defined(FOUNDRY_JAVA_TESTING)
+std::size_t receiver_variant_handle_count_after_validation_for_testing(
+		NativeTransport &transport,
+		ContextHandle context,
+		std::uint64_t generation,
+		NativeHandle object_handle,
+		DispatchKind kind,
+		std::size_t formal_count,
+		int callback_stage,
+		bool &receiver_ready,
+		bool &validation_valid,
+		bool &callback_completed) {
+	const auto ready = [&](FoundryExtensionVariantPtr receiver_variant) {
+		receiver_ready = receiver_variant != nullptr;
+		NativeDispatch dispatch;
+		dispatch.kind = kind;
+		dispatch.owner_native_type = "Node";
+		dispatch.minimum_argument_count = 0;
+		if (kind == DispatchKind::CLASS_PROPERTY) {
+			dispatch.argument_native_types = { "Vector2" };
+		}
+		validation_valid = validate_dispatch(dispatch, formal_count, {}).valid;
+		if (!validation_valid) {
+			return false;
+		}
+		if (callback_stage == 1) {
+			NativeValue converted = NativeValue::storage(abi_layout_size("Vector2"));
+			if (transport
+						.inspect_variant(
+								object_handle,
+								context,
+								generation,
+								FOUNDRY_EXTENSION_VARIANT_TYPE_VECTOR2,
+								converted.data())
+						.ok) {
+				return true;
+			}
+			return false;
+		}
+		if (callback_stage == 3) {
+			throw std::runtime_error("receiver_execute_test_error");
+		}
+		callback_completed = callback_stage == 2;
+		return callback_stage == 2;
+	};
+	const auto failed = [&] {
+		receiver_ready = false;
+		validation_valid = false;
+		return false;
+	};
+	(void)with_scoped_object_receiver_variant(
+			transport,
+			context,
+			generation,
+			object_handle,
+			"Node",
+			ready,
+			failed);
+	return transport.handles().size();
+}
+
+std::size_t receiver_variant_handle_count_after_readoption_for_testing(
+		NativeTransport &transport,
+		ContextHandle context,
+		std::uint64_t generation,
+		NativeHandle object_handle,
+		bool &first_adopted,
+		bool &second_rejected) {
+	{
+		ScopedTransportHandle receiver(transport, context, generation);
+		first_adopted = receiver.adopt(transport.construct_object_variant(
+				context, generation, object_handle, "Node"));
+		second_rejected = !receiver.adopt(transport.construct_object_variant(
+				context, generation, object_handle, "Node"));
+	}
+	return transport.handles().size();
+}
+#endif
+
 } // namespace foundry_java
 
 FOUNDRY_JAVA_JNI_EXPORT jobject JNICALL
@@ -3490,8 +3648,7 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1(
 				FOUNDRY_EXTENSION_VARIANT_OP_MAX;
 
 		ObjectLease object;
-		NativeHandle receiver_variant_handle = 0;
-		HandleLease receiver_variant_lease;
+		std::string expected_object_type;
 		if (object_handle > 0) {
 			HandleLease inspected = transport.handles().inspect(
 					static_cast<NativeHandle>(object_handle), native_context, generation);
@@ -3504,7 +3661,7 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1(
 						-1,
 						dispatch.owner_native_type);
 			}
-			const std::string expected_object_type = inspected.record().expected_type;
+			expected_object_type = inspected.record().expected_type;
 			inspected = {};
 			object = transport.acquire_object(
 					static_cast<NativeHandle>(object_handle),
@@ -3530,357 +3687,363 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1(
 						-1,
 						dispatch.owner_native_type);
 			}
-			if (dispatch.kind == DispatchKind::CLASS_PROPERTY ||
-					dispatch.kind == DispatchKind::CLASS_SIGNAL) {
-				receiver_variant_handle = transport.construct_object_variant(
-						native_context,
-						generation,
-						static_cast<NativeHandle>(object_handle),
-						expected_object_type);
-				receiver_variant_lease = transport.handles().inspect(
-						receiver_variant_handle, native_context, generation);
-				if (!receiver_variant_lease) {
+		}
+
+		const auto complete_call = [&](FoundryExtensionVariantPtr receiver_variant) -> jobject {
+			if (receiver_variant != nullptr) {
+				call.receiver_variant = receiver_variant;
+			}
+
+			std::vector<NativeValue> native_values;
+			std::vector<FoundryExtensionVariantType> native_value_types;
+			std::vector<HandleLease> native_structure_leases;
+			native_values.reserve(dispatch.argument_native_types.size() + 1);
+			native_value_types.reserve(dispatch.argument_native_types.size() + 1);
+			native_structure_leases.reserve(dispatch.argument_native_types.size());
+			const auto destroy_native_values = [&] {
+				for (std::size_t index = 0; index < native_values.size(); index++) {
+					if (native_values[index].constructed) {
+						transport.destroy_native_value(
+								native_value_types[index], native_values[index].data());
+						native_values[index].constructed = false;
+					}
+				}
+			};
+
+			if (has_builtin_receiver) {
+				const VariantCategoryInfo *owner = variant_category(dispatch.owner_native_type);
+				if (owner == nullptr) {
 					release_arguments();
 					return call_result(
 							environment,
 							nullptr,
-							FOUNDRY_EXTENSION_CALL_ERROR_INSTANCE_IS_NULL,
-							-1,
+							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+							0,
 							dispatch.owner_native_type);
 				}
 				call.receiver_variant = const_cast<FoundryExtensionVariantPtr>(
-						receiver_variant_lease.record().value.data());
-			}
-		}
-
-		std::vector<NativeValue> native_values;
-		std::vector<FoundryExtensionVariantType> native_value_types;
-		std::vector<HandleLease> native_structure_leases;
-		native_values.reserve(dispatch.argument_native_types.size() + 1);
-		native_value_types.reserve(dispatch.argument_native_types.size() + 1);
-		native_structure_leases.reserve(dispatch.argument_native_types.size());
-		const auto destroy_native_values = [&] {
-			for (std::size_t index = 0; index < native_values.size(); index++) {
-				if (native_values[index].constructed) {
-					transport.destroy_native_value(
-							native_value_types[index], native_values[index].data());
-					native_values[index].constructed = false;
-				}
-			}
-		};
-
-		if (has_builtin_receiver) {
-			const VariantCategoryInfo *owner = variant_category(dispatch.owner_native_type);
-			if (owner == nullptr) {
-				release_arguments();
-				return call_result(
-						environment,
-						nullptr,
-						FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-						0,
-						dispatch.owner_native_type);
-			}
-			call.receiver_variant = const_cast<FoundryExtensionVariantPtr>(
-					argument_leases.front().record().value.data());
-			native_values.push_back(NativeValue::storage(abi_layout_size(owner->native_name)));
-			if (!transport
-						 .inspect_variant(
-								 argument_handles.front(),
-								 native_context,
-								 generation,
-								 owner->abi_type,
-								 native_values.back().data())
-						 .ok) {
-				release_arguments();
-				return call_result(
-						environment,
-						nullptr,
-						FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-						0,
-						dispatch.owner_native_type);
-			}
-			native_values.back().constructed = true;
-			native_value_types.push_back(owner->abi_type);
-			call.receiver_native = native_values.back().data();
-			call.receiver_native_type = dispatch.owner_native_type;
-		}
-
-		const std::size_t formal_count =
-				static_cast<std::size_t>(java_argument_count) - receiver_count;
-		const DispatchValidation argument_validation = validate_dispatch(
-				dispatch,
-				formal_count,
-				has_builtin_receiver ? std::string_view(dispatch.owner_native_type) : std::string_view{});
-		if (!argument_validation.valid) {
-			destroy_native_values();
-			release_arguments();
-			return call_result(
-					environment,
-					nullptr,
-					FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-					static_cast<std::int32_t>(formal_count),
-					argument_validation.phase);
-		}
-		const bool raw_variant_vararg =
-				dispatch.vararg &&
-				(dispatch.kind == DispatchKind::BUILTIN_METHOD ||
-						dispatch.kind == DispatchKind::UTILITY_FUNCTION);
-		const std::size_t typed_count =
-				raw_variant_vararg ?
-				0 :
-				std::min(formal_count, dispatch.argument_native_types.size());
-		for (std::size_t index = 0; index < typed_count; index++) {
-			const std::string &type_name = dispatch.argument_native_types[index];
-			const NormalizedNativeType normalized = normalize_native_type(type_name);
-			const NativeHandle variant_handle = argument_handles[index + receiver_count];
-			if (normalized.kind == NativeTypeKind::NATIVE_STRUCTURE) {
-				NativeValue bridge_handle = NativeValue::storage(sizeof(std::int64_t));
+						argument_leases.front().record().value.data());
+				native_values.push_back(NativeValue::storage(abi_layout_size(owner->native_name)));
 				if (!transport
 							 .inspect_variant(
-									 variant_handle,
+									 argument_handles.front(),
 									 native_context,
 									 generation,
-									 FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
-									 bridge_handle.data())
-							 .ok) {
-					destroy_native_values();
-					release_arguments();
-					return call_result(
-							environment,
-							nullptr,
-							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-							static_cast<std::int32_t>(index),
-							type_name);
-				}
-				const auto handle =
-						static_cast<NativeHandle>(*static_cast<std::int64_t *>(bridge_handle.data()));
-				HandleLease lease = transport.handles().acquire(
-						handle,
-						native_context,
-						generation,
-						HandleKind::NATIVE_STRUCTURE,
-						std::string(normalized.token));
-				if (!lease) {
-					destroy_native_values();
-					release_arguments();
-					return call_result(
-							environment,
-							nullptr,
-							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-							static_cast<std::int32_t>(index),
-							type_name);
-				}
-				call.native_arguments.push_back(lease.record().value.data());
-				native_structure_leases.push_back(std::move(lease));
-			} else if (normalized.kind == NativeTypeKind::OBJECT) {
-				native_values.push_back(NativeValue::storage(sizeof(FoundryExtensionObjectPtr)));
-				if (!transport
-							 .inspect_variant(
-									 variant_handle,
-									 native_context,
-									 generation,
-									 FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT,
+									 owner->abi_type,
 									 native_values.back().data())
 							 .ok) {
-					destroy_native_values();
 					release_arguments();
 					return call_result(
 							environment,
 							nullptr,
 							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-							static_cast<std::int32_t>(index),
-							type_name);
-				}
-				auto native_object =
-						*static_cast<FoundryExtensionObjectPtr *>(native_values.back().data());
-				if (!transport.is_object_assignable(native_object, type_name)) {
-					destroy_native_values();
-					release_arguments();
-					return call_result(
-							environment,
-							nullptr,
-							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-							static_cast<std::int32_t>(index),
-							type_name);
-				}
-				call.native_arguments.push_back(native_values.back().data());
-				native_value_types.push_back(FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT);
-			} else if (normalized.kind == NativeTypeKind::BUILTIN &&
-					normalized.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX) {
-				call.native_arguments.push_back(
-						argument_leases[index + receiver_count].record().value.data());
-			} else if (normalized.kind == NativeTypeKind::BUILTIN) {
-				const VariantCategoryInfo *category = variant_category(normalized.abi_type);
-				native_values.push_back(
-						NativeValue::storage(abi_layout_size(category->native_name)));
-				if (!transport
-							 .inspect_variant(
-									 variant_handle,
-									 native_context,
-									 generation,
-									 normalized.abi_type,
-									 native_values.back().data())
-							 .ok) {
-					destroy_native_values();
-					release_arguments();
-					return call_result(
-							environment,
-							nullptr,
-							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
-							static_cast<std::int32_t>(index),
-							type_name);
+							0,
+							dispatch.owner_native_type);
 				}
 				native_values.back().constructed = true;
-				native_value_types.push_back(normalized.abi_type);
-				call.native_arguments.push_back(native_values.back().data());
+				native_value_types.push_back(owner->abi_type);
+				call.receiver_native = native_values.back().data();
+				call.receiver_native_type = dispatch.owner_native_type;
 			}
-		}
-		prepare_native_arguments_for_dispatch(dispatch, call);
 
-		DispatchFamily family = dispatch_family(dispatch);
-		if (family == DispatchFamily::CLASS_PTRCALL &&
-				formal_count >= dispatch.minimum_argument_count &&
-				formal_count < dispatch.argument_native_types.size()) {
-			family = DispatchFamily::CLASS_VARIANT_CALL;
-		}
-		const bool variant_result_family =
-				family == DispatchFamily::CLASS_VARIANT_CALL ||
-				family == DispatchFamily::CLASS_PROPERTY ||
-				family == DispatchFamily::CLASS_SIGNAL ||
-				family == DispatchFamily::BUILTIN_OPERATOR ||
-				family == DispatchFamily::BUILTIN_CONSTANT ||
-				dispatch.return_native_type == "void";
-		NativeValue variant_result = NativeValue::storage(abi_layout_size("Variant"));
-		NativeValue native_result;
-		NativeHandle native_structure_result_handle = 0;
-		HandleLease native_structure_result_lease;
-		const NormalizedNativeType return_type =
-				normalize_native_type(dispatch.return_native_type);
-		call.variant_result = variant_result.data();
-		if (!variant_result_family) {
-			if (return_type.kind == NativeTypeKind::NATIVE_STRUCTURE) {
-				native_structure_result_handle = transport.create_native_structure(
-						native_context, generation, dispatch.return_native_type);
-				native_structure_result_lease = transport.handles().acquire(
-						native_structure_result_handle,
+			const std::size_t formal_count =
+					static_cast<std::size_t>(java_argument_count) - receiver_count;
+			const DispatchValidation argument_validation = validate_dispatch(
+					dispatch,
+					formal_count,
+					has_builtin_receiver ? std::string_view(dispatch.owner_native_type) : std::string_view{});
+			if (!argument_validation.valid) {
+				destroy_native_values();
+				release_arguments();
+				return call_result(
+						environment,
+						nullptr,
+						FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+						static_cast<std::int32_t>(formal_count),
+						argument_validation.phase);
+			}
+			const bool raw_variant_vararg =
+					dispatch.vararg &&
+					(dispatch.kind == DispatchKind::BUILTIN_METHOD ||
+							dispatch.kind == DispatchKind::UTILITY_FUNCTION);
+			const std::size_t typed_count =
+					raw_variant_vararg ?
+					0 :
+					std::min(formal_count, dispatch.argument_native_types.size());
+			for (std::size_t index = 0; index < typed_count; index++) {
+				const std::string &type_name = dispatch.argument_native_types[index];
+				const NormalizedNativeType normalized = normalize_native_type(type_name);
+				const NativeHandle variant_handle = argument_handles[index + receiver_count];
+				if (normalized.kind == NativeTypeKind::NATIVE_STRUCTURE) {
+					NativeValue bridge_handle = NativeValue::storage(sizeof(std::int64_t));
+					if (!transport
+								 .inspect_variant(
+										 variant_handle,
+										 native_context,
+										 generation,
+										 FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
+										 bridge_handle.data())
+								 .ok) {
+						destroy_native_values();
+						release_arguments();
+						return call_result(
+								environment,
+								nullptr,
+								FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+								static_cast<std::int32_t>(index),
+								type_name);
+					}
+					const auto handle =
+							static_cast<NativeHandle>(*static_cast<std::int64_t *>(bridge_handle.data()));
+					HandleLease lease = transport.handles().acquire(
+							handle,
+							native_context,
+							generation,
+							HandleKind::NATIVE_STRUCTURE,
+							std::string(normalized.token));
+					if (!lease) {
+						destroy_native_values();
+						release_arguments();
+						return call_result(
+								environment,
+								nullptr,
+								FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+								static_cast<std::int32_t>(index),
+								type_name);
+					}
+					call.native_arguments.push_back(lease.record().value.data());
+					native_structure_leases.push_back(std::move(lease));
+				} else if (normalized.kind == NativeTypeKind::OBJECT) {
+					native_values.push_back(NativeValue::storage(sizeof(FoundryExtensionObjectPtr)));
+					if (!transport
+								 .inspect_variant(
+										 variant_handle,
+										 native_context,
+										 generation,
+										 FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT,
+										 native_values.back().data())
+								 .ok) {
+						destroy_native_values();
+						release_arguments();
+						return call_result(
+								environment,
+								nullptr,
+								FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+								static_cast<std::int32_t>(index),
+								type_name);
+					}
+					auto native_object =
+							*static_cast<FoundryExtensionObjectPtr *>(native_values.back().data());
+					if (!transport.is_object_assignable(native_object, type_name)) {
+						destroy_native_values();
+						release_arguments();
+						return call_result(
+								environment,
+								nullptr,
+								FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+								static_cast<std::int32_t>(index),
+								type_name);
+					}
+					call.native_arguments.push_back(native_values.back().data());
+					native_value_types.push_back(FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT);
+				} else if (normalized.kind == NativeTypeKind::BUILTIN &&
+						normalized.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX) {
+					call.native_arguments.push_back(
+							argument_leases[index + receiver_count].record().value.data());
+				} else if (normalized.kind == NativeTypeKind::BUILTIN) {
+					const VariantCategoryInfo *category = variant_category(normalized.abi_type);
+					native_values.push_back(
+							NativeValue::storage(abi_layout_size(category->native_name)));
+					if (!transport
+								 .inspect_variant(
+										 variant_handle,
+										 native_context,
+										 generation,
+										 normalized.abi_type,
+										 native_values.back().data())
+								 .ok) {
+						destroy_native_values();
+						release_arguments();
+						return call_result(
+								environment,
+								nullptr,
+								FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+								static_cast<std::int32_t>(index),
+								type_name);
+					}
+					native_values.back().constructed = true;
+					native_value_types.push_back(normalized.abi_type);
+					call.native_arguments.push_back(native_values.back().data());
+				}
+			}
+			prepare_native_arguments_for_dispatch(dispatch, call);
+
+			DispatchFamily family = dispatch_family(dispatch);
+			if (family == DispatchFamily::CLASS_PTRCALL &&
+					formal_count >= dispatch.minimum_argument_count &&
+					formal_count < dispatch.argument_native_types.size()) {
+				family = DispatchFamily::CLASS_VARIANT_CALL;
+			}
+			const bool variant_result_family =
+					family == DispatchFamily::CLASS_VARIANT_CALL ||
+					family == DispatchFamily::CLASS_PROPERTY ||
+					family == DispatchFamily::CLASS_SIGNAL ||
+					family == DispatchFamily::BUILTIN_OPERATOR ||
+					family == DispatchFamily::BUILTIN_CONSTANT ||
+					dispatch.return_native_type == "void";
+			NativeValue variant_result = NativeValue::storage(abi_layout_size("Variant"));
+			NativeValue native_result;
+			NativeHandle native_structure_result_handle = 0;
+			HandleLease native_structure_result_lease;
+			const NormalizedNativeType return_type =
+					normalize_native_type(dispatch.return_native_type);
+			call.variant_result = variant_result.data();
+			if (!variant_result_family) {
+				if (return_type.kind == NativeTypeKind::NATIVE_STRUCTURE) {
+					native_structure_result_handle = transport.create_native_structure(
+							native_context, generation, dispatch.return_native_type);
+					native_structure_result_lease = transport.handles().acquire(
+							native_structure_result_handle,
+							native_context,
+							generation,
+							HandleKind::NATIVE_STRUCTURE,
+							std::string(return_type.token));
+					if (!native_structure_result_lease) {
+						destroy_native_values();
+						release_arguments();
+						return call_result(
+								environment,
+								nullptr,
+								FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD,
+								-1,
+								dispatch.return_native_type);
+					}
+					call.native_result = const_cast<FoundryExtensionTypePtr>(
+							native_structure_result_lease.record().value.data());
+				} else {
+					const std::size_t result_size =
+							return_type.kind == NativeTypeKind::OBJECT ?
+							sizeof(FoundryExtensionObjectPtr) :
+							return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX ?
+							abi_layout_size("Variant") :
+							abi_layout_size(return_type.token);
+					native_result = NativeValue::storage(result_size);
+					call.native_result = native_result.data();
+				}
+			}
+
+			const TransportResult executed = transport.execute(dispatch, call);
+			if (!executed.ok) {
+				if (native_structure_result_handle != 0) {
+					native_structure_result_lease = {};
+					transport.release_handle(
+							native_structure_result_handle, native_context, generation);
+				}
+				destroy_native_values();
+				release_arguments();
+				return call_result(
+						environment,
+						nullptr,
+						executed.call_error.error,
+						executed.call_error.argument,
+						expected_call_type(dispatch, executed.call_error));
+			}
+
+			NativeHandle result_handle = 0;
+			if (variant_result_family) {
+				result_handle =
+						copy_raw_variant(transport, native_context, generation, variant_result.data());
+			} else if (return_type.kind == NativeTypeKind::NATIVE_STRUCTURE) {
+				std::int64_t bridge_handle =
+						static_cast<std::int64_t>(native_structure_result_handle);
+				result_handle = transport.construct_variant(
 						native_context,
 						generation,
-						HandleKind::NATIVE_STRUCTURE,
-						std::string(return_type.token));
-				if (!native_structure_result_lease) {
-					destroy_native_values();
-					release_arguments();
-					return call_result(
-							environment,
-							nullptr,
-							FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD,
-							-1,
-							dispatch.return_native_type);
-				}
-				call.native_result = const_cast<FoundryExtensionTypePtr>(
-						native_structure_result_lease.record().value.data());
-			} else {
-				const std::size_t result_size =
-						return_type.kind == NativeTypeKind::OBJECT ?
-						sizeof(FoundryExtensionObjectPtr) :
-						return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX ?
-						abi_layout_size("Variant") :
-						abi_layout_size(return_type.token);
-				native_result = NativeValue::storage(result_size);
-				call.native_result = native_result.data();
-			}
-		}
-
-		const TransportResult executed = transport.execute(dispatch, call);
-		if (receiver_variant_handle != 0) {
-			receiver_variant_lease = {};
-			transport.release_handle(receiver_variant_handle, native_context, generation);
-		}
-		if (!executed.ok) {
-			if (native_structure_result_handle != 0) {
+						FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
+						&bridge_handle);
 				native_structure_result_lease = {};
-				transport.release_handle(
-						native_structure_result_handle, native_context, generation);
+				if (result_handle == 0) {
+					transport.release_handle(
+							native_structure_result_handle, native_context, generation);
+				}
+			} else if (return_type.kind == NativeTypeKind::OBJECT) {
+				auto object = *static_cast<FoundryExtensionObjectPtr *>(native_result.data());
+				result_handle = transport.construct_variant(
+						native_context,
+						generation,
+						FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT,
+						&object);
+			} else if (return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX) {
+				result_handle =
+						copy_raw_variant(transport, native_context, generation, native_result.data());
+			} else {
+				result_handle = transport.construct_variant(
+						native_context,
+						generation,
+						return_type.abi_type,
+						native_result.data());
+				transport.destroy_native_value(return_type.abi_type, native_result.data());
+			}
+			jobject result_value =
+					result_handle == 0 ?
+					nullptr :
+					decode_variant(
+							environment,
+							native_context,
+							generation,
+							transport,
+							result_handle,
+							0);
+			if (result_handle != 0) {
+				transport.release_handle(result_handle, native_context, generation);
 			}
 			destroy_native_values();
 			release_arguments();
-			return call_result(
-					environment,
-					nullptr,
-					executed.call_error.error,
-					executed.call_error.argument,
-					expected_call_type(dispatch, executed.call_error));
-		}
-
-		NativeHandle result_handle = 0;
-		if (variant_result_family) {
-			result_handle =
-					copy_raw_variant(transport, native_context, generation, variant_result.data());
-		} else if (return_type.kind == NativeTypeKind::NATIVE_STRUCTURE) {
-			std::int64_t bridge_handle =
-					static_cast<std::int64_t>(native_structure_result_handle);
-			result_handle = transport.construct_variant(
-					native_context,
-					generation,
-					FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
-					&bridge_handle);
-			native_structure_result_lease = {};
-			if (result_handle == 0) {
-				transport.release_handle(
-						native_structure_result_handle, native_context, generation);
-			}
-		} else if (return_type.kind == NativeTypeKind::OBJECT) {
-			auto object = *static_cast<FoundryExtensionObjectPtr *>(native_result.data());
-			result_handle = transport.construct_variant(
-					native_context,
-					generation,
-					FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT,
-					&object);
-		} else if (return_type.abi_type == FOUNDRY_EXTENSION_VARIANT_TYPE_VARIANT_MAX) {
-			result_handle =
-					copy_raw_variant(transport, native_context, generation, native_result.data());
-		} else {
-			result_handle = transport.construct_variant(
-					native_context,
-					generation,
-					return_type.abi_type,
-					native_result.data());
-			transport.destroy_native_value(return_type.abi_type, native_result.data());
-		}
-		jobject result_value =
-				result_handle == 0 ?
-				nullptr :
-				decode_variant(
+			if (result_value == nullptr || environment->ExceptionCheck()) {
+				if (environment->ExceptionCheck()) {
+					return nullptr;
+				}
+				return call_result(
 						environment,
-						native_context,
-						generation,
-						transport,
-						result_handle,
-						0);
-		if (result_handle != 0) {
-			transport.release_handle(result_handle, native_context, generation);
-		}
-		destroy_native_values();
-		release_arguments();
-		if (result_value == nullptr || environment->ExceptionCheck()) {
-			if (environment->ExceptionCheck()) {
-				return nullptr;
+						nullptr,
+						FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD,
+						-1,
+						dispatch.return_native_type);
 			}
-			return call_result(
+			jobject result = call_result(
 					environment,
-					nullptr,
-					FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD,
+					result_value,
+					FOUNDRY_EXTENSION_CALL_OK,
 					-1,
-					dispatch.return_native_type);
+					"");
+			environment->DeleteLocalRef(result_value);
+			return result;
+		};
+		if (object_handle > 0 &&
+				(dispatch.kind == DispatchKind::CLASS_PROPERTY ||
+						dispatch.kind == DispatchKind::CLASS_SIGNAL)) {
+			const auto receiver_ready = [&](FoundryExtensionVariantPtr receiver_variant) {
+				return complete_call(receiver_variant);
+			};
+			const auto receiver_failed = [&] {
+				release_arguments();
+				return call_result(
+						environment,
+						nullptr,
+						FOUNDRY_EXTENSION_CALL_ERROR_INSTANCE_IS_NULL,
+						-1,
+						dispatch.owner_native_type);
+			};
+			return with_scoped_object_receiver_variant(
+					transport,
+					native_context,
+					generation,
+					static_cast<NativeHandle>(object_handle),
+					expected_object_type,
+					receiver_ready,
+					receiver_failed);
 		}
-		jobject result = call_result(
-				environment,
-				result_value,
-				FOUNDRY_EXTENSION_CALL_OK,
-				-1,
-				"");
-		environment->DeleteLocalRef(result_value);
-		return result;
+		return complete_call(nullptr);
 	} catch (const std::exception &error) {
 		throw_java(environment, "java/lang/IllegalStateException", error.what());
 		return nullptr;

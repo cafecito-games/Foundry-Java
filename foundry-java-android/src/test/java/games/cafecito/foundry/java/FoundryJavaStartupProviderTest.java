@@ -160,6 +160,63 @@ class FoundryJavaStartupProviderTest {
         assertTrue(stale.getMessage().contains("failure_phase=provider_pre_entry"));
     }
 
+    @Test
+    void nonLinkageErrorFromNativeLoadingLeavesPrimingStaleAndPreservesTheError() {
+        PrimingError failure = new PrimingError("native loading failed");
+        FoundryRegistryBootstrap bootstrap = new FoundryRegistryBootstrap(List.of());
+        ClassLoader loader = new ClassLoader() {};
+        AtomicInteger diagnostics = new AtomicInteger();
+        FoundryJavaInitializer.PrimingState state =
+                new FoundryJavaInitializer.PrimingState(
+                        () -> {
+                            throw failure;
+                        },
+                        (actualLoader, callbacks) -> true,
+                        contextHandle -> {
+                            throw new AssertionError(
+                                    "Provider priming must not construct an engine.");
+                        },
+                        ignored -> diagnostics.incrementAndGet());
+
+        assertSame(failure, assertThrows(PrimingError.class, () -> state.prime(loader, bootstrap)));
+        assertEquals(0, diagnostics.get());
+
+        assertStaleReentry(state, loader, bootstrap);
+    }
+
+    @Test
+    void nonLinkageErrorFromNativeBootstrapLeavesPrimingStaleAndPreservesTheError() {
+        PrimingError failure = new PrimingError("native bootstrap failed");
+        FoundryRegistryBootstrap bootstrap = new FoundryRegistryBootstrap(List.of());
+        ClassLoader loader = new ClassLoader() {};
+        AtomicInteger diagnostics = new AtomicInteger();
+        FoundryJavaInitializer.PrimingState state =
+                new FoundryJavaInitializer.PrimingState(
+                        () -> {},
+                        (actualLoader, callbacks) -> {
+                            throw failure;
+                        },
+                        contextHandle -> {
+                            throw new AssertionError(
+                                    "Provider priming must not construct an engine.");
+                        },
+                        ignored -> diagnostics.incrementAndGet());
+
+        assertSame(failure, assertThrows(PrimingError.class, () -> state.prime(loader, bootstrap)));
+        assertEquals(0, diagnostics.get());
+
+        assertStaleReentry(state, loader, bootstrap);
+    }
+
+    private static void assertStaleReentry(
+            FoundryJavaInitializer.PrimingState state,
+            ClassLoader loader,
+            FoundryRegistryBootstrap bootstrap) {
+        IllegalStateException stale =
+                assertThrows(IllegalStateException.class, () -> state.prime(loader, bootstrap));
+        assertTrue(stale.getMessage().contains("already stale"), stale::getMessage);
+    }
+
     private static FoundryJavaInitializer.PrimingState successfulState() {
         return new FoundryJavaInitializer.PrimingState(
                 () -> {},
@@ -168,6 +225,12 @@ class FoundryJavaStartupProviderTest {
                     throw new AssertionError("Provider priming must not construct an engine.");
                 },
                 ignored -> {});
+    }
+
+    private static final class PrimingError extends Error {
+        private PrimingError(String message) {
+            super(message);
+        }
     }
 
     private static final class TestProvider extends FoundryJavaStartupProvider {

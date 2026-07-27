@@ -309,6 +309,11 @@ public final class FoundryJavaInitializer {
                 String diagnostic = diagnosticJson(requestedBootstrap, -1, "provider_pre_entry");
                 diagnostics.write(diagnostic);
                 throw providerFailure("Provider priming did not complete.", failure);
+            } catch (Error failure) {
+                synchronized (lock) {
+                    phase = Phase.STALE;
+                }
+                throw failure;
             }
         }
 

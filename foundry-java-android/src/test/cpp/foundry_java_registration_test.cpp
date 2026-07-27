@@ -1,5 +1,6 @@
 #include "foundry_java_registration.h"
 #include "foundry_java_registration_bridge.h"
+#include "foundry_java_abi_layout.h"
 #include "foundry_java_transport.h"
 
 #include <algorithm>
@@ -12,11 +13,35 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+namespace foundry_java {
+
+std::size_t receiver_variant_handle_count_after_validation_for_testing(
+		NativeTransport &transport,
+		ContextHandle context,
+		std::uint64_t generation,
+		NativeHandle object_handle,
+		DispatchKind kind,
+		std::size_t formal_count,
+		int callback_stage,
+		bool &receiver_ready,
+		bool &validation_valid,
+		bool &callback_completed);
+std::size_t receiver_variant_handle_count_after_readoption_for_testing(
+		NativeTransport &transport,
+		ContextHandle context,
+		std::uint64_t generation,
+		NativeHandle object_handle,
+		bool &first_adopted,
+		bool &second_rejected);
+
+} // namespace foundry_java
 
 namespace {
 
@@ -28,6 +53,35 @@ void expect(bool condition, const char *message) {
 }
 
 std::vector<std::string> abi_operations;
+int receiver_variant_destroy_count = 0;
+
+GDObjectInstanceID receiver_object_instance_id(FoundryExtensionConstObjectPtr object) {
+	return object == reinterpret_cast<FoundryExtensionConstObjectPtr>(0x1277) ? 1277 : 0;
+}
+
+FoundryExtensionObjectPtr receiver_object_from_id(GDObjectInstanceID id) {
+	return id == 1277 ? reinterpret_cast<FoundryExtensionObjectPtr>(0x1277) : nullptr;
+}
+
+void receiver_variant_from_object(
+		FoundryExtensionUninitializedVariantPtr destination,
+		FoundryExtensionTypePtr source) {
+	std::memset(destination, 0, foundry_java::abi_layout_size("Variant"));
+	*static_cast<FoundryExtensionObjectPtr *>(destination) =
+			*static_cast<FoundryExtensionObjectPtr *>(source);
+}
+
+FoundryExtensionVariantFromTypeConstructorFunc receiver_variant_constructor(
+		FoundryExtensionVariantType type) {
+	return type == FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT ?
+			&receiver_variant_from_object :
+			nullptr;
+}
+
+void receiver_variant_destroy(FoundryExtensionVariantPtr) {
+	receiver_variant_destroy_count++;
+}
+
 int abi_string_error = 0;
 int abi_string_destructor_count = 0;
 int output_variant_default_count = 0;
@@ -2168,9 +2222,168 @@ void test_failed_provisional_rollback_retains_ownership_for_shutdown_retry() {
 			"successful retry must finally release access");
 }
 
+void test_jni_receiver_variant_scope_releases_after_validation() {
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->object_get_instance_id = &receiver_object_instance_id;
+	services->object_get_instance_from_id = &receiver_object_from_id;
+	services->get_variant_from_type_constructor = &receiver_variant_constructor;
+	services->variant_destroy = &receiver_variant_destroy;
+	foundry_java::NativeTransport transport(services);
+
+	constexpr foundry_java::ContextHandle context = 1277;
+	constexpr std::uint64_t generation = 1;
+	const auto object_handle = transport.track_object(
+			context,
+			generation,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1277),
+			"Node",
+			false);
+	expect(object_handle != 0, "receiver fixture must create a live object handle");
+	const std::size_t baseline_handles = transport.handles().size();
+	receiver_variant_destroy_count = 0;
+
+	const auto run_scope = [&](
+		foundry_java::DispatchKind kind,
+		std::size_t formal_count,
+		bool expected_valid,
+		int callback_stage,
+		bool expected_completed,
+		const char *message) {
+		bool receiver_ready = false;
+		bool validation_valid = false;
+		bool callback_completed = false;
+		const int destroyed_before = receiver_variant_destroy_count;
+		const std::size_t handles_after =
+				foundry_java::receiver_variant_handle_count_after_validation_for_testing(
+						transport,
+						context,
+						generation,
+						object_handle,
+						kind,
+						formal_count,
+						callback_stage,
+						receiver_ready,
+						validation_valid,
+						callback_completed);
+		expect(receiver_ready, "receiver Variant must be constructed before validation");
+		expect(validation_valid == expected_valid, message);
+		expect(
+				callback_completed == expected_completed,
+				"receiver callback must report whether the simulated call completed");
+		expect(
+				handles_after == baseline_handles,
+				"receiver Variant handle must return to baseline when validation scope exits");
+		expect(
+				receiver_variant_destroy_count == destroyed_before + 1,
+				"receiver Variant storage must be destroyed exactly once");
+	};
+
+	for (int iteration = 0; iteration < 3; iteration++) {
+		run_scope(
+				foundry_java::DispatchKind::CLASS_PROPERTY,
+				2,
+				false,
+				0,
+				false,
+				"CLASS_PROPERTY must reject more than its getter/setter arity");
+		run_scope(
+				foundry_java::DispatchKind::CLASS_SIGNAL,
+				1,
+				false,
+				0,
+				false,
+				"CLASS_SIGNAL must reject formal arguments");
+	}
+	run_scope(
+			foundry_java::DispatchKind::CLASS_PROPERTY,
+			1,
+			true,
+			1,
+			false,
+			"CLASS_PROPERTY typed conversion fixture must pass validation");
+	run_scope(
+			foundry_java::DispatchKind::CLASS_PROPERTY,
+			0,
+			true,
+			0,
+			false,
+			"CLASS_PROPERTY execute-failure fixture must pass validation");
+	run_scope(
+			foundry_java::DispatchKind::CLASS_PROPERTY,
+			0,
+			true,
+			2,
+			true,
+			"CLASS_PROPERTY getter validation must remain valid");
+	run_scope(
+			foundry_java::DispatchKind::CLASS_SIGNAL,
+			0,
+			true,
+			2,
+			true,
+			"CLASS_SIGNAL validation must remain valid");
+
+	const int destroyed_before_exception = receiver_variant_destroy_count;
+	bool receiver_ready = false;
+	bool validation_valid = false;
+	bool callback_completed = false;
+	bool exception_observed = false;
+	try {
+		(void)foundry_java::receiver_variant_handle_count_after_validation_for_testing(
+				transport,
+				context,
+				generation,
+				object_handle,
+				foundry_java::DispatchKind::CLASS_PROPERTY,
+				0,
+				3,
+				receiver_ready,
+				validation_valid,
+				callback_completed);
+	} catch (const std::runtime_error &) {
+		exception_observed = true;
+	}
+	expect(
+			exception_observed && receiver_ready && validation_valid,
+			"receiver execute exception fixture must unwind after successful construction");
+	expect(
+			transport.handles().size() == baseline_handles,
+			"receiver Variant handle must return to baseline during exception unwinding");
+	expect(
+			receiver_variant_destroy_count == destroyed_before_exception + 1,
+			"exception unwinding must destroy receiver Variant storage exactly once");
+
+	const int destroyed_before_readoption = receiver_variant_destroy_count;
+	bool first_adopted = false;
+	bool second_rejected = false;
+	const std::size_t handles_after_readoption =
+			foundry_java::receiver_variant_handle_count_after_readoption_for_testing(
+					transport,
+					context,
+					generation,
+					object_handle,
+					first_adopted,
+					second_rejected);
+	expect(
+			first_adopted && second_rejected,
+			"scoped receiver ownership must reject readoption");
+	expect(
+			handles_after_readoption == baseline_handles,
+			"rejected readoption must release both receiver Variant handles");
+	expect(
+			receiver_variant_destroy_count == destroyed_before_readoption + 2,
+			"readoption rejection and scope exit must each destroy one receiver Variant");
+
+	expect(
+			transport.release_handle(object_handle, context, generation),
+			"receiver object fixture must release");
+	expect(transport.handles().size() == 0, "receiver fixture must leave no native handles");
+}
+
 } // namespace
 
 int main() {
+	test_jni_receiver_variant_scope_releases_after_validation();
 	test_strict_java_transport_signature_parser();
 	test_registration_interface_inventory_excludes_virtual_registration();
 	test_public_abi_registration_adapter_maps_exact_void_services();

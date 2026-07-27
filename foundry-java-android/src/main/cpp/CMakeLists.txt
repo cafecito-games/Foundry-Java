@@ -122,12 +122,16 @@ endif()
 
 if(FOUNDRY_JAVA_BUILD_TESTS)
     enable_testing()
-    target_compile_definitions(foundry_java_runtime PUBLIC FOUNDRY_JAVA_TESTING)
+    find_package(JNI REQUIRED)
+    target_compile_definitions(foundry_java_runtime PRIVATE FOUNDRY_JAVA_TESTING)
     add_executable(
         foundry_java_registration_test
+        foundry_java_jni.cpp
         "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_registration_test.cpp"
     )
     target_link_libraries(foundry_java_registration_test PRIVATE foundry_java_runtime Threads::Threads)
+    target_compile_definitions(foundry_java_registration_test PRIVATE FOUNDRY_JAVA_TESTING)
+    target_include_directories(foundry_java_registration_test PRIVATE ${JNI_INCLUDE_DIRS})
     target_compile_features(foundry_java_registration_test PRIVATE cxx_std_17)
     target_compile_options(foundry_java_registration_test PRIVATE -Wall -Wextra -Werror)
     add_executable(
@@ -136,6 +140,7 @@ if(FOUNDRY_JAVA_BUILD_TESTS)
         "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_runtime_test.cpp"
     )
     target_link_libraries(foundry_java_runtime_test PRIVATE foundry_java_runtime Threads::Threads)
+    target_compile_definitions(foundry_java_runtime_test PRIVATE FOUNDRY_JAVA_TESTING)
     target_compile_features(foundry_java_runtime_test PRIVATE cxx_std_17)
     target_compile_options(foundry_java_runtime_test PRIVATE -Wall -Wextra -Werror)
     add_executable(
