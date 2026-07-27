@@ -371,8 +371,8 @@ std::shared_ptr<const BridgeServices> ContextOperationLease::services() const no
 	return impl == nullptr || impl->context == nullptr ? nullptr : impl->context->services;
 }
 
-NativeTransport *ContextOperationLease::transport() const noexcept {
-	return impl == nullptr || impl->context == nullptr ? nullptr : impl->context->transport.get();
+std::shared_ptr<NativeTransport> ContextOperationLease::transport() const noexcept {
+	return impl == nullptr || impl->context == nullptr ? nullptr : impl->context->transport;
 }
 
 FoundryExtensionClassLibraryPtr ContextOperationLease::library() const noexcept {

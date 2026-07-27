@@ -1324,6 +1324,10 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 			"operation lease must retain the context service table for registration adapters");
 	expect(operation.library() == library,
 			"operation lease must retain the matching class library");
+	std::shared_ptr<foundry_java::NativeTransport> retained_transport =
+			operation.transport();
+	std::weak_ptr<foundry_java::NativeTransport> transport_lifetime =
+			retained_transport;
 
 	std::thread shutdown([&] {
 		expect(
@@ -1340,6 +1344,11 @@ void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
 	expect(
 			resources_torn_down && shutdown_finished,
 			"resource teardown must run after operation drain and Java cleanup");
+	expect(!transport_lifetime.expired(),
+			"operation transport ownership must survive context teardown");
+	retained_transport.reset();
+	expect(transport_lifetime.expired(),
+			"transport must release after its final retained owner");
 }
 
 void test_java_cleanup_admits_only_authenticated_cleanup_operations() {

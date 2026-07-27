@@ -1950,7 +1950,7 @@ struct JniAccess {
 	std::uint64_t generation = 0;
 	FoundryExtensionClassLibraryPtr library = nullptr;
 	std::shared_ptr<const BridgeServices> services;
-	NativeTransport *transport = nullptr;
+	std::shared_ptr<NativeTransport> transport;
 	std::shared_ptr<JniRegistrationMethods> methods;
 	jobject access = nullptr;
 	std::unordered_map<std::string, std::vector<JavaMethodSignature>>

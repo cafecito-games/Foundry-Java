@@ -32,7 +32,7 @@ public:
 	explicit operator bool() const noexcept;
 	std::uint64_t generation() const noexcept;
 	std::shared_ptr<const BridgeServices> services() const noexcept;
-	NativeTransport *transport() const noexcept;
+	std::shared_ptr<NativeTransport> transport() const noexcept;
 	FoundryExtensionClassLibraryPtr library() const noexcept;
 
 private:
