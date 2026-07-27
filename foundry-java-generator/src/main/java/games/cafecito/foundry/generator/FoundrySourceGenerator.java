@@ -88,6 +88,7 @@ public final class FoundrySourceGenerator {
                     "ScriptLanguageExtensionProfilingInfo");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Pattern COMMIT = Pattern.compile("[0-9a-f]{40}");
+    private static final int NATIVE_DISPATCH_SHARD_SIZE = 256;
 
     public static String extensionTypeName() {
         return FoundryExtension.class.getName();
@@ -146,6 +147,7 @@ public final class FoundrySourceGenerator {
         }
         String manifestSha256 = sha256(manifest.canonicalJson());
         List<PublicRoot> publicRoots = publicRoots(descriptors);
+        List<NativeDispatchRow> nativeDispatchRows = nativeDispatchRows(api);
 
         Map<String, String> sources = new TreeMap<>();
         sources.put(
@@ -160,6 +162,26 @@ public final class FoundrySourceGenerator {
         sources.put(
                 PACKAGE_PATH + "pointers/NativePointers.java",
                 nativePointersSource(metadata, manifestSha256));
+        sources.put(
+                PACKAGE_PATH + "GeneratedNativeDispatch.java",
+                nativeDispatchSource(
+                        metadata,
+                        manifestSha256,
+                        nativeDispatchRows.size(),
+                        nativeDispatchShardCount(nativeDispatchRows.size())));
+        for (int start = 0, shardIndex = 0;
+                start < nativeDispatchRows.size();
+                start += NATIVE_DISPATCH_SHARD_SIZE, shardIndex++) {
+            int end = Math.min(start + NATIVE_DISPATCH_SHARD_SIZE, nativeDispatchRows.size());
+            String className = nativeDispatchShardClassName(shardIndex);
+            sources.put(
+                    PACKAGE_PATH + className + ".java",
+                    nativeDispatchShardSource(
+                            metadata,
+                            manifestSha256,
+                            className,
+                            nativeDispatchRows.subList(start, end)));
+        }
         Map<String, List<PublicRoot>> rootsBySourcePath =
                 publicRoots.stream()
                         .collect(
@@ -394,6 +416,424 @@ public final class FoundrySourceGenerator {
                                 manifestSha256,
                                 javaStringBody(metadata.generatorVersion()),
                                 javaStringBody(metadata.bridgeContractVersion()));
+    }
+
+    private static List<NativeDispatchRow> nativeDispatchRows(FoundryApi api) {
+        Map<String, NativeDispatchRow> rows = new TreeMap<>();
+        for (FoundryApi.Entity root : api.categories().getOrDefault("classes", List.of())) {
+            String owner = sourceName(root);
+            Map<String, List<FoundryApi.Entity>> methodsByName =
+                    root.children().stream()
+                            .filter(child -> child.edge().equals("methods"))
+                            .collect(
+                                    Collectors.groupingBy(
+                                            child ->
+                                                    requiredString(
+                                                            child.source(),
+                                                            "name",
+                                                            child.identity())));
+            for (FoundryApi.Entity child : root.children()) {
+                NativeDispatchRow row =
+                        switch (child.edge()) {
+                            case "methods" ->
+                                    callableDispatchRow(
+                                            child,
+                                            "CLASS_METHOD",
+                                            owner,
+                                            optionalBoolean(child.source(), "is_static"));
+                            case "properties" -> propertyDispatchRow(child, owner, methodsByName);
+                            case "signals" ->
+                                    new NativeDispatchRow(
+                                            child.identity(),
+                                            "CLASS_SIGNAL",
+                                            owner,
+                                            requiredString(
+                                                    child.source(), "name", child.identity()),
+                                            -1,
+                                            -1,
+                                            List.of(),
+                                            0,
+                                            "Signal",
+                                            Accessor.NONE,
+                                            Accessor.NONE,
+                                            false,
+                                            false);
+                            default -> null;
+                        };
+                addNativeDispatchRow(rows, row);
+            }
+        }
+        for (FoundryApi.Entity root : api.categories().getOrDefault("builtin_classes", List.of())) {
+            String owner = sourceName(root);
+            for (FoundryApi.Entity child : root.children()) {
+                NativeDispatchRow row =
+                        switch (child.edge()) {
+                            case "methods" ->
+                                    callableDispatchRow(
+                                            child,
+                                            "BUILTIN_METHOD",
+                                            owner,
+                                            optionalBoolean(child.source(), "is_static"));
+                            case "constructors" ->
+                                    new NativeDispatchRow(
+                                            child.identity(),
+                                            "BUILTIN_CONSTRUCTOR",
+                                            owner,
+                                            "",
+                                            -1,
+                                            requiredInt(child, "index"),
+                                            argumentNativeTypes(child),
+                                            argumentNativeTypes(child).size(),
+                                            owner,
+                                            Accessor.NONE,
+                                            Accessor.NONE,
+                                            false,
+                                            false);
+                            case "operators" ->
+                                    new NativeDispatchRow(
+                                            child.identity(),
+                                            "BUILTIN_OPERATOR",
+                                            owner,
+                                            requiredString(
+                                                    child.source(), "name", child.identity()),
+                                            -1,
+                                            -1,
+                                            operatorArgumentNativeTypes(child),
+                                            operatorArgumentNativeTypes(child).size(),
+                                            requiredString(
+                                                    child.source(),
+                                                    "return_type",
+                                                    child.identity()),
+                                            Accessor.NONE,
+                                            Accessor.NONE,
+                                            false,
+                                            false);
+                            case "members" ->
+                                    new NativeDispatchRow(
+                                            child.identity(),
+                                            "BUILTIN_MEMBER",
+                                            owner,
+                                            requiredString(
+                                                    child.source(), "name", child.identity()),
+                                            -1,
+                                            -1,
+                                            List.of(),
+                                            0,
+                                            requiredString(
+                                                    child.source(), "type", child.identity()),
+                                            Accessor.NONE,
+                                            Accessor.NONE,
+                                            false,
+                                            false);
+                            case "constants" ->
+                                    isRuntimeBuiltinConstant(child)
+                                            ? new NativeDispatchRow(
+                                                    child.identity(),
+                                                    "BUILTIN_CONSTANT",
+                                                    owner,
+                                                    requiredString(
+                                                            child.source(),
+                                                            "name",
+                                                            child.identity()),
+                                                    -1,
+                                                    -1,
+                                                    List.of(),
+                                                    0,
+                                                    requiredString(
+                                                            child.source(),
+                                                            "type",
+                                                            child.identity()),
+                                                    Accessor.NONE,
+                                                    Accessor.NONE,
+                                                    false,
+                                                    false)
+                                            : null;
+                            default -> null;
+                        };
+                addNativeDispatchRow(rows, row);
+            }
+        }
+        for (FoundryApi.Entity utility :
+                api.categories().getOrDefault("utility_functions", List.of())) {
+            addNativeDispatchRow(rows, callableDispatchRow(utility, "UTILITY_FUNCTION", "", false));
+        }
+        return List.copyOf(rows.values());
+    }
+
+    private static NativeDispatchRow callableDispatchRow(
+            FoundryApi.Entity callable, String kind, String owner, boolean staticCall) {
+        List<String> argumentTypes = argumentNativeTypes(callable);
+        return new NativeDispatchRow(
+                callable.identity(),
+                kind,
+                owner,
+                requiredString(callable.source(), "name", callable.identity()),
+                compatibilityHash(callable),
+                -1,
+                argumentTypes,
+                minimumArgumentCount(callable),
+                nativeReturnType(callable),
+                Accessor.NONE,
+                Accessor.NONE,
+                optionalBoolean(callable.source(), "is_vararg"),
+                staticCall);
+    }
+
+    private static NativeDispatchRow propertyDispatchRow(
+            FoundryApi.Entity property,
+            String owner,
+            Map<String, List<FoundryApi.Entity>> methodsByName) {
+        String getterName = optionalString(property.source(), "getter", property.identity());
+        String setterName = optionalString(property.source(), "setter", property.identity());
+        String type = requiredString(property.source(), "type", property.identity());
+        return new NativeDispatchRow(
+                property.identity(),
+                "CLASS_PROPERTY",
+                owner,
+                requiredString(property.source(), "name", property.identity()),
+                -1,
+                -1,
+                List.of(type),
+                0,
+                type,
+                propertyAccessor(property, getterName, methodsByName),
+                propertyAccessor(property, setterName, methodsByName),
+                false,
+                false);
+    }
+
+    private static Accessor propertyAccessor(
+            FoundryApi.Entity property,
+            String nativeName,
+            Map<String, List<FoundryApi.Entity>> methodsByName) {
+        if (nativeName == null || nativeName.isBlank()) {
+            return Accessor.NONE;
+        }
+        List<FoundryApi.Entity> matches = methodsByName.getOrDefault(nativeName, List.of());
+        if (matches.size() > 1) {
+            throw new ApiInputException(
+                    "Ambiguous property accessor "
+                            + nativeName
+                            + " for "
+                            + property.identity()
+                            + ".");
+        }
+        if (matches.isEmpty()) {
+            return new Accessor("", nativeName, -1);
+        }
+        FoundryApi.Entity match = matches.get(0);
+        return new Accessor(match.identity(), nativeName, compatibilityHash(match));
+    }
+
+    private static List<String> argumentNativeTypes(FoundryApi.Entity callable) {
+        return children(callable, "arguments").stream()
+                .map(argument -> requiredString(argument.source(), "type", argument.identity()))
+                .toList();
+    }
+
+    private static List<String> operatorArgumentNativeTypes(FoundryApi.Entity operator) {
+        JsonValue value = operator.source().optional("right_type");
+        return value == null
+                ? List.of()
+                : List.of(value.requireString(operator.identity() + ".right_type"));
+    }
+
+    private static int minimumArgumentCount(FoundryApi.Entity callable) {
+        List<FoundryApi.Entity> arguments = children(callable, "arguments");
+        int minimum = arguments.size();
+        while (minimum > 0
+                && arguments.get(minimum - 1).source().optional("default_value") != null) {
+            minimum--;
+        }
+        return minimum;
+    }
+
+    private static String nativeReturnType(FoundryApi.Entity callable) {
+        JsonValue direct = callable.source().optional("return_type");
+        if (direct != null) {
+            return direct.requireString(callable.identity() + ".return_type");
+        }
+        List<FoundryApi.Entity> returnValues = children(callable, "return_value");
+        return returnValues.isEmpty()
+                ? ""
+                : requiredString(
+                        returnValues.get(0).source(), "type", returnValues.get(0).identity());
+    }
+
+    private static long compatibilityHash(FoundryApi.Entity entity) {
+        JsonValue value = entity.source().optional("hash");
+        if (!(value instanceof JsonValue.JsonNumber number)) {
+            throw new ApiInputException(entity.identity() + ".hash must be a JSON integer.");
+        }
+        try {
+            return Long.parseUnsignedLong(number.lexeme());
+        } catch (NumberFormatException exception) {
+            throw new ApiInputException(
+                    entity.identity() + ".hash must be an unsigned 64-bit JSON integer.",
+                    exception);
+        }
+    }
+
+    private static int requiredInt(FoundryApi.Entity entity, String field) {
+        return entity.source().require(field, entity.identity()).requireInt(entity.identity());
+    }
+
+    private static boolean isRuntimeBuiltinConstant(FoundryApi.Entity constant) {
+        String type = requiredString(constant.source(), "type", constant.identity());
+        JsonValue raw = constant.source().optional("value");
+        String value = raw == null ? "0" : raw.canonicalJson().replace("\"", "");
+        return !type.equals("int") || !value.matches("-?[0-9]+");
+    }
+
+    private static void addNativeDispatchRow(
+            Map<String, NativeDispatchRow> rows, NativeDispatchRow row) {
+        if (row != null && rows.put(row.identity(), row) != null) {
+            throw new ApiInputException(
+                    "Generated native dispatch identity twice: " + row.identity() + ".");
+        }
+    }
+
+    private static int nativeDispatchShardCount(int rowCount) {
+        return (rowCount + NATIVE_DISPATCH_SHARD_SIZE - 1) / NATIVE_DISPATCH_SHARD_SIZE;
+    }
+
+    private static String nativeDispatchShardClassName(int shardIndex) {
+        return "GeneratedNativeDispatchShard%03d".formatted(shardIndex);
+    }
+
+    private static String nativeDispatchSource(
+            Metadata metadata, String manifestSha256, int rowCount, int shardCount) {
+        StringBuilder source = new StringBuilder(generatedHeader(metadata, manifestSha256));
+        source.append(
+                """
+                package %s;
+
+                import games.cafecito.foundry.runtime.FoundryNativeDispatch;
+                import java.util.Collections;
+                import java.util.LinkedHashMap;
+                import java.util.Map;
+                import java.util.Objects;
+
+                /** Deterministic native dispatch metadata generated from the accepted API. */
+                public final class GeneratedNativeDispatch {
+                    private static final Map<String, FoundryNativeDispatch> ENTRIES = createEntries();
+
+                    public static FoundryNativeDispatch require(String identity) {
+                        Objects.requireNonNull(identity, "identity");
+                        FoundryNativeDispatch dispatch = ENTRIES.get(identity);
+                        if (dispatch == null) {
+                            throw new IllegalArgumentException(
+                                    "Unknown Foundry native dispatch identity: " + identity);
+                        }
+                        return dispatch;
+                    }
+
+                    private static Map<String, FoundryNativeDispatch> createEntries() {
+                        var target = new LinkedHashMap<String, FoundryNativeDispatch>(%d);
+                """
+                        .formatted(PACKAGE, rowCount));
+        for (int index = 0; index < shardCount; index++) {
+            source.append("        ")
+                    .append(nativeDispatchShardClassName(index))
+                    .append(".appendTo(target);\n");
+        }
+        return source.append(
+                        """
+                                if (target.size() != %d) {
+                                    throw new IllegalStateException(
+                                            "Generated native dispatch inventory mismatch: "
+                                                    + target.size());
+                                }
+                                return Collections.unmodifiableMap(target);
+                            }
+
+                            private GeneratedNativeDispatch() {}
+                        }
+                        """
+                                .formatted(rowCount))
+                .toString();
+    }
+
+    private static String nativeDispatchShardSource(
+            Metadata metadata,
+            String manifestSha256,
+            String className,
+            List<NativeDispatchRow> rows) {
+        StringBuilder source = new StringBuilder(generatedHeader(metadata, manifestSha256));
+        source.append("package ")
+                .append(PACKAGE)
+                .append(
+                        """
+                        ;
+
+                        import games.cafecito.foundry.runtime.FoundryNativeDispatch;
+                        import java.util.Map;
+
+                        final class %s {
+                            static void appendTo(Map<String, FoundryNativeDispatch> target) {
+                        """
+                                .formatted(className));
+        for (NativeDispatchRow row : rows) {
+            source.append("        target.put(\"")
+                    .append(javaStringBody(row.identity()))
+                    .append("\", new FoundryNativeDispatch(\"")
+                    .append(javaStringBody(row.identity()))
+                    .append("\", FoundryNativeDispatch.Kind.")
+                    .append(row.kind())
+                    .append(", \"")
+                    .append(javaStringBody(row.ownerNativeType()))
+                    .append("\", \"")
+                    .append(javaStringBody(row.nativeName()))
+                    .append("\", ")
+                    .append(javaLongLiteral(row.compatibilityHash()))
+                    .append(", ")
+                    .append(row.constructorIndex())
+                    .append(", ")
+                    .append(javaStringList(row.argumentNativeTypes()))
+                    .append(", ")
+                    .append(row.minimumArgumentCount())
+                    .append(", \"")
+                    .append(javaStringBody(row.returnNativeType()))
+                    .append("\", \"")
+                    .append(javaStringBody(row.getter().identity()))
+                    .append("\", \"")
+                    .append(javaStringBody(row.getter().nativeName()))
+                    .append("\", ")
+                    .append(javaLongLiteral(row.getter().compatibilityHash()))
+                    .append(", \"")
+                    .append(javaStringBody(row.setter().identity()))
+                    .append("\", \"")
+                    .append(javaStringBody(row.setter().nativeName()))
+                    .append("\", ")
+                    .append(javaLongLiteral(row.setter().compatibilityHash()))
+                    .append(", ")
+                    .append(row.vararg())
+                    .append(", ")
+                    .append(row.staticCall())
+                    .append("));\n");
+        }
+        return source.append(
+                        """
+                            }
+
+                            private %s() {}
+                        }
+                        """
+                                .formatted(className))
+                .toString();
+    }
+
+    private static String javaStringList(List<String> values) {
+        return values.stream()
+                .map(value -> "\"" + javaStringBody(value) + "\"")
+                .collect(Collectors.joining(", ", "java.util.List.of(", ")"));
+    }
+
+    private static String javaLongLiteral(long value) {
+        if (value >= 0 || value == -1) {
+            return value + "L";
+        }
+        return "0x" + Long.toHexString(value) + "L";
     }
 
     private static String registrationSource(
@@ -2272,6 +2712,29 @@ public final class FoundrySourceGenerator {
         PublicRoot withParentClassName(String value) {
             return new PublicRoot(descriptor, packageName, sourcePath, className, value);
         }
+    }
+
+    private record NativeDispatchRow(
+            String identity,
+            String kind,
+            String ownerNativeType,
+            String nativeName,
+            long compatibilityHash,
+            int constructorIndex,
+            List<String> argumentNativeTypes,
+            int minimumArgumentCount,
+            String returnNativeType,
+            Accessor getter,
+            Accessor setter,
+            boolean vararg,
+            boolean staticCall) {
+        NativeDispatchRow {
+            argumentNativeTypes = List.copyOf(argumentNativeTypes);
+        }
+    }
+
+    private record Accessor(String identity, String nativeName, long compatibilityHash) {
+        private static final Accessor NONE = new Accessor("", "", -1);
     }
 
     private enum MethodStyle {
