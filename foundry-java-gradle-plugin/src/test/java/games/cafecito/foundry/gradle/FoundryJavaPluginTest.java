@@ -842,6 +842,63 @@ class FoundryJavaPluginTest {
     }
 
     @Test
+    void zeroModuleVariantRejectsAStaleGeneratedStartupProviderWithoutAnIndex() throws IOException {
+        Path binding =
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("stale-provider-binding.aar"),
+                        List.of("x86_64"));
+        Path project = androidProject("stale-zero-module-provider", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="games.cafecito.foundry.generated.FoundryGeneratedStartupProvider"
+                            android:authorities="example.stale"
+                            android:exported="false" />
+                    </application>
+                </manifest>
+                """);
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("has no registry index"));
+        assertTrue(
+                failure.getOutput()
+                        .contains(
+                                "games.cafecito.foundry.generated."
+                                        + "FoundryGeneratedStartupProvider"));
+    }
+
+    @Test
+    void zeroModuleVariantRejectsAStaleReservedStartupAuthorityWithoutAnIndex() throws IOException {
+        Path binding =
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("stale-authority-binding.aar"),
+                        List.of("x86_64"));
+        Path project = androidProject("stale-zero-module-authority", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="example.StaleFoundryProvider"
+                            android:authorities="${applicationId}.foundry-java-startup"
+                            android:exported="false" />
+                    </application>
+                </manifest>
+                """);
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("has no registry index"));
+        assertTrue(failure.getOutput().contains("example.StaleFoundryProvider"));
+        assertTrue(failure.getOutput().contains("games.cafecito.test.custom.foundry-java-startup"));
+    }
+
+    @Test
     void variantPlaceholderCallbacksCannotRedirectModuleBearingStartup() throws IOException {
         Path binding =
                 bindingAar(

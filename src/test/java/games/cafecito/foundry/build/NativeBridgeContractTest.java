@@ -379,6 +379,8 @@ class NativeBridgeContractTest {
 
         assertTrue(jni.contains("bootstrap_in_progress"));
         assertTrue(bootstrap.contains("BootstrapReservation"));
+        assertTrue(bootstrap.contains("bootstrap.begin(environment, class_loader, java_vm)"));
+        assertFalse(bootstrap.contains("IsSameObject"));
         assertFalse(bootstrap.contains("std::lock_guard lock(foundry_java::state.mutex)"));
         assertEquals(2, occurrences(jni, "\"argument unmarshaling\""));
         assertFalse(jni.contains("void release_class_loader()"));

@@ -55,24 +55,41 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
         if (Files.isRegularFile(registryIndex)) {
             verifyModuleBearingManifest(input);
             Files.createDirectories(getVerificationOutputDirectory().get().getAsFile().toPath());
+        } else {
+            verifyStartupProviderAbsent(input);
+        }
+    }
+
+    private void verifyStartupProviderAbsent(Path manifest) throws Exception {
+        NodeList providers = providers(manifest);
+        String expectedProvider = getExpectedProviderClass().get();
+        String expectedAuthority = getExpectedAuthority().get();
+        List<String> staleProviders = new ArrayList<>();
+        for (int index = 0; index < providers.getLength(); index++) {
+            Element provider = (Element) providers.item(index);
+            String providerClass = provider.getAttributeNS(ANDROID_NAMESPACE, "name");
+            String authorities = provider.getAttributeNS(ANDROID_NAMESPACE, "authorities");
+            if (providerClass.equals(expectedProvider)
+                    || authorityContains(authorities, expectedAuthority)) {
+                staleProviders.add(providerClass);
+            }
+        }
+        Collections.sort(staleProviders);
+        if (!staleProviders.isEmpty()) {
+            throw new GradleException(
+                    "Foundry-Java variant "
+                            + getVariantName().get()
+                            + " has no registry index but its merged manifest declares startup "
+                            + "provider(s) "
+                            + staleProviders
+                            + " for "
+                            + expectedAuthority
+                            + ".");
         }
     }
 
     private void verifyModuleBearingManifest(Path manifest) throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(true);
-        factory.setXIncludeAware(false);
-        factory.setExpandEntityReferences(false);
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-
-        NodeList providers =
-                factory.newDocumentBuilder()
-                        .parse(manifest.toFile())
-                        .getElementsByTagName("provider");
+        NodeList providers = providers(manifest);
         String expectedProvider = getExpectedProviderClass().get();
         String expectedAuthority = getExpectedAuthority().get();
         List<Element> expectedProviders = new ArrayList<>();
@@ -113,6 +130,22 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
                             + ".");
         }
         verifyExpectedProvider(expectedProviders.get(0), expectedProvider, expectedAuthority);
+    }
+
+    private NodeList providers(Path manifest) throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+
+        return factory.newDocumentBuilder()
+                .parse(manifest.toFile())
+                .getElementsByTagName("provider");
     }
 
     private void verifyExpectedProvider(

@@ -266,16 +266,30 @@ JniState state;
 
 class BootstrapReservation {
 public:
-	bool begin(JavaVM *&java_vm, jobject &class_loader) {
-		std::lock_guard lock(state.mutex);
-		if (state.runtime != nullptr || state.bootstrap_in_progress ||
-				state.java_vm == nullptr || state.class_loader == nullptr) {
+	bool begin(JNIEnv *environment, jobject requested_class_loader, JavaVM *&java_vm) {
+		jobject requested_global = environment->NewGlobalRef(requested_class_loader);
+		if (jni_reference_failed(
+					environment,
+					requested_global,
+					state.errors,
+					"application class loader pinning")) {
 			return false;
 		}
-		state.bootstrap_in_progress = true;
-		java_vm = state.java_vm;
-		class_loader = state.class_loader;
-		active = true;
+		GlobalReferenceGuard loader_guard(environment, requested_global);
+		jobject previous_class_loader = nullptr;
+		{
+			std::lock_guard lock(state.mutex);
+			if (state.runtime != nullptr || state.bootstrap_in_progress ||
+					state.java_vm == nullptr || state.class_loader == nullptr) {
+				return false;
+			}
+			state.bootstrap_in_progress = true;
+			java_vm = state.java_vm;
+			previous_class_loader = std::exchange(
+					state.class_loader, loader_guard.release());
+			active = true;
+		}
+		environment->DeleteGlobalRef(previous_class_loader);
 		return true;
 	}
 
@@ -499,9 +513,7 @@ Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1(
 		}
 		foundry_java::BootstrapReservation bootstrap;
 		JavaVM *java_vm = nullptr;
-		jobject installed_class_loader = nullptr;
-		if (!bootstrap.begin(java_vm, installed_class_loader) ||
-				!environment->IsSameObject(installed_class_loader, class_loader)) {
+		if (!bootstrap.begin(environment, class_loader, java_vm)) {
 			return JNI_FALSE;
 		}
 		jclass callback_class = environment->GetObjectClass(callbacks);
@@ -2597,6 +2609,8 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeRegisterExtensionClas
 		jclass,
 		jlong,
 		jobject) {
+	// Task 4 freezes and exports this exact seam. The approved Task 5 registration
+	// workstream supplies its transactional descriptor body.
 	foundry_java::throw_registration_unavailable(environment);
 }
 
@@ -2606,5 +2620,6 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeUnregisterExtensionCl
 		jclass,
 		jlong,
 		jstring) {
+	// See nativeRegisterExtensionClassV1: failing explicitly is the Task 4 contract.
 	foundry_java::throw_registration_unavailable(environment);
 }

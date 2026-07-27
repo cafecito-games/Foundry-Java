@@ -2647,6 +2647,8 @@ bool NativeTransport::release_handle(
 				std::to_string(context) + ":" +
 				std::to_string(generation) + ":" +
 				std::to_string(object_instance_id);
+		// Both handle-store operations have completed and dropped their store/record
+		// locks before identity cleanup. There is no store -> identity nested edge.
 		std::lock_guard lock(object_identity_mutex);
 		auto found = object_identity_handles.find(identity_key);
 		if (found != object_identity_handles.end() && found->second == handle) {
