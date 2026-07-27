@@ -79,9 +79,11 @@ games.cafecito.foundry.runtime.FoundryEngine|public abstract java.lang.String ob
 games.cafecito.foundry.runtime.FoundryEngine|public abstract long encodeVariant(long, games.cafecito.foundry.types.Variant);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract long instantiate(long, java.lang.String);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract long singleton(long, java.lang.String);
+games.cafecito.foundry.runtime.FoundryEngine|public abstract void registerExtensionClass(long, games.cafecito.foundry.runtime.FoundryClassDescriptor);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract void release(long, long);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract void reportCallbackException(long, long, java.lang.Throwable);
 games.cafecito.foundry.runtime.FoundryEngine|public abstract void retain(long, long);
+games.cafecito.foundry.runtime.FoundryEngine|public abstract void unregisterExtensionClass(long, java.lang.String);
 games.cafecito.foundry.runtime.FoundryEngine|public interface games.cafecito.foundry.runtime.FoundryEngine {
 games.cafecito.foundry.runtime.FoundryExtensionAccess|public abstract java.lang.Object construct(games.cafecito.foundry.runtime.FoundryBindingContext, games.cafecito.foundry.runtime.ObjectLease);
 games.cafecito.foundry.runtime.FoundryExtensionAccess|public abstract java.lang.Object getProperty(java.lang.Object, java.lang.String);
@@ -144,11 +146,21 @@ games.cafecito.foundry.runtime.FoundryObject|public final games.cafecito.foundry
 games.cafecito.foundry.runtime.FoundryObject|public final games.cafecito.foundry.runtime.FoundryInvalidationSubscription onInvalidated(java.lang.Runnable);
 games.cafecito.foundry.runtime.FoundryObject|public final long objectHandle();
 games.cafecito.foundry.runtime.FoundryObject|public final void close();
+games.cafecito.foundry.runtime.FoundryRegistrationPlan|public final class games.cafecito.foundry.runtime.FoundryRegistrationPlan {
+games.cafecito.foundry.runtime.FoundryRegistrationPlan|public java.util.List<games.cafecito.foundry.runtime.FoundryClassDescriptor> classes(games.cafecito.foundry.runtime.FoundryInitializationLevel);
+games.cafecito.foundry.runtime.FoundryRegistrationPlan|public java.util.List<games.cafecito.foundry.runtime.FoundryClassDescriptor> orderedClasses();
+games.cafecito.foundry.runtime.FoundryRegistrationPlan|public static games.cafecito.foundry.runtime.FoundryRegistrationPlan create(games.cafecito.foundry.runtime.FoundryRegistryBootstrap);
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public final class games.cafecito.foundry.runtime.FoundryRegistryBootstrap {
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public games.cafecito.foundry.runtime.FoundryRegistryBootstrap(java.util.List<? extends games.cafecito.foundry.runtime.FoundryModuleProvider>);
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public java.util.List<games.cafecito.foundry.runtime.FoundryModuleDescriptor> descriptors();
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public java.util.List<games.cafecito.foundry.runtime.FoundryModuleProvider> providers();
 games.cafecito.foundry.runtime.FoundryRegistryBootstrap|public java.util.List<java.lang.String> moduleNames();
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public boolean initialize(long, int);
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public final class games.cafecito.foundry.runtime.FoundryRegistryCoordinator implements games.cafecito.foundry.runtime.FoundryBridgeCallbacks {
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public games.cafecito.foundry.runtime.FoundryRegistryCoordinator(games.cafecito.foundry.runtime.FoundryRegistryBootstrap, java.util.function.LongFunction<? extends games.cafecito.foundry.runtime.FoundryEngine>);
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public long invoke(long, long, long[]);
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public void deinitialize(long, int);
+games.cafecito.foundry.runtime.FoundryRegistryCoordinator|public void invalidate(long);
 games.cafecito.foundry.runtime.FoundryRuntimeCallbacks|public boolean initialize(long, int);
 games.cafecito.foundry.runtime.FoundryRuntimeCallbacks|public final class games.cafecito.foundry.runtime.FoundryRuntimeCallbacks implements games.cafecito.foundry.runtime.FoundryBridgeCallbacks {
 games.cafecito.foundry.runtime.FoundryRuntimeCallbacks|public games.cafecito.foundry.runtime.FoundryRuntimeCallbacks();

@@ -5,6 +5,12 @@ import java.util.List;
 
 /** Host-neutral transport implemented by the FoundryExtension/JNI bridge. */
 public interface FoundryEngine {
+    /** Registers one already validated generated extension-class descriptor. */
+    void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor);
+
+    /** Unregisters one generated extension class while the native interface is still live. */
+    void unregisterExtensionClass(long contextHandle, String foundryName);
+
     CallResult call(
             long contextHandle, long objectHandle, String methodIdentity, List<Variant> arguments);
 

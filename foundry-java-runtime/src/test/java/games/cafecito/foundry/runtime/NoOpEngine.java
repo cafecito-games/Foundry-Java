@@ -5,6 +5,13 @@ import java.util.List;
 
 class NoOpEngine implements FoundryEngine {
     @Override
+    public void registerExtensionClass(
+            long contextHandle, FoundryClassDescriptor descriptor) {}
+
+    @Override
+    public void unregisterExtensionClass(long contextHandle, String foundryName) {}
+
+    @Override
     public CallResult call(
             long contextHandle, long objectHandle, String methodIdentity, List<Variant> arguments) {
         return CallResult.success(Variant.nil());
