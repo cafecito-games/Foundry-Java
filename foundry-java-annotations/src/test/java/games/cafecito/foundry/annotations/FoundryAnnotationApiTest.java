@@ -29,6 +29,14 @@ class FoundryAnnotationApiTest {
                 RetentionPolicy.SOURCE,
                 new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.FIELD});
         assertAnnotation(
+                FoundryConstant.class,
+                RetentionPolicy.SOURCE,
+                new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.FIELD});
+        assertAnnotation(
+                FoundryEnumValue.class,
+                RetentionPolicy.CLASS,
+                new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.FIELD});
+        assertAnnotation(
                 FoundrySignal.class,
                 RetentionPolicy.SOURCE,
                 new java.lang.annotation.ElementType[] {java.lang.annotation.ElementType.TYPE});
@@ -50,7 +58,41 @@ class FoundryAnnotationApiTest {
         assertMembers(FoundryClass.class, classDefaults);
         assertEquals(Class.class, method(FoundryClass.class, "base").getReturnType());
         assertMembers(FoundryMethod.class, Map.of("name", ""));
-        assertMembers(FoundryProperty.class, Map.of("getter", "", "name", "", "setter", ""));
+        assertMembers(
+                FoundryProperty.class,
+                Map.of(
+                        "getter",
+                        "",
+                        "groupName",
+                        "",
+                        "groupPrefix",
+                        "",
+                        "index",
+                        -1,
+                        "name",
+                        "",
+                        "setter",
+                        "",
+                        "subgroupName",
+                        "",
+                        "subgroupPrefix",
+                        ""));
+        assertEquals(String.class, method(FoundryProperty.class, "name").getReturnType());
+        assertEquals(String.class, method(FoundryProperty.class, "getter").getReturnType());
+        assertEquals(String.class, method(FoundryProperty.class, "setter").getReturnType());
+        assertEquals(int.class, method(FoundryProperty.class, "index").getReturnType());
+        assertEquals(String.class, method(FoundryProperty.class, "groupName").getReturnType());
+        assertEquals(String.class, method(FoundryProperty.class, "groupPrefix").getReturnType());
+        assertEquals(String.class, method(FoundryProperty.class, "subgroupName").getReturnType());
+        assertEquals(String.class, method(FoundryProperty.class, "subgroupPrefix").getReturnType());
+        assertMembers(FoundryConstant.class, Map.of("bitfield", false, "enumName", "", "name", ""));
+        assertEquals(String.class, method(FoundryConstant.class, "name").getReturnType());
+        assertEquals(String.class, method(FoundryConstant.class, "enumName").getReturnType());
+        assertEquals(boolean.class, method(FoundryConstant.class, "bitfield").getReturnType());
+        Map<String, Object> enumValueDefaults = new HashMap<>();
+        enumValueDefaults.put("value", null);
+        assertMembers(FoundryEnumValue.class, enumValueDefaults);
+        assertEquals(long.class, method(FoundryEnumValue.class, "value").getReturnType());
         assertMembers(FoundrySignal.class, Map.of("name", ""));
         assertMembers(FoundryOverride.class, Map.of("name", ""));
         assertEquals(

@@ -70,14 +70,23 @@ public final class CallbackRegistry {
         return enabled;
     }
 
-    boolean disable() {
+    boolean disableAndDrain() {
+        closeAdmission();
+        return drain();
+    }
+
+    void closeAdmission() {
+        synchronized (lifecycle) {
+            if (enabled) {
+                enabled = false;
+                callbacks.clear();
+            }
+        }
+    }
+
+    boolean drain() {
         boolean interrupted = false;
         synchronized (lifecycle) {
-            if (!enabled) {
-                return false;
-            }
-            enabled = false;
-            callbacks.clear();
             int callerInvocations = invocationDepth.get();
             while (activeInvocations > callerInvocations) {
                 try {
@@ -90,7 +99,9 @@ public final class CallbackRegistry {
         if (interrupted) {
             Thread.currentThread().interrupt();
         }
-        return true;
+        synchronized (lifecycle) {
+            return activeInvocations == 0;
+        }
     }
 
     private FoundryCallable beginInvocation(long callbackHandle) {

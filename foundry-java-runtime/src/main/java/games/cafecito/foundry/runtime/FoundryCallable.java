@@ -7,26 +7,50 @@ import java.util.Objects;
 import java.util.function.Function;
 
 /** Host-neutral callable that receives and returns immutable Variant values. */
-public final class FoundryCallable {
+public final class FoundryCallable implements AutoCloseable {
     private static final int VARIADIC = -1;
 
     private final int arity;
-    private final Function<List<Variant>, Variant> invocation;
+    private final Function<List<Variant>, Variant> localInvocation;
+    private final NativeIdentity nativeIdentity;
+    private int activeInvocations;
+    private boolean closed;
+    private boolean nativeReleaseInProgress;
+    private boolean nativeReleased;
 
-    private FoundryCallable(int arity, Function<List<Variant>, Variant> invocation) {
+    private FoundryCallable(
+            int arity,
+            Function<List<Variant>, Variant> localInvocation,
+            NativeIdentity nativeIdentity) {
         if (arity < VARIADIC) {
             throw new IllegalArgumentException("arity must be nonnegative or variadic");
         }
         this.arity = arity;
-        this.invocation = Objects.requireNonNull(invocation, "invocation");
+        this.localInvocation = localInvocation;
+        this.nativeIdentity = nativeIdentity;
+        if ((localInvocation == null) == (nativeIdentity == null)) {
+            throw new IllegalArgumentException(
+                    "Callable must have exactly one local or native backend.");
+        }
     }
 
     public static FoundryCallable fixed(int arity, Function<List<Variant>, Variant> invocation) {
-        return new FoundryCallable(arity, invocation);
+        return new FoundryCallable(arity, Objects.requireNonNull(invocation, "invocation"), null);
     }
 
     public static FoundryCallable variadic(Function<List<Variant>, Variant> invocation) {
-        return new FoundryCallable(VARIADIC, invocation);
+        return new FoundryCallable(
+                VARIADIC, Objects.requireNonNull(invocation, "invocation"), null);
+    }
+
+    /** Creates a context-bound Callable backed by the native bridge. */
+    public static FoundryCallable nativeBacked(
+            long contextHandle, long bridgeHandle, int arity, NativeBackend backend) {
+        return new FoundryCallable(
+                arity,
+                null,
+                new NativeIdentity(
+                        contextHandle, bridgeHandle, Objects.requireNonNull(backend, "backend")));
     }
 
     public static <T, R> FoundryCallable unary(
@@ -49,12 +73,126 @@ public final class FoundryCallable {
         return arity == VARIADIC;
     }
 
+    public boolean isLocal() {
+        return nativeIdentity == null;
+    }
+
+    public boolean isNativeBacked() {
+        return nativeIdentity != null;
+    }
+
+    public long nativeContextHandle() {
+        return requireNativeIdentity().contextHandle();
+    }
+
+    public long nativeBridgeHandle() {
+        return requireNativeIdentity().bridgeHandle();
+    }
+
+    public synchronized boolean isClosed() {
+        return closed;
+    }
+
     public Variant call(List<Variant> arguments) {
         List<Variant> checked = List.copyOf(Objects.requireNonNull(arguments, "arguments"));
         if (!isVariadic() && checked.size() != arity) {
             throw new IllegalArgumentException(
                     "Callable expected " + arity + " arguments but received " + checked.size());
         }
-        return Objects.requireNonNull(invocation.apply(checked), "callable result");
+        synchronized (this) {
+            if (closed) {
+                throw new IllegalStateException("Callable is closed.");
+            }
+            activeInvocations++;
+        }
+        try {
+            if (localInvocation != null) {
+                return Objects.requireNonNull(localInvocation.apply(checked), "callable result");
+            }
+            NativeIdentity identity = requireNativeIdentity();
+            return Objects.requireNonNull(
+                    identity.backend()
+                            .invoke(identity.contextHandle(), identity.bridgeHandle(), checked),
+                    "native callable result");
+        } finally {
+            finishInvocation();
+        }
+    }
+
+    @Override
+    public void close() {
+        NativeIdentity release;
+        synchronized (this) {
+            if (!closed) {
+                closed = true;
+            }
+            release = reserveNativeRelease();
+        }
+        releaseNative(release);
+    }
+
+    private void finishInvocation() {
+        NativeIdentity release;
+        synchronized (this) {
+            activeInvocations--;
+            release = reserveNativeRelease();
+        }
+        releaseNative(release);
+    }
+
+    private NativeIdentity reserveNativeRelease() {
+        if (closed
+                && activeInvocations == 0
+                && nativeIdentity != null
+                && !nativeReleaseInProgress
+                && !nativeReleased) {
+            nativeReleaseInProgress = true;
+            return nativeIdentity;
+        }
+        return null;
+    }
+
+    private void releaseNative(NativeIdentity identity) {
+        if (identity == null) {
+            return;
+        }
+        try {
+            identity.backend().release(identity.contextHandle(), identity.bridgeHandle());
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                nativeReleaseInProgress = false;
+            }
+            throw failure;
+        }
+        synchronized (this) {
+            nativeReleaseInProgress = false;
+            nativeReleased = true;
+        }
+    }
+
+    private NativeIdentity requireNativeIdentity() {
+        if (nativeIdentity == null) {
+            throw new IllegalStateException("The local Callable has no native bridge identity.");
+        }
+        return nativeIdentity;
+    }
+
+    /** Narrow delegate used by the Android engine without adding a Callable-specific JNI export. */
+    public interface NativeBackend {
+        Variant invoke(long contextHandle, long bridgeHandle, List<Variant> arguments);
+
+        void release(long contextHandle, long bridgeHandle);
+    }
+
+    private record NativeIdentity(long contextHandle, long bridgeHandle, NativeBackend backend) {
+        private NativeIdentity {
+            if (contextHandle == 0) {
+                throw new IllegalArgumentException("Foundry context handle must be nonzero.");
+            }
+            if (bridgeHandle == 0) {
+                throw new IllegalArgumentException("Native Callable handle must be nonzero.");
+            }
+            Objects.requireNonNull(backend, "backend");
+        }
     }
 }

@@ -87,6 +87,23 @@ public final class FoundryDictionary<K, V> {
         return Collections.unmodifiableMap(copy);
     }
 
+    /**
+     * Returns insertion-ordered raw Variant keys and values for native bridge marshalling.
+     *
+     * <p>The snapshot owns independent arrays and never exposes mutable dictionary storage.
+     */
+    public VariantSnapshot variantSnapshot() {
+        Variant[] keys = new Variant[storage.values.size()];
+        Variant[] values = new Variant[storage.values.size()];
+        int index = 0;
+        for (Map.Entry<Variant, Variant> entry : storage.values.entrySet()) {
+            keys[index] = entry.getKey();
+            values[index] = entry.getValue();
+            index++;
+        }
+        return new VariantSnapshot(keys, values);
+    }
+
     public FoundryDictionary<K, V> duplicate() {
         return new FoundryDictionary<>(keyCodec, valueCodec, new Storage(storage.values));
     }
@@ -135,6 +152,28 @@ public final class FoundryDictionary<K, V> {
 
         private Storage(Map<Variant, Variant> values) {
             this.values = new LinkedHashMap<>(values);
+        }
+    }
+
+    /** Immutable paired raw-Variant dictionary snapshot. */
+    public record VariantSnapshot(Variant[] keys, Variant[] values) {
+        public VariantSnapshot {
+            keys = Objects.requireNonNull(keys, "keys").clone();
+            values = Objects.requireNonNull(values, "values").clone();
+            if (keys.length != values.length) {
+                throw new IllegalArgumentException(
+                        "Dictionary snapshot arrays must have equal size.");
+            }
+        }
+
+        @Override
+        public Variant[] keys() {
+            return keys.clone();
+        }
+
+        @Override
+        public Variant[] values() {
+            return values.clone();
         }
     }
 }

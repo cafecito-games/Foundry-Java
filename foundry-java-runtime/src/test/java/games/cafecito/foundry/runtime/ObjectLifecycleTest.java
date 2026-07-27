@@ -566,6 +566,24 @@ class ObjectLifecycleTest {
     }
 
     @Test
+    void registeredRefCountedTypeRetainsBeforePublishingBorrowedDecode() {
+        CountingEngine engine = new CountingEngine();
+        engine.valid(7);
+        engine.nativeTypes.put(7L, "TestObject");
+        FoundryBindingContext context = new FoundryBindingContext(11, engine);
+        context.registerObjectType(
+                "TestObject", ObjectOwnership.REFERENCE_COUNTED, TestObject.class, TestObject::new);
+
+        TestObject decoded =
+                context.bind(7, ObjectOwnership.BORROWED, TestObject.class, TestObject::new);
+
+        assertEquals(1, engine.retains.get());
+        assertEquals(ObjectOwnership.REFERENCE_COUNTED, decoded.lease().ownership());
+        decoded.close();
+        assertEquals(1, engine.releases.get());
+    }
+
+    @Test
     void rejectsNullOrInvalidObjectHandlesBeforePublication() {
         CountingEngine engine = new CountingEngine();
         FoundryBindingContext context = new FoundryBindingContext(11, engine);

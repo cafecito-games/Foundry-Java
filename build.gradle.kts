@@ -294,6 +294,19 @@ abstract class VerifyAndroidAar : DefaultTask() {
             ) {
                 "Release AAR must not duplicate FoundryJava.foundryextension outside classes.jar."
             }
+            val packagedManifest = zip.getEntry("AndroidManifest.xml")
+            check(packagedManifest != null) { "Release AAR must contain AndroidManifest.xml." }
+            val packagedManifestText =
+                zip
+                    .getInputStream(packagedManifest)
+                    .bufferedReader(Charsets.UTF_8)
+                    .use { it.readText() }
+            check(!packagedManifestText.contains("<application")) {
+                "Release AAR manifest must not declare an application."
+            }
+            check(!packagedManifestText.contains("<provider")) {
+                "Release AAR manifest must not declare a provider."
+            }
 
             val packagedConsumerRules =
                 zip
@@ -664,6 +677,7 @@ val kotlinLockConfigurations =
     )
 val androidMainLockConfigurations =
     setOf(
+        "coreLibraryDesugaring",
         "debugAnnotationProcessorClasspath",
         "debugCompileClasspath",
         "debugRuntimeClasspath",
@@ -931,8 +945,23 @@ val allowedBootstrapAndroidClasses =
     setOf(
         "games/cafecito/foundry/java/FoundryJavaInitializer\$DiagnosticCallbacks.class",
         "games/cafecito/foundry/java/FoundryJavaInitializer\$DiagnosticSink.class",
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$NativeBootstrap.class",
         "games/cafecito/foundry/java/FoundryJavaInitializer\$NativeLibrary.class",
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$NativeLoader.class",
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$PrimingState\$Phase.class",
+        "games/cafecito/foundry/java/FoundryJavaInitializer\$PrimingState.class",
         "games/cafecito/foundry/java/FoundryJavaInitializer.class",
+        "games/cafecito/foundry/java/FoundryJavaStartupProvider\$Primer.class",
+        "games/cafecito/foundry/java/FoundryJavaStartupProvider.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$1.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$2.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$JniNativeGateway.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$NativeDecodedObject.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$NativeGateway.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$NativeVariantSnapshot.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$SignalBackend\$ConnectedCallable.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine\$SignalBackend.class",
+        "games/cafecito/foundry/java/FoundryNativeEngine.class",
     )
 val requiredAndroidNativeLibraries =
     setOf(

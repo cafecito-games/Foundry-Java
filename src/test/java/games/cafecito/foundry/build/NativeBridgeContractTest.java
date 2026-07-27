@@ -8,30 +8,183 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class NativeBridgeContractTest {
     private static final Path ROOT = Path.of("").toAbsolutePath();
     private static final String ENTRY_SYMBOL = "foundry_java_library_init";
-    private static final Set<String> JNI_SYMBOLS =
-            Set.of(
+    private static final List<String> JNI_SYMBOLS =
+            List.of(
                     "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeBootstrapV1",
                     "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeCreateContextV1",
                     "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeInvokeCallbackV1",
                     "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeInvokeCallbackOnThreadV1",
                     "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownContextV1",
-                    "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownBridgeV1");
+                    "Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownBridgeV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeDecodeVariantV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeEncodeVariantV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeIsObjectValidV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeObjectTypeV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeInstantiateV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeRetainV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeReleaseV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeSingletonV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeReportCallbackExceptionV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeRegisterExtensionClassV1",
+                    "Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeUnregisterExtensionClassV1");
+    private static final Set<String> INITIALIZER_NATIVE_METHODS =
+            Set.of(
+                    "nativeBootstrapV1",
+                    "nativeCreateContextV1",
+                    "nativeInvokeCallbackV1",
+                    "nativeInvokeCallbackOnThreadV1",
+                    "nativeShutdownContextV1",
+                    "nativeShutdownBridgeV1");
+    private static final Map<String, String> NATIVE_ENGINE_DESCRIPTORS =
+            Map.ofEntries(
+                    Map.entry(
+                            "nativeCallV1",
+                            "(JJLgames/cafecito/foundry/runtime/FoundryNativeDispatch;"
+                                    + "[Lgames/cafecito/foundry/types/Variant;)"
+                                    + "Lgames/cafecito/foundry/runtime/FoundryEngine$CallResult;"),
+                    Map.entry(
+                            "nativeDecodeVariantV1", "(JJ)Lgames/cafecito/foundry/types/Variant;"),
+                    Map.entry(
+                            "nativeEncodeVariantV1", "(JLgames/cafecito/foundry/types/Variant;)J"),
+                    Map.entry("nativeIsObjectValidV1", "(JJ)Z"),
+                    Map.entry("nativeObjectTypeV1", "(JJ)Ljava/lang/String;"),
+                    Map.entry("nativeInstantiateV1", "(JLjava/lang/String;)J"),
+                    Map.entry("nativeRetainV1", "(JJ)V"),
+                    Map.entry("nativeReleaseV1", "(JJ)V"),
+                    Map.entry("nativeSingletonV1", "(JLjava/lang/String;)J"),
+                    Map.entry("nativeReportCallbackExceptionV1", "(JJLjava/lang/Throwable;)V"),
+                    Map.entry(
+                            "nativeRegisterExtensionClassV1",
+                            "(JLgames/cafecito/foundry/runtime/FoundryClassDescriptor;)V"),
+                    Map.entry("nativeUnregisterExtensionClassV1", "(JLjava/lang/String;)V"));
+    private static final Map<String, String> INITIALIZER_KEEP_SIGNATURES =
+            Map.of(
+                    "nativeBootstrapV1",
+                    "private static native boolean nativeBootstrapV1(java.lang.ClassLoader, "
+                            + "games.cafecito.foundry.runtime.FoundryBridgeCallbacks, "
+                            + "java.lang.String, java.lang.String, java.lang.String, "
+                            + "java.lang.String);",
+                    "nativeCreateContextV1",
+                    "private static native long nativeCreateContextV1();",
+                    "nativeInvokeCallbackV1",
+                    "private static native long nativeInvokeCallbackV1(long, long, long[]);",
+                    "nativeInvokeCallbackOnThreadV1",
+                    "private static native long nativeInvokeCallbackOnThreadV1(long, long, long[]);",
+                    "nativeShutdownContextV1",
+                    "private static native boolean nativeShutdownContextV1(long);",
+                    "nativeShutdownBridgeV1",
+                    "private static native void nativeShutdownBridgeV1();");
+    private static final Map<String, String> NATIVE_ENGINE_KEEP_SIGNATURES =
+            Map.ofEntries(
+                    Map.entry(
+                            "nativeCallV1",
+                            "private static native "
+                                    + "games.cafecito.foundry.runtime.FoundryEngine$CallResult "
+                                    + "nativeCallV1(long, long, "
+                                    + "games.cafecito.foundry.runtime.FoundryNativeDispatch, "
+                                    + "games.cafecito.foundry.types.Variant[]);"),
+                    Map.entry(
+                            "nativeDecodeVariantV1",
+                            "private static native games.cafecito.foundry.types.Variant "
+                                    + "nativeDecodeVariantV1(long, long);"),
+                    Map.entry(
+                            "nativeEncodeVariantV1",
+                            "private static native long nativeEncodeVariantV1(long, "
+                                    + "games.cafecito.foundry.types.Variant);"),
+                    Map.entry(
+                            "nativeIsObjectValidV1",
+                            "private static native boolean nativeIsObjectValidV1(long, long);"),
+                    Map.entry(
+                            "nativeObjectTypeV1",
+                            "private static native java.lang.String "
+                                    + "nativeObjectTypeV1(long, long);"),
+                    Map.entry(
+                            "nativeInstantiateV1",
+                            "private static native long nativeInstantiateV1(long, "
+                                    + "java.lang.String);"),
+                    Map.entry(
+                            "nativeRetainV1",
+                            "private static native void nativeRetainV1(long, long);"),
+                    Map.entry(
+                            "nativeReleaseV1",
+                            "private static native void nativeReleaseV1(long, long);"),
+                    Map.entry(
+                            "nativeSingletonV1",
+                            "private static native long nativeSingletonV1(long, java.lang.String);"),
+                    Map.entry(
+                            "nativeReportCallbackExceptionV1",
+                            "private static native void nativeReportCallbackExceptionV1("
+                                    + "long, long, java.lang.Throwable);"),
+                    Map.entry(
+                            "nativeRegisterExtensionClassV1",
+                            "private static native void nativeRegisterExtensionClassV1(long, "
+                                    + "games.cafecito.foundry.runtime.FoundryClassDescriptor);"),
+                    Map.entry(
+                            "nativeUnregisterExtensionClassV1",
+                            "private static native void nativeUnregisterExtensionClassV1(long, "
+                                    + "java.lang.String);"));
+    private static final List<String> NATIVE_ENGINE_HELPER_KEEP_SIGNATURES =
+            List.of(
+                    "private static games.cafecito.foundry.java."
+                            + "FoundryNativeEngine$NativeVariantSnapshot nativeSnapshotV1(long, "
+                            + "games.cafecito.foundry.types.Variant);",
+                    "private static games.cafecito.foundry.types.Variant "
+                            + "nativeVariantFromSnapshotV1(long, long, games.cafecito.foundry.java."
+                            + "FoundryNativeEngine$NativeVariantSnapshot);",
+                    "private static games.cafecito.foundry.types.Variant "
+                            + "invokeLocalCallableV1(long, "
+                            + "games.cafecito.foundry.runtime.FoundryCallable, "
+                            + "games.cafecito.foundry.types.Variant[]);",
+                    "private static java.lang.String[] nativeDispatchArgumentTypesV1("
+                            + "games.cafecito.foundry.runtime.FoundryNativeDispatch);");
+    private static final Set<String> NATIVE_BRIDGE_FILES =
+            Set.of(
+                    "CMakeLists.txt",
+                    "cmake/GenerateFoundryJavaAbiLayout.cmake",
+                    "foundry_java_abi_layout.h.in",
+                    "foundry_java_contract.h.in",
+                    "foundry_java_entry.cpp",
+                    "foundry_java_exports.map",
+                    "foundry_java_handles.cpp",
+                    "foundry_java_interface.cpp",
+                    "foundry_java_interface.h",
+                    "foundry_java_jni.cpp",
+                    "foundry_java_registration.cpp",
+                    "foundry_java_registration.h",
+                    "foundry_java_registration_bridge.cpp",
+                    "foundry_java_registration_bridge.h",
+                    "foundry_java_runtime.h",
+                    "foundry_java_transport.cpp",
+                    "foundry_java_transport.h");
+    private static final Set<String> ANDROID_TEST_NATIVE_FILES =
+            Set.of(
+                    "foundry_java_fake_extension_host.cpp",
+                    "foundry_java_fake_extension_host.h",
+                    "foundry_java_test_host_jni.cpp");
+    private static final Set<String> DEBUG_STARTUP_FIXTURE_FILES =
+            Set.of(
+                    "AndroidManifest.xml",
+                    "java/games/cafecito/foundry/java/FoundryJavaStartupEvidence.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestActivity.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestApplication.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestHost.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestRegistry.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestStartupProvider.java");
     private static final List<String> BRIDGE_FILES =
             List.of(
-                    "foundry-java-android/src/main/cpp/CMakeLists.txt",
-                    "foundry-java-android/src/main/cpp/foundry_java_entry.cpp",
-                    "foundry-java-android/src/main/cpp/foundry_java_jni.cpp",
-                    "foundry-java-android/src/main/cpp/foundry_java_contract.h.in",
-                    "foundry-java-android/src/main/cpp/foundry_java_runtime.h",
-                    "foundry-java-android/src/main/cpp/foundry_java_handles.cpp",
-                    "foundry-java-android/src/main/cpp/foundry_java_exports.map",
+                    "foundry-java-android/src/main/consumer-rules.pro",
                     "foundry-java-android/src/main/java/games/cafecito/foundry/java/FoundryJavaInitializer.java",
+                    "foundry-java-android/src/main/java/games/cafecito/foundry/java/FoundryNativeEngine.java",
                     "foundry-java-android/src/test/cpp/foundry_java_runtime_test.cpp",
                     "foundry-java-android/src/androidTest/java/games/cafecito/foundry/java/FoundryJavaInstrumentation.java",
                     "gradle/verify-native-bridge.sh");
@@ -41,6 +194,20 @@ class NativeBridgeContractTest {
         for (String path : BRIDGE_FILES) {
             assertTrue(Files.isRegularFile(ROOT.resolve(path)), path + " must exist");
         }
+    }
+
+    @Test
+    void nativeBridgeSourceInventoryIsExact() throws IOException {
+        Path nativeRoot = ROOT.resolve("foundry-java-android/src/main/cpp");
+        Set<String> actual;
+        try (var paths = Files.walk(nativeRoot)) {
+            actual =
+                    paths.filter(Files::isRegularFile)
+                            .map(path -> nativeRoot.relativize(path).toString().replace('\\', '/'))
+                            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
+
+        assertEquals(NATIVE_BRIDGE_FILES, actual);
     }
 
     @Test
@@ -61,10 +228,152 @@ class NativeBridgeContractTest {
         assertFalse(nativeSources.contains("Foundry-Android"));
         assertFalse(nativeSources.contains("libfoundry_android"));
         assertEquals(1, occurrences(exports, ENTRY_SYMBOL + ";"));
+        assertEquals(Set.copyOf(JNI_SYMBOLS), exportedJniSymbols(exports));
         for (String symbol : JNI_SYMBOLS) {
             assertEquals(1, occurrences(exports, symbol + ";"), symbol);
             assertTrue(jni.contains(symbol), symbol);
         }
+    }
+
+    @Test
+    void nativeEnginePinsExactVersionedJniDescriptorsAndNarrowConsumerRules() throws IOException {
+        String initializer =
+                read(
+                        "foundry-java-android/src/main/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaInitializer.java");
+        String nativeEngine =
+                read(
+                        "foundry-java-android/src/main/java/games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine.java");
+        String rules =
+                read("foundry-java-android/src/main/consumer-rules.pro").replaceAll("\\s+", " ");
+        var nativeMethods = new java.util.HashSet<>(INITIALIZER_NATIVE_METHODS);
+        nativeMethods.addAll(NATIVE_ENGINE_DESCRIPTORS.keySet());
+
+        assertEquals(INITIALIZER_NATIVE_METHODS, nativeMethodNames(initializer));
+        assertEquals(NATIVE_ENGINE_DESCRIPTORS.keySet(), nativeMethodNames(nativeEngine));
+        assertEquals(nativeMethods, nativeMethodNames(rules));
+        for (Map.Entry<String, String> method : NATIVE_ENGINE_DESCRIPTORS.entrySet()) {
+            assertEquals(
+                    1,
+                    occurrences(rules, NATIVE_ENGINE_KEEP_SIGNATURES.get(method.getKey())),
+                    method.getKey() + " " + method.getValue());
+        }
+        for (Map.Entry<String, String> method : INITIALIZER_KEEP_SIGNATURES.entrySet()) {
+            assertEquals(1, occurrences(rules, method.getValue()), method.getKey());
+        }
+        for (String signature : NATIVE_ENGINE_HELPER_KEEP_SIGNATURES) {
+            assertEquals(1, occurrences(rules, signature), signature);
+        }
+        assertEquals(2, occurrences(rules, "-keepnames class games.cafecito.foundry.java."));
+        assertFalse(rules.contains("native <methods>"));
+        assertFalse(rules.contains("games.cafecito.foundry.**"));
+        assertFalse(rules.contains("-keep class *"));
+        assertFalse(rules.contains("-keep class **"));
+    }
+
+    @Test
+    void jniVariantSnapshotReferencesAreCheckedBeforeDereference() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+
+        for (String reference :
+                List.of(
+                        "variant text snapshot",
+                        "variant integer snapshot",
+                        "variant real snapshot",
+                        "variant key snapshot",
+                        "variant value snapshot")) {
+            assertEquals(1, occurrences(jni, "state.errors, \"" + reference + "\""), reference);
+        }
+    }
+
+    @Test
+    void jniVarargPtrcallsPreserveFullVariantStorageAndPrevalidateArity() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        int callStart = jni.indexOf("FoundryNativeEngine_nativeCallV1(");
+        int callEnd = jni.indexOf("FoundryNativeEngine_nativeIsObjectValidV1(", callStart + 1);
+        assertTrue(callStart >= 0);
+        assertTrue(callEnd > callStart);
+        String nativeCall = jni.substring(callStart, callEnd);
+        String normalized = nativeCall.replaceAll("\\s+", " ");
+
+        int formalCount = nativeCall.indexOf("const std::size_t formal_count");
+        int validation = nativeCall.indexOf("validate_dispatch(", formalCount);
+        int rawVariantVararg = nativeCall.indexOf("const bool raw_variant_vararg", validation);
+        int typedCount = nativeCall.indexOf("const std::size_t typed_count", rawVariantVararg);
+        int preparation =
+                nativeCall.indexOf("prepare_native_arguments_for_dispatch(dispatch, call)");
+        int execution = nativeCall.indexOf("transport.execute(dispatch, call)");
+
+        assertTrue(formalCount >= 0);
+        assertTrue(validation > formalCount);
+        assertTrue(rawVariantVararg > validation);
+        assertTrue(typedCount > rawVariantVararg);
+        assertTrue(preparation > typedCount);
+        assertTrue(execution > preparation);
+        assertTrue(
+                normalized.contains(
+                        "dispatch.vararg && (dispatch.kind == DispatchKind::BUILTIN_METHOD || "
+                                + "dispatch.kind == DispatchKind::UTILITY_FUNCTION)"));
+        assertTrue(normalized.contains("raw_variant_vararg ? 0 : std::min("));
+        assertEquals(
+                1,
+                occurrences(nativeCall, "prepare_native_arguments_for_dispatch(dispatch, call)"));
+    }
+
+    @Test
+    void jniBoundaryDoesNotDiscoverGeneratedClassesOrUseReflection() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        String nativeEngine =
+                read(
+                        "foundry-java-android/src/main/java/games/cafecito/foundry/java/"
+                                + "FoundryNativeEngine.java");
+        String boundary = jni + nativeEngine;
+
+        assertFalse(boundary.contains("Class.forName"));
+        assertFalse(boundary.contains("getDeclaredMethod"));
+        assertFalse(boundary.contains("java/lang/reflect"));
+        assertFalse(jni.contains("games/cafecito/foundry/generated"));
+        assertFalse(jni.contains("GeneratedNativeDispatch"));
+        assertEquals(
+                5,
+                occurrences(jni, "Ljava/lang/Object;"),
+                "Object descriptors are limited to the frozen typed registration helpers");
+    }
+
+    @Test
+    void jniRegistrationBodiesUseTheTransactionalRegistryAndContextTeardown() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        int registerStart = jni.indexOf("FoundryNativeEngine_nativeRegisterExtensionClassV1(");
+        int unregisterStart =
+                jni.indexOf(
+                        "FoundryNativeEngine_nativeUnregisterExtensionClassV1(", registerStart + 1);
+        assertTrue(registerStart >= 0);
+        assertTrue(unregisterStart > registerStart);
+        String register = jni.substring(registerStart, unregisterStart);
+        String unregister = jni.substring(unregisterStart);
+        String normalizedJni = jni.replaceAll("\\s+", " ");
+
+        assertFalse(jni.contains("registration_unavailable_before_task5"));
+        assertTrue(register.contains("require_operation("));
+        assertTrue(register.contains("register_extension_class("));
+        assertTrue(
+                unregister
+                        .replaceAll("\\s+", " ")
+                        .contains(
+                                "require_operation( environment, context, "
+                                        + "foundry_java::ContextOperationKind::CLEANUP)"));
+        assertTrue(unregister.contains("unregister_extension_class("));
+        assertTrue(jni.contains("runtime->set_context_teardown("));
+        assertTrue(jni.contains("shutdown_context_registration("));
+        assertTrue(
+                normalizedJni.contains(
+                        "result.status == RegistrationStatus::INVALID_DESCRIPTOR ? "
+                                + "\"java/lang/IllegalArgumentException\" : "
+                                + "\"java/lang/IllegalStateException\""));
+        assertTrue(
+                normalizedJni.contains(
+                        "result.phase.empty() ? \"registration_failed\" : result.phase"));
     }
 
     @Test
@@ -73,6 +382,7 @@ class NativeBridgeContractTest {
         String verifier = read("gradle/verify-native-bridge.sh");
         String workflow = read(".github/workflows/ci.yml");
 
+        assertEquals(Set.copyOf(JNI_SYMBOLS), verifiedJniSymbols(verifier));
         for (String abi : List.of("armeabi-v7a", "arm64-v8a", "x86", "x86_64")) {
             assertTrue(androidBuild.contains("\"" + abi + "\""), abi);
             assertTrue(verifier.contains(abi), abi);
@@ -91,7 +401,8 @@ class NativeBridgeContractTest {
         assertTrue(workflow.contains("sudo chmod 666 /dev/kvm"));
         assertTrue(workflow.contains("-port 5554"));
         assertTrue(workflow.contains("sys.boot_completed"));
-        assertTrue(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
+        assertTrue(workflow.contains("run-android-production-startup-acceptance.sh"));
+        assertFalse(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
     }
 
     @Test
@@ -153,16 +464,26 @@ class NativeBridgeContractTest {
     @Test
     void bootstrapDoesNotHoldStateMutexAcrossJniWork() throws IOException {
         String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        String transitions = read("foundry-java-android/src/main/cpp/foundry_java_handles.cpp");
         int bootstrapStart = jni.indexOf("FoundryJavaInitializer_nativeBootstrapV1(");
         int bootstrapEnd = jni.indexOf("FoundryJavaInitializer_nativeCreateContextV1(");
         String bootstrap = jni.substring(bootstrapStart, bootstrapEnd);
 
-        assertTrue(jni.contains("bootstrap_in_progress"));
+        assertTrue(jni.contains("JniTransitionState transition"));
         assertTrue(bootstrap.contains("BootstrapReservation"));
+        assertTrue(bootstrap.contains("bootstrap.begin(environment, class_loader, java_vm)"));
+        assertTrue(jni.contains("this->requested_global = loader_guard.release();"));
+        assertFalse(bootstrap.contains("IsSameObject"));
         assertFalse(bootstrap.contains("std::lock_guard lock(foundry_java::state.mutex)"));
+        assertTrue(transitions.contains("impl->phase = Impl::Phase::BOOTSTRAP"));
+        assertTrue(transitions.contains("impl->phase = Impl::Phase::SHUTDOWN"));
+        assertTrue(transitions.contains("impl->active_ticket != ticket"));
+        assertTrue(transitions.contains("impl->class_loader, requested_class_loader"));
+        assertTrue(jni.contains("state.transition.reserve_shutdown(runtime)"));
+        assertTrue(jni.contains("state.transition.cancel_shutdown(ticket, runtime)"));
         assertEquals(2, occurrences(jni, "\"argument unmarshaling\""));
         assertFalse(jni.contains("void release_class_loader()"));
-        assertTrue(jni.contains("class_loader = std::exchange(state.class_loader, nullptr)"));
+        assertFalse(jni.contains("state.class_loader"));
     }
 
     @Test
@@ -177,10 +498,69 @@ class NativeBridgeContractTest {
         assertFalse(tree.contains("libfoundry_android.so"));
     }
 
+    @Test
+    void productionStartupFixtureUsesOnlyThePublicTestHostBoundary() throws IOException {
+        assertEquals(
+                ANDROID_TEST_NATIVE_FILES,
+                fileInventory("foundry-java-android/src/androidTest/cpp"));
+        assertEquals(DEBUG_STARTUP_FIXTURE_FILES, fileInventory("foundry-java-android/src/debug"));
+
+        String cmake = read("foundry-java-android/src/main/cpp/CMakeLists.txt");
+        String normalizedCmake = cmake.replaceAll("\\s+", " ");
+        String androidBuild = read("foundry-java-android/build.gradle.kts");
+        String activitySource =
+                read(
+                        "foundry-java-android/src/debug/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaTestActivity.java");
+        String fixtureSources =
+                readTree("foundry-java-android/src/androidTest")
+                        + readTree("foundry-java-android/src/debug");
+
+        assertTrue(cmake.contains("option(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST"));
+        assertTrue(cmake.contains("foundry_java_fake_extension_host.cpp"));
+        assertTrue(cmake.contains("foundry_java_test_host_jni.cpp"));
+        assertTrue(normalizedCmake.contains("add_library( foundry_java_test_host SHARED"));
+        assertTrue(androidBuild.contains("-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=ON"));
+        assertTrue(fixtureSources.contains("System.loadLibrary(\"foundry_java_test_host\")"));
+        assertTrue(fixtureSources.contains("JNI_OnLoad(JavaVM *java_vm, void *)"));
+        assertTrue(fixtureSources.contains("FOUNDRY_EXTENSION_INITIALIZATION_SERVERS"));
+        assertTrue(
+                fixtureSources.contains(
+                        "List.of(\"CORE\", \"CORE\", \"SERVERS\", \"SERVERS\", \"SCENE\","
+                                + " \"SCENE\")"));
+        assertTrue(
+                fixtureSources.contains(
+                        "List.of(\"SCENE\", \"SCENE\", \"SERVERS\", \"SERVERS\", \"CORE\","
+                                + " \"CORE\")"));
+        assertTrue(
+                activitySource.contains(
+                        "FoundryJavaStartupEvidence.recordActivityPreEntry(preEntry);\n"
+                                + "        finish();"));
+        assertFalse(fixtureSources.contains("FoundryJavaInitializer.initialize("));
+        assertFalse(fixtureSources.contains("FoundryJavaInitializer.createContext("));
+        assertFalse(fixtureSources.contains("Class.forName"));
+        assertFalse(fixtureSources.contains("getDeclaredMethod"));
+        assertFalse(fixtureSources.contains("java/lang/reflect"));
+        assertFalse(fixtureSources.contains("dlopen("));
+        assertFalse(fixtureSources.contains("org.godotengine"));
+        assertFalse(fixtureSources.contains("FoundryLib"));
+        assertFalse(fixtureSources.contains("libfoundry_android.so"));
+    }
+
     private static String read(String relativePath) throws IOException {
         Path path = ROOT.resolve(relativePath);
         assertTrue(Files.isRegularFile(path), relativePath + " must exist");
         return Files.readString(path);
+    }
+
+    private static Set<String> fileInventory(String relativePath) throws IOException {
+        Path root = ROOT.resolve(relativePath);
+        assertTrue(Files.isDirectory(root), relativePath + " must exist");
+        try (var paths = Files.walk(root)) {
+            return paths.filter(Files::isRegularFile)
+                    .map(path -> root.relativize(path).toString().replace('\\', '/'))
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
     }
 
     private static String readTree(String relativePath) throws IOException {
@@ -200,5 +580,35 @@ class NativeBridgeContractTest {
 
     private static int occurrences(String value, String needle) {
         return value.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
+    }
+
+    private static Set<String> nativeMethodNames(String source) {
+        Matcher matcher =
+                Pattern.compile(
+                                "private\\s+static\\s+native\\s+[\\w.$<>?\\[\\]]+\\s+"
+                                        + "(native\\w+V1)\\s*\\(")
+                        .matcher(source);
+        var names = new java.util.HashSet<String>();
+        while (matcher.find()) {
+            names.add(matcher.group(1));
+        }
+        return Set.copyOf(names);
+    }
+
+    private static Set<String> exportedJniSymbols(String exports) {
+        return matchingValues(exports, Pattern.compile("\\b(Java_[A-Za-z0-9_]+);"));
+    }
+
+    private static Set<String> verifiedJniSymbols(String verifier) {
+        return matchingValues(verifier, Pattern.compile("'(Java_[A-Za-z0-9_]+)'"));
+    }
+
+    private static Set<String> matchingValues(String value, Pattern pattern) {
+        Matcher matcher = pattern.matcher(value);
+        var matches = new java.util.HashSet<String>();
+        while (matcher.find()) {
+            matches.add(matcher.group(1));
+        }
+        return Set.copyOf(matches);
     }
 }

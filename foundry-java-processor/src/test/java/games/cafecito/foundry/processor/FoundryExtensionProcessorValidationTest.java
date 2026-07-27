@@ -54,6 +54,155 @@ class FoundryExtensionProcessorValidationTest {
     }
 
     @Test
+    void acceptsEveryIntegralConstantTypeAndRichPropertyMetadata() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "RichMembers",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class RichMembers extends EngineNode {
+                            @FoundryConstant public static final byte BYTE_VALUE = -1;
+                            @FoundryConstant public static final short SHORT_VALUE = -2;
+                            @FoundryConstant public static final int INT_VALUE = -3;
+                            @FoundryConstant public static final long LONG_VALUE = Long.MIN_VALUE;
+                            @FoundryConstant public static final char CHAR_VALUE = 'A';
+                            @FoundryProperty(
+                                    getter = "read",
+                                    index = 0,
+                                    groupName = "Stats",
+                                    subgroupName = "Advanced")
+                            private int value;
+                            public int read() { return value; }
+                        }
+                        """);
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+        String descriptor =
+                new String(
+                        result.classOutput()
+                                .get("META-INF/foundry-java/modules/demo-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(descriptor.contains("|BYTE_VALUE|BYTE_VALUE|byte|d1||-1|0\n"), descriptor);
+        assertTrue(descriptor.contains("|SHORT_VALUE|SHORT_VALUE|short|d1||-2|0\n"), descriptor);
+        assertTrue(descriptor.contains("|INT_VALUE|INT_VALUE|int|d1||-3|0\n"), descriptor);
+        assertTrue(
+                descriptor.contains("|LONG_VALUE|LONG_VALUE|long|d1||-9223372036854775808|0\n"),
+                descriptor);
+        assertTrue(descriptor.contains("|CHAR_VALUE|CHAR_VALUE|char|d1||65|0\n"), descriptor);
+    }
+
+    @Test
+    void rejectsInvalidConstantsAndNamespaceCollisions() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "BadConstants",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class BadConstants extends EngineNode {
+                            @FoundryConstant public static int mutable = 1;
+                            @FoundryConstant public final int instance = 2;
+                            @FoundryConstant public static final boolean BOOLEAN_VALUE = true;
+                            @FoundryConstant public static final double DOUBLE_VALUE = 1.0;
+                            @FoundryConstant public static final String STRING_VALUE = "value";
+                            @FoundryConstant public static final int dynamic = parse();
+                            @FoundryConstant(enumName = "   ") public static final int blankEnum = 1;
+                            @FoundryConstant(bitfield = true) public static final int missingEnum = 2;
+                            @FoundryConstant(name = "collision") public static final int VALUE = 3;
+                            @FoundryMethod(name = "collision") public void collide() {}
+                            private static int parse() { return 4; }
+                        }
+                        """);
+
+        assertDiagnostic(
+                result, "Foundry constant mutable must be static final", "BadConstants", 5);
+        assertDiagnostic(
+                result, "Foundry constant instance must be static final", "BadConstants", 6);
+        assertDiagnostic(
+                result,
+                "Foundry constant BOOLEAN_VALUE must use byte, short, int, long, or char",
+                "BadConstants",
+                7);
+        assertDiagnostic(
+                result,
+                "Foundry constant DOUBLE_VALUE must use byte, short, int, long, or char",
+                "BadConstants",
+                8);
+        assertDiagnostic(
+                result,
+                "Foundry constant STRING_VALUE must use byte, short, int, long, or char",
+                "BadConstants",
+                9);
+        assertDiagnostic(
+                result,
+                "Foundry constant dynamic must have a compile-time integral value",
+                "BadConstants",
+                10);
+        assertDiagnostic(
+                result, "constant enumName must be empty or non-blank", "BadConstants", 11);
+        assertDiagnostic(
+                result, "bitfield constant must declare a non-empty enumName", "BadConstants", 12);
+        assertDiagnostic(result, "duplicate exported name collision", "BadConstants", 14);
+        assertNoRegistrationArtifacts(result);
+    }
+
+    @Test
+    void rejectsInvalidRichPropertyMetadata() throws IOException {
+        ProcessorCompilation.Result result =
+                compile(
+                        "BadPropertyMetadata",
+                        """
+                        package demo;
+                        import games.cafecito.foundry.annotations.*;
+                        @FoundryClass(base = EngineNode.class)
+                        public final class BadPropertyMetadata extends EngineNode {
+                            @FoundryProperty(getter = "first", index = -2)
+                            private int first;
+                            public int first() { return first; }
+                            @FoundryProperty(getter = "second", groupName = "   ")
+                            private int second;
+                            public int second() { return second; }
+                            @FoundryProperty(getter = "third", groupPrefix = "prefix_")
+                            private int third;
+                            public int third() { return third; }
+                            @FoundryProperty(getter = "fourth", subgroupName = "\t")
+                            private int fourth;
+                            public int fourth() { return fourth; }
+                            @FoundryProperty(getter = "fifth", subgroupPrefix = "prefix_")
+                            private int fifth;
+                            public int fifth() { return fifth; }
+                            @FoundryProperty(getter = " ")
+                            private int sixth;
+                        }
+                        """);
+
+        assertDiagnostic(
+                result, "property index must be -1 or non-negative", "BadPropertyMetadata", 5);
+        assertDiagnostic(
+                result, "property groupName must be empty or non-blank", "BadPropertyMetadata", 8);
+        assertDiagnostic(
+                result,
+                "property groupPrefix requires a non-empty groupName",
+                "BadPropertyMetadata",
+                11);
+        assertDiagnostic(
+                result,
+                "property subgroupName must be empty or non-blank",
+                "BadPropertyMetadata",
+                14);
+        assertDiagnostic(
+                result,
+                "property subgroupPrefix requires a non-empty subgroupName",
+                "BadPropertyMetadata",
+                17);
+        assertDiagnostic(result, "property getter must be non-blank", "BadPropertyMetadata", 20);
+        assertNoRegistrationArtifacts(result);
+    }
+
+    @Test
     void rejectsAMismatchedBaseAtTheAnnotationValue() throws IOException {
         ProcessorCompilation.Result result =
                 compile(
@@ -516,9 +665,10 @@ class FoundryExtensionProcessorValidationTest {
                 "demo.Orphan",
                 """
                 package demo;
-                import games.cafecito.foundry.annotations.FoundryMethod;
+                import games.cafecito.foundry.annotations.*;
                 public final class Orphan {
                     @FoundryMethod public void misplaced() {}
+                    @FoundryConstant public static final int VALUE = 1;
                 }
                 """);
         sources.put(
@@ -544,6 +694,8 @@ class FoundryExtensionProcessorValidationTest {
         ProcessorCompilation.Result result = ProcessorCompilation.compile(sources);
 
         assertDiagnostic(result, "@FoundryMethod must be enclosed by a @FoundryClass", "Orphan", 4);
+        assertDiagnostic(
+                result, "@FoundryConstant must be enclosed by a @FoundryClass", "Orphan", 5);
         assertDiagnostic(result, "extension class must be top-level", "Outer", 5);
         assertDiagnostic(
                 result, "exported method cannot declare checked exceptions", "ThrowsChecked", 5);

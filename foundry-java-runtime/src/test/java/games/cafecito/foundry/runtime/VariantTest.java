@@ -43,6 +43,7 @@ import games.cafecito.foundry.types.Vector4;
 import games.cafecito.foundry.types.Vector4i;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -172,6 +173,56 @@ class VariantTest {
     }
 
     @Test
+    void variantsPreserveNativeCallableAndSignalBridgeIdentity() {
+        FoundryCallable callable =
+                FoundryCallable.nativeBacked(
+                        11,
+                        51,
+                        -1,
+                        new FoundryCallable.NativeBackend() {
+                            @Override
+                            public Variant invoke(
+                                    long contextHandle,
+                                    long bridgeHandle,
+                                    java.util.List<Variant> arguments) {
+                                return Variant.nil();
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long bridgeHandle) {}
+                        });
+        FoundrySignal signal =
+                FoundrySignal.nativeBacked(
+                        11,
+                        52,
+                        new FoundrySignal.NativeBackend() {
+                            @Override
+                            public long connect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    FoundryCallable listener) {
+                                return 1;
+                            }
+
+                            @Override
+                            public void disconnect(
+                                    long contextHandle, long signalHandle, long connectionHandle) {}
+
+                            @Override
+                            public void emit(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    java.util.List<Variant> arguments) {}
+
+                            @Override
+                            public void release(long contextHandle, long signalHandle) {}
+                        });
+
+        assertEquals(51, Variant.ofCallable(callable).asCallable().nativeBridgeHandle());
+        assertEquals(52, Variant.ofSignal(signal).asSignal().nativeBridgeHandle());
+    }
+
+    @Test
     void equalityIsTypeStrict() {
         assertNotEquals(Variant.of(1L), Variant.of(1.0d));
         assertNotEquals(Variant.of(true), Variant.of(1L));
@@ -279,6 +330,28 @@ class VariantTest {
         assertThrows(NullPointerException.class, () -> new NodePath(null));
         assertThrows(IllegalArgumentException.class, () -> new Rid(-1));
         assertEquals(0L, new Rid(0).id());
+    }
+
+    @Test
+    void nativeRidReleaseCanRetryAfterFailureAndConvergesExactlyOnce() {
+        AtomicInteger releases = new AtomicInteger();
+        Rid rid =
+                Rid.nativeBacked(
+                        7,
+                        11,
+                        (context, handle) -> {
+                            assertEquals(7, context);
+                            assertEquals(11, handle);
+                            if (releases.incrementAndGet() == 1) {
+                                throw new IllegalStateException("retry");
+                            }
+                        });
+
+        assertThrows(IllegalStateException.class, rid::close);
+        assertTrue(rid.isClosed());
+        rid.close();
+        rid.close();
+        assertEquals(2, releases.get());
     }
 
     static final class TestVariantObject extends FoundryObject {

@@ -23,4 +23,29 @@ public @interface FoundryProperty {
      * @return the public one-argument Java setter name, or empty for a read-only property
      */
     String setter() default "";
+
+    /**
+     * @return the indexed property value, or {@code -1} for an ordinary property
+     */
+    int index() default -1;
+
+    /**
+     * @return the property group name, or no group when empty
+     */
+    String groupName() default "";
+
+    /**
+     * @return the property group prefix, paired with {@link #groupName()}
+     */
+    String groupPrefix() default "";
+
+    /**
+     * @return the property subgroup name, or no subgroup when empty
+     */
+    String subgroupName() default "";
+
+    /**
+     * @return the property subgroup prefix, paired with {@link #subgroupName()}
+     */
+    String subgroupPrefix() default "";
 }

@@ -1,0 +1,98 @@
+package demo;
+
+@javax.annotation.processing.Generated("games.cafecito.foundry.processor.FoundryExtensionProcessor")
+public final class EnumCallbacks_FoundryTrampoline {
+    private EnumCallbacks_FoundryTrampoline() {}
+
+    public static EnumCallbacks construct() {
+        return new EnumCallbacks();
+    }
+
+    private static demo.GeneratedState enumInbound0(Object value) {
+        if (!(value instanceof Long boxed)) {
+            throw new IllegalArgumentException("Expected boxed Long for enum demo.GeneratedState");
+        }
+        long numeric = boxed.longValue();
+        try {
+            demo.GeneratedState converted = demo.GeneratedState.fromValue(numeric);
+            if (converted == null) {
+                throw new IllegalArgumentException();
+            }
+            return converted;
+        } catch (IllegalArgumentException failure) {
+            throw new IllegalArgumentException("Unknown enum value " + numeric + " for demo.GeneratedState", failure);
+        }
+    }
+
+    private static demo.UserState enumInbound1(Object value) {
+        if (!(value instanceof Long boxed)) {
+            throw new IllegalArgumentException("Expected boxed Long for enum demo.UserState");
+        }
+        long numeric = boxed.longValue();
+        if (numeric == Long.MAX_VALUE) {
+            return demo.UserState.MAXIMUM;
+        }
+        if (numeric == Long.MIN_VALUE) {
+            return demo.UserState.MINIMUM;
+        }
+        throw new IllegalArgumentException("Unknown enum value " + numeric + " for demo.UserState");
+    }
+
+    private static Long enumOutbound0(demo.GeneratedState value) {
+        if (value == null) {
+            throw new IllegalArgumentException("Cannot encode null enum demo.GeneratedState");
+        }
+        return Long.valueOf(value.value());
+    }
+
+    private static Long enumOutbound1(demo.UserState value) {
+        if (value == null) {
+            throw new IllegalArgumentException("Cannot encode null enum demo.UserState");
+        }
+        if (value == demo.UserState.MAXIMUM) {
+            return Long.valueOf(Long.MAX_VALUE);
+        }
+        if (value == demo.UserState.MINIMUM) {
+            return Long.valueOf(Long.MIN_VALUE);
+        }
+        throw new IllegalArgumentException("Unmapped enum constant for demo.UserState");
+    }
+
+    public static Object invoke(Object target, String name, Object[] arguments) {
+        EnumCallbacks receiver = (EnumCallbacks) target;
+        return switch (name) {
+            case "_state" -> {
+                yield enumOutbound1(receiver.state(enumInbound1(arguments[0])));
+            }
+            case "echo_generated" -> {
+                yield enumOutbound0(receiver.echoGenerated(enumInbound0(arguments[0])));
+            }
+            case "echo_user" -> {
+                yield enumOutbound1(receiver.echoUser(enumInbound1(arguments[0])));
+            }
+            case "null_generated" -> {
+                yield enumOutbound0(receiver.nullGenerated());
+            }
+            case "null_user" -> {
+                yield enumOutbound1(receiver.nullUser());
+            }
+            default -> throw new IllegalArgumentException("Unknown method: " + name);
+        };
+    }
+
+    public static Object getProperty(Object target, String name) {
+        EnumCallbacks receiver = (EnumCallbacks) target;
+        return switch (name) {
+            case "current" -> enumOutbound1(receiver.current());
+            default -> throw new IllegalArgumentException("Unknown property: " + name);
+        };
+    }
+
+    public static void setProperty(Object target, String name, Object value) {
+        EnumCallbacks receiver = (EnumCallbacks) target;
+        switch (name) {
+            case "current" -> receiver.current(enumInbound1(value));
+            default -> throw new IllegalArgumentException("Unknown property: " + name);
+        }
+    }
+}

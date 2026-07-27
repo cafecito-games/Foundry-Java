@@ -63,6 +63,18 @@ printf '%s\n' \
   'Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeInvokeCallbackV1' \
   'Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownBridgeV1' \
   'Java_games_cafecito_foundry_java_FoundryJavaInitializer_nativeShutdownContextV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeDecodeVariantV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeEncodeVariantV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeInstantiateV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeIsObjectValidV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeObjectTypeV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeRegisterExtensionClassV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeReleaseV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeReportCallbackExceptionV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeRetainV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeSingletonV1' \
+  'Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeUnregisterExtensionClassV1' \
   'foundry_java_library_init' \
   | LC_ALL=C sort >"$expected_symbols"
 

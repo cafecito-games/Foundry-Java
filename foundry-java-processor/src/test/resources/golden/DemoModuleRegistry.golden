@@ -8,6 +8,12 @@ public final class DemoModuleRegistry
 
     private DemoModuleRegistry() {}
 
+    private static String decode(String value) {
+        return new String(
+                java.util.Base64.getUrlDecoder().decode(value),
+                java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private static final games.cafecito.foundry.runtime.FoundryModuleDescriptor DESCRIPTOR =
             new games.cafecito.foundry.runtime.FoundryModuleDescriptor(
                     2,
@@ -52,19 +58,67 @@ public final class DemoModuleRegistry
                                     },
                                     java.util.List.of(
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "constant",
+                                                    "min_value",
+                                                    "MIN_VALUE",
+                                                    "long",
+                                                    new games.cafecito.foundry.runtime.FoundryConstantDetails(
+                                                            decode("TW92ZW1lbnRNb2Rl"),
+                                                            Long.MIN_VALUE,
+                                                            true)),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "method",
+                                                    "convert_mode",
+                                                    "convertMode",
+                                                    "long(long,long)"),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "method", "reset", "reset", "void()"),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "override",
+                                                    "_engine_mode",
+                                                    "onEngineMode",
+                                                    "long(long)"),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "override",
                                                     "_process",
                                                     "onProcess",
                                                     "void(double)"),
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
-                                                    "method", "reset", "reset", "void()"),
+                                                    "property",
+                                                    "movement_mode",
+                                                    "movementMode",
+                                                    "long",
+                                                    new games.cafecito.foundry.runtime.FoundryPropertyDetails(
+                                                            decode("bW92ZW1lbnRNb2Rl"),
+                                                            decode("bW92ZW1lbnRNb2Rl"),
+                                                            -1,
+                                                            decode(""),
+                                                            decode(""),
+                                                            decode(""),
+                                                            decode(""))),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "property",
+                                                    "speed",
+                                                    "speed",
+                                                    "double",
+                                                    new games.cafecito.foundry.runtime.FoundryPropertyDetails(
+                                                            decode("c3BlZWQ"),
+                                                            decode("c3BlZWQ"),
+                                                            7,
+                                                            decode("TW90aW9u"),
+                                                            decode("bW90aW9uXw"),
+                                                            decode("U3BlZWQ"),
+                                                            decode("c3BlZWRf"))),
+                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
+                                                    "signal",
+                                                    "mode_changed",
+                                                    "ModeChanged",
+                                                    "void(long,long)"),
                                             new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
                                                     "signal",
                                                     "reset_done",
                                                     "Reset",
-                                                    "void(double)"),
-                                            new games.cafecito.foundry.runtime.FoundryMemberDescriptor(
-                                                    "property", "speed", "speed", "double")))));
+                                                    "void(double)")))));
 
     @Override
     public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor() {

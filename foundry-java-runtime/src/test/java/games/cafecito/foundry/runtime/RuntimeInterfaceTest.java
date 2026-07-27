@@ -21,7 +21,8 @@ class RuntimeInterfaceTest {
                         "initialize(long,int):boolean",
                         "deinitialize(long,int):void",
                         "invoke(long,long,long[]):long",
-                        "invalidate(long):void"),
+                        "invalidate(long):void",
+                        "terminalCleanupComplete(long):boolean"),
                 publicMethods(FoundryBridgeCallbacks.class));
     }
 
@@ -36,10 +37,12 @@ class RuntimeInterfaceTest {
                         "instantiate(long,String):long",
                         "isObjectValid(long,long):boolean",
                         "objectType(long,long):String",
+                        "registerExtensionClass(long,FoundryClassDescriptor):void",
                         "release(long,long):void",
                         "reportCallbackException(long,long,Throwable):void",
                         "retain(long,long):void",
-                        "singleton(long,String):long"),
+                        "singleton(long,String):long",
+                        "unregisterExtensionClass(long,String):void"),
                 publicMethods(FoundryEngine.class));
     }
 

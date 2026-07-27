@@ -51,6 +51,9 @@ public final class SpinningCube extends Node3D {
     @FoundryProperty(getter = "speed", setter = "speed")
     private double speed;
 
+    @FoundryConstant(name = "FAST_MODE", enumName = "MovementMode")
+    public static final int FAST_MODE = 2;
+
     public double speed() {
         return speed;
     }
@@ -76,12 +79,26 @@ public final class SpinningCube extends Node3D {
 }
 ```
 
-`@FoundryClass`, `@FoundryMethod`, `@FoundryProperty`, `@FoundrySignal`, and
-`@FoundryOverride` accept an optional exported `name`. Empty method, property, signal, and class
-names use the Java declaration name. An empty override name instead uses the original Foundry
+`@FoundryClass`, `@FoundryConstant`, `@FoundryMethod`, `@FoundryProperty`, `@FoundrySignal`, and
+`@FoundryOverride` accept an optional exported `name`. Empty constant, method, property, signal, and
+class names use the Java declaration name. An empty override name instead uses the original Foundry
 virtual identity preserved on the generated Java callback, such as `_process` for `onProcess`.
 When an override name is explicit, it must equal that generated identity. All exported names in one
 class share a namespace and must be unique.
+
+`@FoundryConstant` belongs on a `static final` integral field whose initializer is a compile-time
+constant expression. The processor reads the constant value from the field itself. Its optional
+`enumName` places the value in a named Foundry enum group, while `bitfield = true` marks that group
+as a bitfield. All three annotation members default to the legacy-neutral values `name = ""`,
+`enumName = ""`, and `bitfield = false`.
+
+`@FoundryProperty` keeps `name`, `getter`, and `setter` source-compatible and adds optional
+registration metadata. `index` defaults to `-1`, meaning an ordinary non-indexed property.
+Non-empty `groupName` and optional `groupPrefix` identify a property group; non-empty
+`subgroupName` and optional `subgroupPrefix` identify a subgroup. A prefix requires its
+corresponding name, while a named group or subgroup may use an empty prefix. The processor validates
+those pairs before emitting registration metadata. Existing property declarations need no changes
+because every new member has a neutral default.
 
 An exported method or virtual override must be a public instance method without Java type
 parameters or checked exceptions. Unchecked `RuntimeException` and `Error` declarations are
@@ -100,6 +117,39 @@ below `games.cafecito.foundry.api`, generated value types below
 `games.cafecito.foundry.generated`, and other annotated extension classes. Unsupported, ambiguous,
 or incorrectly placed declarations stop javac with a diagnostic at the offending annotation,
 member, or parameter.
+
+## Enum callbacks
+
+Every constant in a user-authored enum used by an exported method, virtual override, property, or
+signal must declare one explicit signed 64-bit transport value:
+
+```java
+public enum MovementMode {
+    @FoundryEnumValue(value = -7L)
+    IDLE,
+
+    @FoundryEnumValue(value = Long.MAX_VALUE)
+    ACTIVE
+}
+```
+
+The values must be unique within the enum, and all constants must be annotated. The processor does
+not infer values from an ordinal or name. `@FoundryEnumValue` belongs only on enum constants and is
+retained in class files so enum contracts supplied by a dependency JAR remain available to the
+consumer processor. The enum and its enclosing types must be accessible to the generated sibling
+trampoline. Generator-owned engine enums are exempt from `@FoundryEnumValue`; their explicit
+`value()` and `fromValue(long)` contract supplies the same numeric mapping.
+
+Authored and generated Java APIs remain enum-typed. Generated trampolines convert user enums through
+their explicit mappings and engine enums through `value()`/`fromValue(long)` without reflection.
+The module descriptor records every enum method or override return and parameter, property type,
+and signal parameter as primitive `long`; signal returns remain `void`. `@FoundryConstant` fields
+retain their declared integral type and are not changed by enum callback transport.
+
+Enum transport is non-null. A Variant integer reaches a trampoline as a boxed `Long`; null/NIL, a
+different boxed type, and an unknown signed value fail deterministically before invoking a method
+or mutating a property. Returning null or an unmapped enum constant also fails deterministically
+before the result reaches native transport.
 
 ## Initialization order
 
@@ -126,7 +176,9 @@ The descriptor uses format 2. Its required ordered headers are `format`, `module
 `api_sha256`, `generator_version`, `runtime_contract_version`, and `bridge_contract_version`.
 Class and member entries follow in stable order. The generated registry implements
 `FoundryModuleProvider`, exposes one typed `PROVIDER`, and returns an immutable
-`FoundryModuleDescriptor` carrying the same provenance and declarations.
+`FoundryModuleDescriptor` carrying the same provenance and declarations. Member signatures describe
+Foundry transport types rather than changing the corresponding Java declaration; in particular,
+enum positions are written as `long`.
 
 The application plugin validates all descriptor provenance before it generates a sorted registry
 index and `FoundryGeneratedBootstrap`. Registration uses direct provider, constructor, method,

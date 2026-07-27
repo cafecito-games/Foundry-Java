@@ -67,6 +67,24 @@ diagnostics for initialization and callback boundaries. The application/export b
 exactly one AAR and configuration, then selects the bridge payload for
 `foundryJava.requestedAbis`. That `SetProperty<String>` defaults to all four supported Android ABIs.
 
+## Startup and teardown authority
+
+The application plugin emits one direct generated startup provider only for a module-bearing
+variant. Android creates it before `Application.onCreate()` and activities. The provider primes the
+typed bootstrap, defining class loader, coordinator, and native library, but it has no authority to
+create a binding context or register a class.
+
+The public `foundry_java_library_init` entry owns interface resolution. After it publishes the
+complete public FoundryExtension table, only the native CORE initialization callback may create the
+production native/Java context pair. The coordinator validates the entire dependency graph before
+native mutation, then registers ready classes in deterministic topological order across modules and
+initialization levels.
+
+Deinitialization reverses that authority: completed classes unregister in reverse topological order,
+new callbacks close before admitted callbacks drain, and context invalidation precedes release of
+JNI references, handles, library state, and the interface table. Bridge shutdown is terminal for
+that process; a new provider/entry lifecycle requires a fresh Android process.
+
 ## Discovery and shrinker boundary
 
 The format-2 descriptor and direct provider bootstrap are the only registration path. Foundry-Java

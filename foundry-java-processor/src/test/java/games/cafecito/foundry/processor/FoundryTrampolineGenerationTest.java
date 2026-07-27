@@ -75,7 +75,20 @@ class FoundryTrampolineGenerationTest {
                             games.cafecito.foundry.runtime.ObjectLease lease) {
                         super(context, lease);
                     }
-                    @FoundryProperty(name = "speed", getter = "speed", setter = "speed")
+                    @FoundryConstant(
+                            name = "min_value",
+                            enumName = "MovementMode",
+                            bitfield = true)
+                    public static final long MIN_VALUE = Long.MIN_VALUE;
+                    @FoundryProperty(
+                            name = "speed",
+                            getter = "speed",
+                            setter = "speed",
+                            index = 7,
+                            groupName = "Motion",
+                            groupPrefix = "motion_",
+                            subgroupName = "Speed",
+                            subgroupPrefix = "speed_")
                     private double speed;
                     public double speed() { return speed; }
                     public void speed(double value) { speed = value; }

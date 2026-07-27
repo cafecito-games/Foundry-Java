@@ -31,6 +31,8 @@ import javax.tools.Diagnostic;
 
 final class ExtensionValidator {
     static final String CLASS = "games.cafecito.foundry.annotations.FoundryClass";
+    static final String CONSTANT = "games.cafecito.foundry.annotations.FoundryConstant";
+    static final String ENUM_VALUE = "games.cafecito.foundry.annotations.FoundryEnumValue";
     static final String METHOD = "games.cafecito.foundry.annotations.FoundryMethod";
     static final String PROPERTY = "games.cafecito.foundry.annotations.FoundryProperty";
     static final String SIGNAL = "games.cafecito.foundry.annotations.FoundrySignal";
@@ -42,6 +44,8 @@ final class ExtensionValidator {
     private final Types types;
     private final Elements elements;
     private final Messager messager;
+    private final Map<String, Optional<ExtensionModel.EnumModel>> enumCache = new LinkedHashMap<>();
+    private final Map<String, Boolean> enumAccessibilityCache = new LinkedHashMap<>();
     private int errorCount;
 
     ExtensionValidator(ProcessingEnvironment processingEnvironment) {
@@ -99,12 +103,24 @@ final class ExtensionValidator {
 
         List<ExtensionModel.MethodModel> methods = new ArrayList<>();
         List<ExtensionModel.MethodModel> overrides = new ArrayList<>();
+        List<ExtensionModel.ConstantModel> constants = new ArrayList<>();
         List<ExtensionModel.PropertyModel> properties = new ArrayList<>();
         List<ExtensionModel.SignalModel> signals = new ArrayList<>();
+        EnumInventory enumInventory = new EnumInventory();
         Map<String, Element> exportedNames = new LinkedHashMap<>();
         Map<String, VariableElement> propertyAccessors = new LinkedHashMap<>();
 
         for (Element member : extension.getEnclosedElements()) {
+            annotation(member, CONSTANT)
+                    .ifPresent(
+                            mirror -> {
+                                VariableElement field = (VariableElement) member;
+                                String exported =
+                                        exportedName(
+                                                field, mirror, field.getSimpleName().toString());
+                                checkDuplicate(exportedNames, exported, field);
+                                validateConstant(field, mirror, exported).ifPresent(constants::add);
+                            });
             annotation(member, METHOD)
                     .ifPresent(
                             mirror -> {
@@ -113,7 +129,7 @@ final class ExtensionValidator {
                                         exportedName(
                                                 method, mirror, method.getSimpleName().toString());
                                 validateCallable(method, "exported method");
-                                validateMethodTypes(method);
+                                validateMethodTypes(method, extension, enumInventory);
                                 checkDuplicate(exportedNames, exported, method);
                                 methods.add(methodModel(method, exported));
                             });
@@ -130,7 +146,7 @@ final class ExtensionValidator {
                                                         ? method.getSimpleName().toString()
                                                         : requestedIdentity);
                                 validateCallable(method, "Foundry override");
-                                validateMethodTypes(method);
+                                validateMethodTypes(method, extension, enumInventory);
                                 if (virtualIdentity.isEmpty()) {
                                     error(
                                             method,
@@ -157,7 +173,7 @@ final class ExtensionValidator {
                                 String exported =
                                         exportedName(
                                                 field, mirror, field.getSimpleName().toString());
-                                validateSupported(field.asType(), field);
+                                validateSupported(field.asType(), field, extension, enumInventory);
                                 validateProperty(extension, field, mirror, propertyAccessors);
                                 checkDuplicate(exportedNames, exported, field);
                                 properties.add(
@@ -166,7 +182,12 @@ final class ExtensionValidator {
                                                 exported,
                                                 field.asType().toString(),
                                                 stringValue(mirror, "getter"),
-                                                stringValue(mirror, "setter")));
+                                                stringValue(mirror, "setter"),
+                                                intValue(mirror, "index"),
+                                                stringValue(mirror, "groupName"),
+                                                stringValue(mirror, "groupPrefix"),
+                                                stringValue(mirror, "subgroupName"),
+                                                stringValue(mirror, "subgroupPrefix")));
                             });
             annotation(member, SIGNAL)
                     .ifPresent(
@@ -174,7 +195,8 @@ final class ExtensionValidator {
                                 String exported =
                                         exportedName(
                                                 member, mirror, member.getSimpleName().toString());
-                                Optional<ResolvedMethod> signalMethod = validateSignal(member);
+                                Optional<ResolvedMethod> signalMethod =
+                                        validateSignal(member, extension, enumInventory);
                                 checkDuplicate(exportedNames, exported, member);
                                 signals.add(
                                         signalModel(
@@ -204,7 +226,7 @@ final class ExtensionValidator {
         String qualifiedName = extension.getQualifiedName().toString();
         String exportedClassName =
                 exportedName(extension, classAnnotation, extension.getSimpleName().toString());
-        if (errorCount != errorsBefore) {
+        if (errorCount != errorsBefore || !enumInventory.valid) {
             return Optional.empty();
         }
         return Optional.of(
@@ -218,13 +240,24 @@ final class ExtensionValidator {
                         bindingConstructor,
                         dependencies,
                         methods,
+                        constants,
                         properties,
                         signals,
-                        overrides));
+                        overrides,
+                        List.copyOf(enumInventory.models.values())));
     }
 
     void validateAnnotationPlacement(RoundEnvironment roundEnvironment) {
-        for (String annotationName : List.of(METHOD, PROPERTY, SIGNAL, OVERRIDE, INITIALIZATION)) {
+        TypeElement enumValue = elements.getTypeElement(ENUM_VALUE);
+        if (enumValue != null) {
+            for (Element annotated : roundEnvironment.getElementsAnnotatedWith(enumValue)) {
+                if (annotated.getKind() != ElementKind.ENUM_CONSTANT) {
+                    error(annotated, "@FoundryEnumValue may only annotate an enum constant");
+                }
+            }
+        }
+        for (String annotationName :
+                List.of(CONSTANT, METHOD, PROPERTY, SIGNAL, OVERRIDE, INITIALIZATION)) {
             TypeElement annotationType = elements.getTypeElement(annotationName);
             if (annotationType == null) {
                 continue;
@@ -402,30 +435,47 @@ final class ExtensionValidator {
                                                 || !types.isSubtype(thrown, error.asType())));
     }
 
-    private void validateMethodTypes(ExecutableElement method) {
-        validateSupported(method.getReturnType(), method, "unsupported Foundry return type ");
+    private void validateMethodTypes(
+            ExecutableElement method, TypeElement extension, EnumInventory enumInventory) {
+        validateSupported(
+                method.getReturnType(),
+                method,
+                "unsupported Foundry return type ",
+                extension,
+                enumInventory);
         method.getParameters()
                 .forEach(
                         parameter ->
                                 validateSupported(
                                         parameter.asType(),
                                         parameter,
-                                        "unsupported Foundry parameter type "));
+                                        "unsupported Foundry parameter type ",
+                                        extension,
+                                        enumInventory));
     }
 
-    private void validateSupported(TypeMirror type, Element source) {
-        validateSupported(type, source, "unsupported Foundry type ");
+    private void validateSupported(
+            TypeMirror type, Element source, TypeElement extension, EnumInventory enumInventory) {
+        validateSupported(type, source, "unsupported Foundry type ", extension, enumInventory);
     }
 
-    private void validateSupported(TypeMirror type, Element source, String messagePrefix) {
+    private void validateSupported(
+            TypeMirror type,
+            Element source,
+            String messagePrefix,
+            TypeElement extension,
+            EnumInventory enumInventory) {
         if (type.getKind().isPrimitive() || type.getKind() == TypeKind.VOID) {
             return;
         }
         if (type.getKind() == TypeKind.DECLARED) {
             TypeElement element = (TypeElement) ((DeclaredType) type).asElement();
             String name = element.getQualifiedName().toString();
+            if (element.getKind() == ElementKind.ENUM) {
+                trackEnum(element, extension, enumInventory);
+                return;
+            }
             if (name.equals("java.lang.String")
-                    || element.getKind() == ElementKind.ENUM
                     || name.startsWith("games.cafecito.foundry.api.")
                     || name.startsWith("games.cafecito.foundry.types.")
                     || generatedType(element)
@@ -434,6 +484,154 @@ final class ExtensionValidator {
             }
         }
         error(source, messagePrefix + type);
+    }
+
+    private void trackEnum(
+            TypeElement enumType, TypeElement extension, EnumInventory enumInventory) {
+        String qualifiedName = enumType.getQualifiedName().toString();
+        Optional<ExtensionModel.EnumModel> analysis =
+                enumCache.computeIfAbsent(qualifiedName, ignored -> analyzeEnum(enumType));
+        if (analysis.isEmpty()) {
+            enumInventory.valid = false;
+            return;
+        }
+        ExtensionModel.EnumModel enumModel = analysis.orElseThrow();
+        if (enumModel.origin() == ExtensionModel.EnumOrigin.USER
+                && !enumAccessible(enumType, extension)) {
+            enumInventory.valid = false;
+            return;
+        }
+        enumInventory.models.putIfAbsent(qualifiedName, enumModel);
+    }
+
+    private Optional<ExtensionModel.EnumModel> analyzeEnum(TypeElement enumType) {
+        String qualifiedName = enumType.getQualifiedName().toString();
+        if (generatedType(enumType)) {
+            if (!hasGeneratedEnumConversionApi(enumType)) {
+                error(
+                        enumType,
+                        "generated Foundry enum must declare public long value() and public static "
+                                + qualifiedName
+                                + " fromValue(long)");
+                return Optional.empty();
+            }
+            return Optional.of(
+                    new ExtensionModel.EnumModel(
+                            qualifiedName, ExtensionModel.EnumOrigin.GENERATED, List.of()));
+        }
+        List<VariableElement> constants =
+                ElementFilter.fieldsIn(enumType.getEnclosedElements()).stream()
+                        .filter(field -> field.getKind() == ElementKind.ENUM_CONSTANT)
+                        .toList();
+        if (constants.isEmpty()) {
+            error(
+                    enumType,
+                    "user enum " + qualifiedName + " must declare at least one enum constant");
+            return Optional.empty();
+        }
+        boolean valid = true;
+        Map<Long, VariableElement> values = new LinkedHashMap<>();
+        List<ExtensionModel.EnumConstantModel> models = new ArrayList<>();
+        for (VariableElement constant : constants) {
+            Optional<AnnotationMirror> mapping = annotation(constant, ENUM_VALUE);
+            if (mapping.isEmpty()) {
+                error(
+                        constant,
+                        "enum constant "
+                                + constant.getSimpleName()
+                                + " must declare @FoundryEnumValue");
+                valid = false;
+                continue;
+            }
+            AnnotationValue configuredValue = value(mapping.orElseThrow(), "value");
+            long configured = (Long) configuredValue.getValue();
+            VariableElement previous = values.putIfAbsent(configured, constant);
+            if (previous != null) {
+                error(
+                        constant,
+                        mapping.orElseThrow(),
+                        configuredValue,
+                        "duplicate @FoundryEnumValue "
+                                + configured
+                                + "; already used by "
+                                + previous.getSimpleName());
+                valid = false;
+                continue;
+            }
+            models.add(
+                    new ExtensionModel.EnumConstantModel(
+                            constant.getSimpleName().toString(), configured));
+        }
+        if (!valid) {
+            return Optional.empty();
+        }
+        return Optional.of(
+                new ExtensionModel.EnumModel(
+                        qualifiedName, ExtensionModel.EnumOrigin.USER, models));
+    }
+
+    private boolean hasGeneratedEnumConversionApi(TypeElement enumType) {
+        List<ExecutableElement> methods = ElementFilter.methodsIn(elements.getAllMembers(enumType));
+        TypeMirror longType = types.getPrimitiveType(TypeKind.LONG);
+        boolean value =
+                methods.stream()
+                        .filter(method -> method.getSimpleName().contentEquals("value"))
+                        .anyMatch(
+                                method ->
+                                        method.getModifiers().contains(Modifier.PUBLIC)
+                                                && !method.getModifiers().contains(Modifier.STATIC)
+                                                && method.getParameters().isEmpty()
+                                                && types.isSameType(
+                                                        method.getReturnType(), longType));
+        boolean fromValue =
+                methods.stream()
+                        .filter(method -> method.getSimpleName().contentEquals("fromValue"))
+                        .anyMatch(
+                                method ->
+                                        method.getModifiers().contains(Modifier.PUBLIC)
+                                                && method.getModifiers().contains(Modifier.STATIC)
+                                                && method.getParameters().size() == 1
+                                                && types.isSameType(
+                                                        method.getParameters().get(0).asType(),
+                                                        longType)
+                                                && types.isSameType(
+                                                        method.getReturnType(), enumType.asType()));
+        return value && fromValue;
+    }
+
+    private boolean enumAccessible(TypeElement enumType, TypeElement extension) {
+        String extensionPackage = elements.getPackageOf(extension).getQualifiedName().toString();
+        String key = enumType.getQualifiedName() + "\u0000" + extensionPackage;
+        return enumAccessibilityCache.computeIfAbsent(
+                key, ignored -> validateEnumAccessibility(enumType, extensionPackage));
+    }
+
+    private boolean validateEnumAccessibility(TypeElement enumType, String extensionPackage) {
+        boolean samePackage =
+                elements.getPackageOf(enumType).getQualifiedName().contentEquals(extensionPackage);
+        Element current = enumType;
+        while (current instanceof TypeElement currentType) {
+            boolean inaccessible =
+                    samePackage
+                            ? currentType.getModifiers().contains(Modifier.PRIVATE)
+                            : !currentType.getModifiers().contains(Modifier.PUBLIC);
+            if (inaccessible) {
+                String reason =
+                        currentType.getModifiers().contains(Modifier.PRIVATE)
+                                ? " is private"
+                                : " is not public";
+                error(
+                        enumType,
+                        "user enum "
+                                + enumType.getQualifiedName()
+                                + " is not accessible to its generated sibling trampoline because "
+                                + currentType.getQualifiedName()
+                                + reason);
+                return false;
+            }
+            current = currentType.getEnclosingElement();
+        }
+        return true;
     }
 
     private boolean generatedType(TypeElement type) {
@@ -447,6 +645,62 @@ final class ExtensionValidator {
         return false;
     }
 
+    private Optional<ExtensionModel.ConstantModel> validateConstant(
+            VariableElement field, AnnotationMirror constant, String exportedName) {
+        int errorsBefore = errorCount;
+        String fieldName = field.getSimpleName().toString();
+        boolean staticFinal =
+                field.getModifiers().contains(Modifier.STATIC)
+                        && field.getModifiers().contains(Modifier.FINAL);
+        if (!staticFinal) {
+            error(field, constant, "Foundry constant " + fieldName + " must be static final");
+        }
+        TypeKind kind = field.asType().getKind();
+        boolean integral =
+                kind == TypeKind.BYTE
+                        || kind == TypeKind.SHORT
+                        || kind == TypeKind.INT
+                        || kind == TypeKind.LONG
+                        || kind == TypeKind.CHAR;
+        if (!integral) {
+            error(
+                    field,
+                    constant,
+                    "Foundry constant " + fieldName + " must use byte, short, int, long, or char");
+        }
+        Object rawValue = field.getConstantValue();
+        if (staticFinal && integral && rawValue == null) {
+            error(
+                    field,
+                    constant,
+                    "Foundry constant " + fieldName + " must have a compile-time integral value");
+        }
+        String enumName = optionalMetadata(field, constant, "enumName", "constant enumName");
+        boolean bitfield = booleanValue(constant, "bitfield");
+        if (bitfield && enumName.isEmpty()) {
+            error(
+                    field,
+                    constant,
+                    value(constant, "bitfield"),
+                    "bitfield constant must declare a non-empty enumName");
+        }
+        if (errorCount != errorsBefore) {
+            return Optional.empty();
+        }
+        long value =
+                rawValue instanceof Character character
+                        ? character.charValue()
+                        : ((Number) rawValue).longValue();
+        return Optional.of(
+                new ExtensionModel.ConstantModel(
+                        fieldName,
+                        exportedName,
+                        field.asType().toString(),
+                        enumName,
+                        value,
+                        bitfield));
+    }
+
     private void validateProperty(
             TypeElement extension,
             VariableElement field,
@@ -454,8 +708,39 @@ final class ExtensionValidator {
             Map<String, VariableElement> usedAccessors) {
         String getter = stringValue(property, "getter");
         String setter = stringValue(property, "setter");
+        int index = intValue(property, "index");
+        String groupName = optionalMetadata(field, property, "groupName", "property groupName");
+        String groupPrefix =
+                optionalMetadata(field, property, "groupPrefix", "property groupPrefix");
+        String subgroupName =
+                optionalMetadata(field, property, "subgroupName", "property subgroupName");
+        String subgroupPrefix =
+                optionalMetadata(field, property, "subgroupPrefix", "property subgroupPrefix");
+        if (index < -1) {
+            error(
+                    field,
+                    property,
+                    value(property, "index"),
+                    "property index must be -1 or non-negative");
+        }
+        if (groupName.isEmpty() && !groupPrefix.isEmpty()) {
+            error(
+                    field,
+                    property,
+                    value(property, "groupPrefix"),
+                    "property groupPrefix requires a non-empty groupName");
+        }
+        if (subgroupName.isEmpty() && !subgroupPrefix.isEmpty()) {
+            error(
+                    field,
+                    property,
+                    value(property, "subgroupPrefix"),
+                    "property subgroupPrefix requires a non-empty subgroupName");
+        }
         if (getter.isEmpty()) {
             error(field, property, value(property, "getter"), "property getter must be specified");
+        } else if (getter.isBlank()) {
+            error(field, property, value(property, "getter"), "property getter must be non-blank");
         } else {
             checkAccessorReuse(usedAccessors, getter, field, property);
             List<ExecutableElement> candidates = methodsNamed(extension, getter);
@@ -487,6 +772,14 @@ final class ExtensionValidator {
             }
         }
         if (!setter.isEmpty()) {
+            if (setter.isBlank()) {
+                error(
+                        field,
+                        property,
+                        value(property, "setter"),
+                        "property setter must be empty or non-blank");
+                return;
+            }
             checkAccessorReuse(usedAccessors, setter, field, property);
             List<ExecutableElement> candidates = methodsNamed(extension, setter);
             Optional<ExecutableElement> matchingSetter =
@@ -521,6 +814,22 @@ final class ExtensionValidator {
         }
     }
 
+    private String optionalMetadata(
+            Element element,
+            AnnotationMirror annotation,
+            String memberName,
+            String diagnosticName) {
+        String configured = stringValue(annotation, memberName);
+        if (!configured.isEmpty() && configured.isBlank()) {
+            error(
+                    element,
+                    annotation,
+                    value(annotation, memberName),
+                    diagnosticName + " must be empty or non-blank");
+        }
+        return configured;
+    }
+
     private void checkAccessorReuse(
             Map<String, VariableElement> usedAccessors,
             String accessor,
@@ -549,7 +858,8 @@ final class ExtensionValidator {
                 && !method.getModifiers().contains(Modifier.STATIC);
     }
 
-    private Optional<ResolvedMethod> validateSignal(Element element) {
+    private Optional<ResolvedMethod> validateSignal(
+            Element element, TypeElement extension, EnumInventory enumInventory) {
         if (element.getKind() != ElementKind.INTERFACE) {
             error(element, "@FoundrySignal must annotate an interface");
             return Optional.empty();
@@ -567,7 +877,9 @@ final class ExtensionValidator {
         for (int index = 0; index < method.element().getParameters().size(); index++) {
             validateSupported(
                     method.type().getParameterTypes().get(index),
-                    method.element().getParameters().get(index));
+                    method.element().getParameters().get(index),
+                    extension,
+                    enumInventory);
         }
         return Optional.of(method);
     }
@@ -712,6 +1024,11 @@ final class ExtensionValidator {
 
     private record ResolvedMethod(ExecutableElement element, ExecutableType type) {}
 
+    private static final class EnumInventory {
+        private final Map<String, ExtensionModel.EnumModel> models = new LinkedHashMap<>();
+        private boolean valid = true;
+    }
+
     private void checkDuplicate(Map<String, Element> names, String name, Element element) {
         Element previous = names.putIfAbsent(name, element);
         if (previous != null) {
@@ -734,6 +1051,14 @@ final class ExtensionValidator {
 
     private String stringValue(AnnotationMirror annotation, String name) {
         return (String) value(annotation, name).getValue();
+    }
+
+    private int intValue(AnnotationMirror annotation, String name) {
+        return (Integer) value(annotation, name).getValue();
+    }
+
+    private boolean booleanValue(AnnotationMirror annotation, String name) {
+        return (Boolean) value(annotation, name).getValue();
     }
 
     private Optional<AnnotationMirror> annotation(Element element, String qualifiedName) {

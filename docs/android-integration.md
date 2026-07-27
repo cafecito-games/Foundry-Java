@@ -122,6 +122,21 @@ Sorted `class`, `method`, `override`, `property`, and `signal` entries follow th
 registry implements `FoundryModuleProvider`, returns a matching immutable
 `FoundryModuleDescriptor`, and invokes generated trampolines through typed calls.
 
+Member signatures are transport signatures. Java enum declarations remain enum-typed, but enum
+method and override returns and parameters, property types, and signal parameters are serialized as
+primitive `long`; signal returns remain `void`. For example, Java
+`MovementMode convert(EngineMode, MovementMode)` is recorded as `long(long,long)`, and an
+enum-bearing signal is recorded as `void(long)`. Integral `@FoundryConstant` entries retain their
+declared type.
+
+User-authored callback enums require a unique explicit signed `long` on every constant through
+`@FoundryEnumValue`. Generator-owned engine enums use their generated `value()` and
+`fromValue(long)` methods. Ordinals, names, runtime reflection, and descriptor-side class lookup are
+not conversion fallbacks. Primitive enum transport cannot represent null/NIL: null, a wrong boxed
+transport type, an unknown signed value, or a null/unmapped outbound enum fails deterministically
+at the generated trampoline boundary. See [Java extension authoring](java-authoring.md#enum-callbacks)
+for the declaration contract.
+
 The plugin validates the complete graph before writing outputs. All modules must agree on
 `api_sha256`, `generator_version`, `runtime_contract_version`, and `bridge_contract_version`.
 Module and registry identities must be unique. Format 1, unknown or reordered headers, malformed
@@ -167,27 +182,33 @@ application host supplies its own engine library independently.
 
 ## Typed initialization
 
-The generated bootstrap is passed to the Android initializer with an application-owned callback
-implementation:
+Production applications use the plugin-generated `FoundryGeneratedStartupProvider`. Android creates
+that provider before the application object or an activity. Provider priming runs before
+`Application.onCreate()` and creates no binding context. It validates the typed generated
+bootstrap, captures the application class loader, installs the coordinator callback target, and
+loads `libfoundry_java.so`.
 
-```java
-FoundryRegistryBootstrap bootstrap = FoundryGeneratedBootstrap.bootstrap();
-boolean ready = FoundryJavaInitializer.initialize(bootstrap, callbacks);
-```
+`foundry_java_library_init` and the native CORE callback create the production context. The public
+FoundryExtension entry first resolves the complete interface table; CORE then creates the native
+context and production engine, registers the Java binding context, and begins generated
+registration. Registration follows the exact deterministic topological order. A provider never
+constructs an engine, creates a context, or registers a descriptor.
 
-`FoundryJavaInitializer.initialize(FoundryRegistryBootstrap, FoundryBridgeCallbacks)` validates the
-generated handoff, loads `foundry_java`, supplies its defining class loader, and sends the API SHA
-and generator, runtime, and bridge contract versions to the versioned JNI bootstrap. It returns
-`false` when the native bridge rejects the contract. Linkage and callback exceptions remain
-exceptions after a diagnostic is emitted.
+Direct `FoundryJavaInitializer.initialize` is a compatibility and test entry only. It validates the
+same generated handoff and provenance when a controlled host must exercise the bridge without
+Android provider startup, but production applications must not call it from `Application` or
+activity code.
 
 The one-argument `initialize(FoundryBridgeCallbacks)` overload is the empty-registry bridge entry
 used when no generated module bootstrap is present. Registration itself always uses typed provider
 and trampoline calls; initialization does not discover classes.
 
-Bridge shutdown is a process-lifetime teardown. `shutdownBridge()` releases native global
-references, and the bridge is not initialized again until the native library is loaded in a new
-process.
+Teardown unregisters in exact reverse topological order. It blocks new callbacks, drains admitted
+callbacks, deinitializes completed levels, invalidates the binding context, releases instance and
+class references, and only then clears native tables. Bridge shutdown is process-terminal; restart
+requires a fresh Android process.
+`FoundryBridgeCallbacks.terminalCleanupComplete` must confirm the exact terminal context before
+native teardown begins; otherwise the bridge retains the context and cleanup ownership for retry.
 
 ## Structured bootstrap logs
 
@@ -216,7 +237,7 @@ by the callback; `-1` means the event is not tied to one initialization callback
 `failure_phase="none"` is success. Other phases identify the boundary that failed, including
 `native_library_load`, `native_bootstrap`, `native_bootstrap_exception`,
 `initialization_callback`, `initialization_exception`, `deinitialization_exception`,
-`callback_exception`, and `invalidation_exception`.
+`callback_exception`, `invalidation_exception`, and `terminal_cleanup_query_exception`.
 
 ## Minified release builds
 

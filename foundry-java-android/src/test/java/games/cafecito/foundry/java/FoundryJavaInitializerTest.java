@@ -2,19 +2,25 @@ package games.cafecito.foundry.java;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import games.cafecito.foundry.runtime.FoundryBridgeCallbacks;
+import games.cafecito.foundry.runtime.FoundryEngine;
 import games.cafecito.foundry.runtime.FoundryModuleDescriptor;
 import games.cafecito.foundry.runtime.FoundryModuleProvider;
 import games.cafecito.foundry.runtime.FoundryRegistryBootstrap;
 import games.cafecito.foundry.runtime.FoundryRuntime;
 import java.io.IOException;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class FoundryJavaInitializerTest {
@@ -53,11 +59,36 @@ class FoundryJavaInitializerTest {
 
         assertTrue(rules.contains("FoundryJavaInitializer"));
         assertTrue(rules.contains("FoundryGeneratedBootstrap"));
+        assertTrue(rules.contains("FoundryGeneratedStartupProvider"));
+        assertTrue(rules.contains("FoundryJavaStartupProvider"));
         assertTrue(rules.contains("FoundryModuleProvider"));
         assertTrue(rules.contains("FoundryBridgeCallbacks"));
+        assertTrue(rules.contains("boolean terminalCleanupComplete(long);"));
+        for (String exactEntry :
+                List.of(
+                        "nativeRegistrationMembersV1",
+                        "nativeRegistrationAccessV1",
+                        "nativeRegistrationDetailsV1",
+                        "nativeRegistrationFoundryTypeV1",
+                        "nativeConstructExtensionV1",
+                        "nativeInvokeExtensionV1",
+                        "nativeGetExtensionPropertyV1",
+                        "nativeSetExtensionPropertyV1",
+                        "nativeExtensionToStringV1",
+                        "class games.cafecito.foundry.runtime.FoundryClassDescriptor",
+                        "class games.cafecito.foundry.runtime.FoundryMemberDescriptor",
+                        "interface games.cafecito.foundry.runtime.FoundryExtensionAccess",
+                        "interface games.cafecito.foundry.runtime.FoundryMemberDetails",
+                        "class games.cafecito.foundry.runtime.FoundryConstantDetails",
+                        "class games.cafecito.foundry.runtime.FoundryPropertyDetails")) {
+            assertTrue(rules.contains(exactEntry), exactEntry);
+        }
         assertFalse(rules.contains("games.cafecito.foundry.**"));
+        assertFalse(rules.contains("games.cafecito.foundry.runtime.**"));
         assertFalse(rules.contains("-keep class *"));
         assertFalse(rules.contains("FoundryPlugin"));
+        assertTrue(
+                rules.contains("-dontwarn games.cafecito.foundry.annotations.GeneratedByFoundry"));
     }
 
     @Test
@@ -65,6 +96,44 @@ class FoundryJavaInitializerTest {
         TypedInitializer initializer = FoundryJavaInitializer::initialize;
 
         assertNotNull(initializer);
+    }
+
+    @Test
+    void productionEngineConstructionIsDeferredUntilCoreInitialization() {
+        AtomicInteger constructions = new AtomicInteger();
+        AtomicReference<FoundryBridgeCallbacks> primedCallbacks = new AtomicReference<>();
+        FoundryJavaInitializer.PrimingState state =
+                new FoundryJavaInitializer.PrimingState(
+                        () -> {},
+                        (loader, callbacks) -> {
+                            primedCallbacks.set(callbacks);
+                            return true;
+                        },
+                        ignored -> {
+                            constructions.incrementAndGet();
+                            return noOpEngine();
+                        },
+                        ignored -> {});
+
+        state.prime(getClass().getClassLoader(), new FoundryRegistryBootstrap(List.of()));
+
+        assertEquals(0, constructions.get());
+        assertFalse(primedCallbacks.get().initialize(91, 1));
+        assertEquals(0, constructions.get());
+        assertTrue(primedCallbacks.get().initialize(91, 0));
+        assertEquals(1, constructions.get());
+        assertTrue(primedCallbacks.get().initialize(91, 0));
+        assertEquals(1, constructions.get());
+    }
+
+    @Test
+    void productionFactoryCreatesTheGeneratedDispatchEngine() throws Exception {
+        var factory =
+                FoundryJavaInitializer.class.getDeclaredMethod(
+                        "createProductionEngine", long.class);
+        factory.setAccessible(true);
+
+        assertInstanceOf(FoundryNativeEngine.class, factory.invoke(null, 91L));
     }
 
     @Test
@@ -99,8 +168,17 @@ class FoundryJavaInitializerTest {
                         bootstrap, accepted, accepted::recordDiagnostic);
 
         assertTrue(loggingAccepted.initialize(41, 1));
+        assertTrue(loggingAccepted.terminalCleanupComplete(41));
+        assertFalse(loggingAccepted.terminalCleanupComplete(42));
         assertEquals(
                 FoundryJavaInitializer.diagnosticJson(bootstrap, 1, "none"),
+                accepted.lastDiagnostic);
+        accepted.failTerminalCleanupQuery = true;
+        assertThrows(
+                IllegalStateException.class, () -> loggingAccepted.terminalCleanupComplete(41));
+        assertEquals(
+                FoundryJavaInitializer.diagnosticJson(
+                        bootstrap, -1, "terminal_cleanup_query_exception"),
                 accepted.lastDiagnostic);
 
         RecordingCallbacks rejected = new RecordingCallbacks(false);
@@ -128,6 +206,19 @@ class FoundryJavaInitializerTest {
         return () -> descriptor;
     }
 
+    private static FoundryEngine noOpEngine() {
+        return (FoundryEngine)
+                Proxy.newProxyInstance(
+                        FoundryEngine.class.getClassLoader(),
+                        new Class<?>[] {FoundryEngine.class},
+                        (proxy, method, arguments) ->
+                                switch (method.getReturnType().getName()) {
+                                    case "boolean" -> false;
+                                    case "long" -> 0L;
+                                    default -> null;
+                                });
+    }
+
     @FunctionalInterface
     private interface TypedInitializer {
         boolean initialize(FoundryRegistryBootstrap bootstrap, FoundryBridgeCallbacks callbacks);
@@ -136,6 +227,7 @@ class FoundryJavaInitializerTest {
     private static final class RecordingCallbacks implements FoundryBridgeCallbacks {
         private final boolean initializeResult;
         private String lastDiagnostic;
+        private boolean failTerminalCleanupQuery;
 
         private RecordingCallbacks(boolean initializeResult) {
             this.initializeResult = initializeResult;
@@ -160,5 +252,13 @@ class FoundryJavaInitializerTest {
 
         @Override
         public void invalidate(long contextHandle) {}
+
+        @Override
+        public boolean terminalCleanupComplete(long contextHandle) {
+            if (failTerminalCleanupQuery) {
+                throw new IllegalStateException("terminal cleanup query failed");
+            }
+            return contextHandle == 41;
+        }
     }
 }

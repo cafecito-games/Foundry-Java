@@ -5,6 +5,7 @@ project(foundry_java_bridge LANGUAGES CXX)
 find_package(Threads REQUIRED)
 
 option(FOUNDRY_JAVA_BUILD_TESTS "Build Foundry Java native unit tests." OFF)
+option(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST "Build the Android instrumentation test host." OFF)
 option(FOUNDRY_JAVA_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers." OFF)
 
 set(FOUNDRY_JAVA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../..")
@@ -46,14 +47,38 @@ configure_file(
     "${FOUNDRY_JAVA_GENERATED_INCLUDE}/foundry_java_contract.h"
     @ONLY
 )
+set(FOUNDRY_JAVA_ABI_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateFoundryJavaAbiLayout.cmake")
+set(FOUNDRY_JAVA_ABI_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/foundry_java_abi_layout.h.in")
+set(FOUNDRY_JAVA_API_JSON "${FOUNDRY_JAVA_PUBLIC_API}/extension_api.json")
+set(FOUNDRY_JAVA_ABI_OUTPUT "${FOUNDRY_JAVA_GENERATED_INCLUDE}/foundry_java_abi_layout.h")
+set(FOUNDRY_JAVA_BRIDGE_PRECISION "float")
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${FOUNDRY_JAVA_ABI_GENERATOR}"
+        "${FOUNDRY_JAVA_ABI_TEMPLATE}"
+        "${FOUNDRY_JAVA_API_JSON}"
+        "${FOUNDRY_JAVA_PROVENANCE}"
+)
+include("${FOUNDRY_JAVA_ABI_GENERATOR}")
 
-add_library(foundry_java_runtime STATIC foundry_java_handles.cpp)
+add_library(
+    foundry_java_runtime
+    STATIC
+        foundry_java_handles.cpp
+        foundry_java_interface.cpp
+        foundry_java_registration.cpp
+        foundry_java_registration_bridge.cpp
+        foundry_java_transport.cpp
+)
 target_compile_features(foundry_java_runtime PUBLIC cxx_std_17)
 target_include_directories(
     foundry_java_runtime
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${FOUNDRY_JAVA_PUBLIC_API}"
+        "${FOUNDRY_JAVA_GENERATED_INCLUDE}"
 )
 target_compile_options(foundry_java_runtime PRIVATE -Wall -Wextra -Werror)
 set_target_properties(foundry_java_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -73,22 +98,73 @@ if(ANDROID)
             "-Wl,--no-undefined"
             "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/foundry_java_exports.map"
     )
+
+    if(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_library(
+            foundry_java_test_host
+            SHARED
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_fake_extension_host.cpp"
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_fake_extension_host.h"
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_test_host_jni.cpp"
+        )
+        target_link_libraries(foundry_java_test_host PRIVATE foundry_java Threads::Threads)
+        target_include_directories(
+            foundry_java_test_host
+            PRIVATE
+                "${FOUNDRY_JAVA_PUBLIC_API}"
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp"
+        )
+        target_compile_features(foundry_java_test_host PRIVATE cxx_std_17)
+        target_compile_options(foundry_java_test_host PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+        target_link_options(foundry_java_test_host PRIVATE "-Wl,--no-undefined")
+    endif()
 endif()
 
 if(FOUNDRY_JAVA_BUILD_TESTS)
     enable_testing()
+    find_package(JNI REQUIRED)
+    target_compile_definitions(foundry_java_runtime PRIVATE FOUNDRY_JAVA_TESTING)
+    add_executable(
+        foundry_java_registration_test
+        foundry_java_jni.cpp
+        "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_registration_test.cpp"
+    )
+    target_link_libraries(foundry_java_registration_test PRIVATE foundry_java_runtime Threads::Threads)
+    target_compile_definitions(foundry_java_registration_test PRIVATE FOUNDRY_JAVA_TESTING)
+    target_include_directories(foundry_java_registration_test PRIVATE ${JNI_INCLUDE_DIRS})
+    target_compile_features(foundry_java_registration_test PRIVATE cxx_std_17)
+    target_compile_options(foundry_java_registration_test PRIVATE -Wall -Wextra -Werror)
     add_executable(
         foundry_java_runtime_test
         foundry_java_entry.cpp
         "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/test/cpp/foundry_java_runtime_test.cpp"
     )
     target_link_libraries(foundry_java_runtime_test PRIVATE foundry_java_runtime Threads::Threads)
+    target_compile_definitions(foundry_java_runtime_test PRIVATE FOUNDRY_JAVA_TESTING)
     target_compile_features(foundry_java_runtime_test PRIVATE cxx_std_17)
     target_compile_options(foundry_java_runtime_test PRIVATE -Wall -Wextra -Werror)
+    add_executable(
+        foundry_java_fake_extension_host_test
+        "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_fake_extension_host.cpp"
+    )
+    target_link_libraries(foundry_java_fake_extension_host_test PRIVATE Threads::Threads)
+    target_include_directories(foundry_java_fake_extension_host_test PRIVATE "${FOUNDRY_JAVA_PUBLIC_API}")
+    target_compile_definitions(
+        foundry_java_fake_extension_host_test
+        PRIVATE FOUNDRY_JAVA_FAKE_HOST_CONTRACT_TEST
+    )
+    target_compile_features(foundry_java_fake_extension_host_test PRIVATE cxx_std_17)
+    target_compile_options(foundry_java_fake_extension_host_test PRIVATE -Wall -Wextra -Werror)
     if(FOUNDRY_JAVA_ENABLE_SANITIZERS)
         target_compile_options(foundry_java_runtime PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_compile_options(foundry_java_registration_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_compile_options(foundry_java_runtime_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_compile_options(foundry_java_fake_extension_host_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(foundry_java_registration_test PRIVATE -fsanitize=address,undefined)
         target_link_options(foundry_java_runtime_test PRIVATE -fsanitize=address,undefined)
+        target_link_options(foundry_java_fake_extension_host_test PRIVATE -fsanitize=address,undefined)
     endif()
+    add_test(NAME foundry_java_registration_test COMMAND foundry_java_registration_test)
     add_test(NAME foundry_java_runtime_test COMMAND foundry_java_runtime_test)
+    add_test(NAME foundry_java_fake_extension_host_test COMMAND foundry_java_fake_extension_host_test)
 endif()

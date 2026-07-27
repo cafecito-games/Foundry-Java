@@ -213,6 +213,7 @@ class FoundrySourceGeneratorTest {
         assertNotNull(utilities);
         assertNotNull(engine);
         assertNotNull(globalEnum);
+        assertTrue(globalEnum.contains("@games.cafecito.foundry.annotations.GeneratedByFoundry"));
         assertTrue(node.contains("public class Node extends Object"));
         assertTrue(node.contains("getChildren(boolean includeInternal)"));
         assertTrue(node.contains("getChildren()"));
@@ -343,10 +344,10 @@ class FoundrySourceGeneratorTest {
                                 + "NativePointers.ConstVoid.class).bridgeHandle()"));
         assertTrue(
                 node.contains(
-                        "FoundryNativeHandle.of(context().contextHandle(), "
+                        "FoundryNativeHandle.owned(context().contextHandle(), "
                                 + "games.cafecito.foundry.generated.pointers."
                                 + "NativePointers.ConstVoid.class, "
-                                + "__foundryGeneratedResult.asLong())"));
+                                + "__foundryGeneratedResult.asLong(), context().engine())"));
 
         Path output = temporaryDirectory.resolve("pointer-calls");
         generated.writeTo(output);
@@ -437,7 +438,7 @@ class FoundrySourceGeneratorTest {
         second.writeTo(secondOutput);
         assertEquals(57_904, api.entities().size());
         assertEquals(57_904, acceptedManifest.entries().size());
-        assertEquals(1_188, first.sources().size());
+        assertEquals(1_280, first.sources().size());
         assertEquals(1_298, first.descriptorCatalog().size());
         assertEquals(
                 57_904,
@@ -466,6 +467,218 @@ class FoundrySourceGeneratorTest {
                 inputs.compatibilityManifestSha256(),
                 sha256(first.manifest().canonicalJson().getBytes(StandardCharsets.UTF_8)));
         assertEquals(0, compile(output, temporaryDirectory.resolve("accepted-classes")));
+    }
+
+    @Test
+    void generatedNativeDispatchCoversEveryKindAndAcceptedInventoryDeterministically()
+            throws IOException {
+        GeneratedTree first = generateAcceptedApi();
+        GeneratedTree second = generateAcceptedApi();
+
+        String facade =
+                first.sources()
+                        .get("games/cafecito/foundry/generated/GeneratedNativeDispatch.java");
+        List<Map.Entry<String, String>> shards =
+                first.sources().entrySet().stream()
+                        .filter(
+                                entry ->
+                                        entry.getKey()
+                                                .matches(
+                                                        "games/cafecito/foundry/generated/"
+                                                                + "GeneratedNativeDispatchShard"
+                                                                + "[0-9]{3}\\.java"))
+                        .toList();
+        String rows = shards.stream().map(Map.Entry::getValue).collect(Collectors.joining("\n"));
+
+        assertNotNull(facade);
+        assertEquals(91, shards.size());
+        assertEquals(23_225, countOccurrences(rows, "target.put("));
+        Map.of(
+                        "CLASS_METHOD", 16_317,
+                        "CLASS_PROPERTY", 4_108,
+                        "CLASS_SIGNAL", 508,
+                        "BUILTIN_METHOD", 1_000,
+                        "BUILTIN_CONSTRUCTOR", 156,
+                        "BUILTIN_OPERATOR", 749,
+                        "BUILTIN_MEMBER", 62,
+                        "BUILTIN_CONSTANT", 210,
+                        "UTILITY_FUNCTION", 115)
+                .forEach(
+                        (kind, expected) ->
+                                assertEquals(
+                                        expected,
+                                        countOccurrences(
+                                                rows, "FoundryNativeDispatch.Kind." + kind),
+                                        kind));
+        assertTrue(
+                shards.stream()
+                        .allMatch(
+                                shard ->
+                                        shard.getValue()
+                                                        .lines()
+                                                        .filter(
+                                                                line ->
+                                                                        line.contains(
+                                                                                "target.put("))
+                                                        .count()
+                                                <= 256));
+        assertTrue(shards.stream().allMatch(shard -> shard.getValue().contains("final class ")));
+        assertTrue(facade.contains("public static FoundryNativeDispatch require(String identity)"));
+        assertFalse(facade.contains("public static java.util.Map"));
+        assertEquals(first.sha256ByPath(), second.sha256ByPath());
+    }
+
+    @Test
+    void generatedNativeDispatchPreservesArityReceiversConstantsTypesAndAccessors()
+            throws IOException {
+        GeneratedTree generated = generateAcceptedApi();
+
+        String substr = dispatchRow(generated, "builtin_classes/String/methods/substr#787537301");
+        assertTrue(substr.contains("Kind.BUILTIN_METHOD"), substr);
+        assertTrue(substr.contains("\"String\", \"substr\", 787537301L, -1"), substr);
+        assertTrue(substr.contains("java.util.List.of(\"int\", \"int\"), 1, \"String\""), substr);
+        assertTrue(substr.endsWith("false, false));"), substr);
+
+        String staticBuiltin =
+                dispatchRow(generated, "builtin_classes/String/methods/num#1555901022");
+        assertTrue(
+                staticBuiltin.contains("java.util.List.of(\"float\", \"int\"), 1, \"String\""),
+                staticBuiltin);
+        assertTrue(staticBuiltin.endsWith("false, true));"), staticBuiltin);
+
+        String vararg = dispatchRow(generated, "utility_functions/max#3896050336");
+        assertTrue(vararg.contains("Kind.UTILITY_FUNCTION"), vararg);
+        assertTrue(vararg.contains("\"\", \"max\", 3896050336L, -1"), vararg);
+        assertTrue(
+                vararg.contains("java.util.List.of(\"Variant\", \"Variant\"), 2, \"Variant\""),
+                vararg);
+        assertTrue(vararg.endsWith("true, false));"), vararg);
+
+        String scriptNew = dispatchRow(generated, "classes/FoundryScript/methods/new#1545262638");
+        assertTrue(scriptNew.contains("java.util.List.of(), 0, \"Variant\""), scriptNew);
+        assertTrue(scriptNew.endsWith("true, false));"), scriptNew);
+
+        String constant = dispatchRow(generated, "builtin_classes/Vector2/constants/ZERO");
+        assertTrue(constant.contains("Kind.BUILTIN_CONSTANT"), constant);
+        assertTrue(constant.contains("\"Vector2\", \"ZERO\", -1L, -1"), constant);
+        assertTrue(constant.contains("java.util.List.of(), 0, \"Vector2\""), constant);
+
+        String resolvedProperty =
+                dispatchRow(generated, "classes/AStar2D/properties/neighbor_filter_enabled");
+        assertTrue(
+                resolvedProperty.contains(
+                        "\"classes/AStar2D/methods/is_neighbor_filter_enabled#36873697\", "
+                                + "\"is_neighbor_filter_enabled\", 36873697L"),
+                resolvedProperty);
+        assertTrue(
+                resolvedProperty.contains(
+                        "\"classes/AStar2D/methods/set_neighbor_filter_enabled#2586408642\", "
+                                + "\"set_neighbor_filter_enabled\", 2586408642L"),
+                resolvedProperty);
+
+        String unresolvedProperty =
+                dispatchRow(generated, "classes/AimModifier3D/properties/setting_count");
+        assertTrue(
+                unresolvedProperty.contains(
+                        "\"\", \"get_setting_count\", -1L, \"\", \"set_setting_count\", -1L"),
+                unresolvedProperty);
+    }
+
+    @Test
+    void generatedNativeDispatchRejectsAmbiguousPropertyAccessorNames() throws IOException {
+        String duplicateAccessors =
+                """
+                {
+                  "name": "get_owner_path",
+                  "is_const": true,
+                  "is_vararg": false,
+                  "is_static": false,
+                  "is_virtual": false,
+                  "hash": 102,
+                  "return_value": {"type": "NodePath"}
+                },
+                {
+                  "name": "get_owner_path",
+                  "is_const": true,
+                  "is_vararg": false,
+                  "is_static": false,
+                  "is_virtual": false,
+                  "hash": 103,
+                  "return_value": {"type": "NodePath"}
+                },
+                """;
+        FoundryApi api =
+                FoundryApiParser.parse(
+                        fixture()
+                                .replace(
+                                        "      \"methods\": [\n        {\n"
+                                                + "          \"name\": \"_process\",",
+                                        "      \"methods\": [\n"
+                                                + duplicateAccessors
+                                                + "        {\n"
+                                                + "          \"name\": \"_process\","));
+
+        ApiInputException failure =
+                assertThrows(
+                        ApiInputException.class,
+                        () ->
+                                new FoundrySourceGenerator()
+                                        .generate(api, METADATA, supportedManifest(api)));
+
+        assertTrue(failure.getMessage().contains("Ambiguous property accessor"));
+        assertTrue(failure.getMessage().contains("classes/Node/properties/owner_path"));
+        assertTrue(failure.getMessage().contains("get_owner_path"));
+    }
+
+    @Test
+    void generatedNativeDispatchIsImmutableAndRejectsUnknownIdentities() throws Exception {
+        FoundryApi api = FoundryApiParser.parse(fixture());
+        GeneratedTree generated =
+                new FoundrySourceGenerator().generate(api, METADATA, supportedManifest(api));
+        Path output = temporaryDirectory.resolve("dispatch");
+        Path classes = temporaryDirectory.resolve("dispatch-classes");
+        generated.writeTo(output);
+        assertEquals(0, compile(output, classes));
+
+        try (var loader =
+                new URLClassLoader(
+                        new java.net.URL[] {classes.toUri().toURL()},
+                        ClassLoader.getPlatformClassLoader())) {
+            Class<?> dispatch =
+                    loader.loadClass("games.cafecito.foundry.generated.GeneratedNativeDispatch");
+            Object known =
+                    dispatch.getMethod("require", String.class)
+                            .invoke(null, "classes/Node/methods/get_children#101");
+            assertEquals(
+                    "classes/Node/methods/get_children#101",
+                    known.getClass().getMethod("identity").invoke(known));
+
+            java.lang.reflect.Field entriesField = dispatch.getDeclaredField("ENTRIES");
+            entriesField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> entries = (Map<String, Object>) entriesField.get(null);
+            assertThrows(UnsupportedOperationException.class, () -> entries.put("invented", known));
+
+            java.lang.reflect.InvocationTargetException failure =
+                    assertThrows(
+                            java.lang.reflect.InvocationTargetException.class,
+                            () ->
+                                    dispatch.getMethod("require", String.class)
+                                            .invoke(null, "missing"));
+            assertTrue(failure.getCause() instanceof IllegalArgumentException);
+            assertEquals(
+                    "Unknown Foundry native dispatch identity: missing",
+                    failure.getCause().getMessage());
+
+            java.lang.reflect.InvocationTargetException nullFailure =
+                    assertThrows(
+                            java.lang.reflect.InvocationTargetException.class,
+                            () ->
+                                    dispatch.getMethod("require", String.class)
+                                            .invoke(null, new Object[] {null}));
+            assertTrue(nullFailure.getCause() instanceof NullPointerException);
+            assertEquals("identity", nullFailure.getCause().getMessage());
+        }
     }
 
     @Test
@@ -925,7 +1138,7 @@ class FoundrySourceGeneratorTest {
                 runtime.resolve("ObjectOwnership.java"),
                 """
                 package games.cafecito.foundry.runtime;
-                public enum ObjectOwnership { BORROWED, REFERENCE_COUNTED }
+                public enum ObjectOwnership { BORROWED, OWNED, REFERENCE_COUNTED }
                 """);
         Files.writeString(
                 runtime.resolve("ObjectLease.java"),
@@ -1007,6 +1220,42 @@ class FoundrySourceGeneratorTest {
                 }
                 """);
         Files.writeString(
+                runtime.resolve("FoundryNativeDispatch.java"),
+                """
+                package games.cafecito.foundry.runtime;
+                public record FoundryNativeDispatch(
+                        String identity,
+                        Kind kind,
+                        String ownerNativeType,
+                        String nativeName,
+                        long compatibilityHash,
+                        int constructorIndex,
+                        java.util.List<String> argumentNativeTypes,
+                        int minimumArgumentCount,
+                        String returnNativeType,
+                        String getterIdentity,
+                        String getterNativeName,
+                        long getterCompatibilityHash,
+                        String setterIdentity,
+                        String setterNativeName,
+                        long setterCompatibilityHash,
+                        boolean vararg,
+                        boolean staticCall) {
+                    public enum Kind {
+                        CLASS_METHOD(1),
+                        CLASS_PROPERTY(2),
+                        CLASS_SIGNAL(3),
+                        BUILTIN_METHOD(4),
+                        BUILTIN_CONSTRUCTOR(5),
+                        BUILTIN_OPERATOR(6),
+                        BUILTIN_MEMBER(7),
+                        BUILTIN_CONSTANT(8),
+                        UTILITY_FUNCTION(9);
+                        Kind(int wireCode) {}
+                    }
+                }
+                """);
+        Files.writeString(
                 runtime.resolve("FoundryNativeHandle.java"),
                 """
                 package games.cafecito.foundry.runtime;
@@ -1016,11 +1265,19 @@ class FoundrySourceGeneratorTest {
                             long contextHandle, Class<T> nativeType, long bridgeHandle) {
                         return new FoundryNativeHandle<>(contextHandle, nativeType, bridgeHandle);
                     }
+                    public static <T> FoundryNativeHandle<T> owned(
+                            long contextHandle,
+                            Class<T> nativeType,
+                            long bridgeHandle,
+                            FoundryEngine engine) {
+                        return new FoundryNativeHandle<>(contextHandle, nativeType, bridgeHandle);
+                    }
                     public FoundryNativeHandle<T> requireContext(long contextHandle) { return this; }
                     public <U> FoundryNativeHandle<T> requireType(Class<U> nativeType) {
                         return this;
                     }
                     public boolean isNull() { return bridgeHandle == 0; }
+                    public void close() {}
                 }
                 """);
         Files.writeString(
@@ -1035,6 +1292,7 @@ class FoundrySourceGeneratorTest {
                             java.util.List<games.cafecito.foundry.types.Variant> arguments);
                     long singleton(long contextHandle, String name);
                     long instantiate(long contextHandle, String className);
+                    void release(long contextHandle, long objectHandle);
                     record CallResult(
                             games.cafecito.foundry.types.Variant value,
                             FoundryCallError error) {}
@@ -1069,12 +1327,37 @@ class FoundrySourceGeneratorTest {
                     }
                     public <T extends FoundryObject> void registerObjectType(
                             String type, Class<T> wrapperClass, ObjectFactory<T> factory) {}
+                    public <T extends FoundryObject> void registerObjectType(
+                            String type,
+                            ObjectOwnership ownership,
+                            Class<T> wrapperClass,
+                            ObjectFactory<T> factory) {}
                     public interface ObjectFactory<T extends FoundryObject> {
                         T create(FoundryBindingContext context, ObjectLease lease);
                     }
                 }
                 """);
         return root;
+    }
+
+    private static String dispatchRow(GeneratedTree generated, String identity) {
+        String quotedIdentity = "\"" + identity + "\"";
+        return generated.sources().entrySet().stream()
+                .filter(entry -> entry.getKey().contains("GeneratedNativeDispatchShard"))
+                .flatMap(entry -> entry.getValue().lines())
+                .filter(line -> line.contains(quotedIdentity))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Missing dispatch row " + identity));
+    }
+
+    private static int countOccurrences(String value, String needle) {
+        int count = 0;
+        int index = 0;
+        while ((index = value.indexOf(needle, index)) >= 0) {
+            count++;
+            index += needle.length();
+        }
+        return count;
     }
 
     private static String scalarSource(String generatedSources, String identity) {

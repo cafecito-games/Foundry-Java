@@ -3,6 +3,7 @@ package games.cafecito.foundry.gradle;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -11,9 +12,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -34,6 +40,11 @@ class FoundryJavaPluginTest {
     private static final String BOOTSTRAP =
             "build/generated/foundryJava/java/"
                     + "games/cafecito/foundry/generated/FoundryGeneratedBootstrap.java";
+    private static final String STARTUP_PROVIDER =
+            "build/generated/foundryJava/java/"
+                    + "games/cafecito/foundry/generated/FoundryGeneratedStartupProvider.java";
+    private static final String STARTUP_MANIFEST =
+            "build/generated/foundryJava/manifest/AndroidManifest.xml";
     private static final String CONFIGURATION =
             "build/generated/foundryJava/assets/FoundryJava.foundryextension";
     private static final byte[] BINDING_CONFIGURATION =
@@ -47,6 +58,69 @@ class FoundryJavaPluginTest {
     @TempDir Path temporaryDirectory;
 
     @Test
+    void apkAnalyzerResolutionPrefersSdkRootEnvironment() throws Exception {
+        Path sdkRoot = temporaryDirectory.resolve("sdk-root");
+        Path androidHome = temporaryDirectory.resolve("android-home");
+        Path apkAnalyzer = sdkRoot.resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Files.createDirectories(apkAnalyzer.getParent());
+        Files.createFile(apkAnalyzer);
+        Path localProperties = temporaryDirectory.resolve("local.properties");
+        Files.writeString(localProperties, "sdk.dir=" + temporaryDirectory.resolve("local-sdk"));
+
+        assertEquals(
+                apkAnalyzer,
+                requireApkAnalyzer(
+                        Map.of(
+                                "ANDROID_SDK_ROOT",
+                                sdkRoot.toString(),
+                                "ANDROID_HOME",
+                                androidHome.toString()),
+                        localProperties));
+    }
+
+    @Test
+    void apkAnalyzerResolutionReportsMissingRequiredTool() throws Exception {
+        Path sdkRoot = temporaryDirectory.resolve("sdk-without-command-line-tools");
+
+        IllegalStateException failure =
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                requireApkAnalyzer(
+                                        Map.of("ANDROID_SDK_ROOT", sdkRoot.toString()),
+                                        temporaryDirectory.resolve("missing-local.properties")));
+
+        assertTrue(failure.getMessage().contains("Required apkanalyzer not found"));
+        assertTrue(failure.getMessage().contains(sdkRoot.toString()));
+    }
+
+    @Test
+    void apkAnalyzerResolutionFallsBackToAndroidHome() throws Exception {
+        Path androidHome = temporaryDirectory.resolve("android-home");
+        Path apkAnalyzer = androidHome.resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Files.createDirectories(apkAnalyzer.getParent());
+        Files.createFile(apkAnalyzer);
+
+        assertEquals(
+                apkAnalyzer,
+                requireApkAnalyzer(
+                        Map.of("ANDROID_SDK_ROOT", " ", "ANDROID_HOME", androidHome.toString()),
+                        temporaryDirectory.resolve("missing-local.properties")));
+    }
+
+    @Test
+    void apkAnalyzerResolutionFallsBackToLocalProperties() throws Exception {
+        Path sdkRoot = temporaryDirectory.resolve("local-sdk");
+        Path apkAnalyzer = sdkRoot.resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Files.createDirectories(apkAnalyzer.getParent());
+        Files.createFile(apkAnalyzer);
+        Path localProperties = temporaryDirectory.resolve("local.properties");
+        Files.writeString(localProperties, "sdk.dir=" + sdkRoot);
+
+        assertEquals(apkAnalyzer, requireApkAnalyzer(Map.of(), localProperties));
+    }
+
+    @Test
     void zeroModulesProducesNoOptInMarkerOrBootstrap() throws IOException {
         Path project = project("zero", List.of());
 
@@ -55,6 +129,8 @@ class FoundryJavaPluginTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":generateFoundryJavaRegistry").getOutcome());
         assertFalse(Files.exists(project.resolve(INDEX)));
         assertFalse(Files.exists(project.resolve(BOOTSTRAP)));
+        assertFalse(Files.exists(project.resolve(STARTUP_PROVIDER)));
+        assertFalse(Files.exists(project.resolve(STARTUP_MANIFEST)));
         assertFalse(Files.exists(project.resolve(CONFIGURATION)));
     }
 
@@ -84,6 +160,93 @@ class FoundryJavaPluginTest {
                 bootstrap.contains("new games.cafecito.foundry.runtime.FoundryRegistryBootstrap"));
         assertFalse(bootstrap.contains("Class.forName"));
         assertFalse(bootstrap.contains("java.lang.reflect"));
+        assertEquals(
+                """
+                package games.cafecito.foundry.generated;
+
+                /** Direct pre-Activity startup provider generated by the Foundry-Java plugin. */
+                public final class FoundryGeneratedStartupProvider
+                        extends games.cafecito.foundry.java.FoundryJavaStartupProvider {
+                    @Override
+                    protected games.cafecito.foundry.runtime.FoundryRegistryBootstrap bootstrap() {
+                        return FoundryGeneratedBootstrap.bootstrap();
+                    }
+                }
+                """,
+                Files.readString(project.resolve(STARTUP_PROVIDER)));
+        assertEquals(
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="${foundryJavaStartupProvider}"
+                            android:authorities="${foundryJavaStartupAuthority}"
+                            android:exported="false"
+                            android:initOrder="100" />
+                    </application>
+                </manifest>
+                """,
+                Files.readString(project.resolve(STARTUP_MANIFEST)));
+    }
+
+    @Test
+    void enrichedDescriptorsKeepTheGeneratedIndexModuleOnly() throws IOException {
+        String enriched =
+                descriptor("alpha", "example.AlphaRegistry")
+                        + "constant=example.Extension|HIGH_BIT|HIGH_BIT|long|d1|"
+                        + encoded("Flags|line\nslash\\café☕")
+                        + "|-9223372036854775808|1\n"
+                        + "property=example.Extension|value|value|long|d1|"
+                        + encoded("get|value\nslash\\値")
+                        + "||7|"
+                        + encoded("Physics")
+                        + "||"
+                        + encoded("Advanced")
+                        + "|\n";
+        Path alpha =
+                moduleJarAtPath(
+                        temporaryDirectory.resolve("alpha-enriched.jar"),
+                        "META-INF/foundry-java/modules/alpha.descriptor",
+                        enriched);
+        Path project = project("enriched", List.of(alpha));
+
+        run(project, "generateFoundryJavaRegistry");
+
+        assertEquals(
+                """
+                format=2
+                api_sha256=%s
+                generator_version=1
+                runtime_contract_version=1
+                bridge_contract_version=1
+                module=alpha|example.AlphaRegistry
+                """
+                        .formatted(API_SHA),
+                Files.readString(project.resolve(INDEX)));
+        assertTrue(
+                Files.readString(project.resolve(BOOTSTRAP))
+                        .contains("example.AlphaRegistry.PROVIDER"));
+    }
+
+    @Test
+    void malformedEnrichedDescriptorsLeaveNoGeneratedRegistryOutputs() throws IOException {
+        String malformed =
+                descriptor("broken", "example.BrokenRegistry")
+                        + "property=example.Extension|value|value|long|d1|||-1||||\n";
+        Path broken =
+                moduleJarAtPath(
+                        temporaryDirectory.resolve("broken-enriched.jar"),
+                        "META-INF/foundry-java/modules/broken.descriptor",
+                        malformed);
+        Path project = project("broken-enriched", List.of(broken));
+
+        BuildResult failure = runAndFail(project, "generateFoundryJavaRegistry");
+
+        assertTrue(failure.getOutput().contains("Invalid Foundry descriptor"));
+        assertTrue(failure.getOutput().contains("property=example.Extension|value"));
+        assertFalse(Files.exists(project.resolve(INDEX)));
+        assertFalse(Files.exists(project.resolve(BOOTSTRAP)));
+        assertFalse(Files.exists(project.resolve(STARTUP_MANIFEST)));
     }
 
     @Test
@@ -388,9 +551,27 @@ class FoundryJavaPluginTest {
                 project.resolve(
                         "build/generated/assets/generateReleaseFoundryJavaRegistry/"
                                 + "FoundryJava.foundryextension");
+        Path variantStartupProvider =
+                project.resolve(
+                        "build/generated/java/generateReleaseFoundryJavaRegistry/"
+                                + "games/cafecito/foundry/generated/"
+                                + "FoundryGeneratedStartupProvider.java");
+        Path variantStartupManifest =
+                project.resolve(
+                        "build/generated/manifests/generateReleaseFoundryJavaRegistry/"
+                                + "AndroidManifest.xml");
         assertTrue(Files.readString(variantIndex).contains("module=demo|example.DemoRegistry"));
         assertTrue(Files.readString(variantBootstrap).contains("example.DemoRegistry.PROVIDER"));
         assertArrayEquals(BINDING_CONFIGURATION, Files.readAllBytes(variantConfiguration));
+        assertTrue(
+                Files.readString(variantStartupProvider)
+                        .contains("return FoundryGeneratedBootstrap.bootstrap();"));
+        assertTrue(
+                Files.readString(variantStartupManifest)
+                        .contains(
+                                "android:authorities=\"games.cafecito.test.custom."
+                                        + "foundry-java-startup\""));
+        assertFalse(Files.readString(variantStartupManifest).contains("${"));
     }
 
     @Test
@@ -413,6 +594,17 @@ class FoundryJavaPluginTest {
                                 "build/generated/java/generateDebugFoundryJavaRegistry/"
                                         + "games/cafecito/foundry/generated/"
                                         + "FoundryGeneratedBootstrap.java")));
+        assertFalse(
+                Files.exists(
+                        project.resolve(
+                                "build/generated/java/generateDebugFoundryJavaRegistry/"
+                                        + "games/cafecito/foundry/generated/"
+                                        + "FoundryGeneratedStartupProvider.java")));
+        assertFalse(
+                Files.exists(
+                        project.resolve(
+                                "build/generated/manifests/generateDebugFoundryJavaRegistry/"
+                                        + "AndroidManifest.xml")));
     }
 
     @Test
@@ -503,11 +695,149 @@ class FoundryJavaPluginTest {
         String mapping =
                 Files.readString(project.resolve("build/outputs/mapping/release/mapping.txt"));
         assertTrue(mapping.contains("games.cafecito.foundry.generated.FoundryGeneratedBootstrap"));
+        assertTrue(
+                mapping.contains(
+                        "games.cafecito.foundry.generated.FoundryGeneratedStartupProvider"
+                                + " -> games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider:"));
         assertTrue(mapping.contains("example.DemoRegistry"));
         assertTrue(mapping.contains("example.DemoRegistry$1"));
         assertTrue(
                 Files.readString(project.resolve("build/outputs/apk/release/output-metadata.json"))
                         .contains("games.cafecito.test.custom"));
+        String mergedManifest = mergedManifest(project, "release");
+        assertTrue(
+                mergedManifest.contains(
+                        "android:name=\"games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider\""));
+        assertTrue(
+                mergedManifest.contains(
+                        "android:authorities=\"games.cafecito.test.custom."
+                                + "foundry-java-startup\""));
+        assertTrue(mergedManifest.contains("android:exported=\"false\""));
+        assertTrue(mergedManifest.contains("android:initOrder=\"100\""));
+        assertFalse(mergedManifest.contains("android:process="));
+    }
+
+    @Test
+    void actualReleaseAarMinifiedApi23ConsumerUsesPinnedDesugaringAndKeepsStartup()
+            throws Exception {
+        Path actualAndroidAar = Path.of(System.getProperty("foundry.actual.android.aar"));
+        Path actualRuntimeJar = Path.of(System.getProperty("foundry.actual.runtime.jar"));
+        try (java.util.zip.ZipFile archive = new java.util.zip.ZipFile(actualAndroidAar.toFile())) {
+            String baseManifest =
+                    new String(
+                            archive.getInputStream(archive.getEntry("AndroidManifest.xml"))
+                                    .readAllBytes(),
+                            StandardCharsets.UTF_8);
+            assertFalse(baseManifest.contains("<application"));
+            assertFalse(baseManifest.contains("<provider"));
+        }
+        Path host =
+                aar(
+                        temporaryDirectory.resolve("actual-api23-host.aar"),
+                        null,
+                        null,
+                        List.of(
+                                new RawZipEntry(
+                                        "jni/x86_64/libfoundry_android.so", new byte[] {1})));
+        Path module =
+                descriptorAarWithConsumerRules(
+                        temporaryDirectory.resolve("actual-api23-module.aar"),
+                        "demo",
+                        "example.DemoRegistry");
+        Path project =
+                androidProject(
+                        "actual-api23-minified",
+                        List.of(host, module, actualAndroidAar, actualRuntimeJar),
+                        List.of("x86_64"));
+        writeActualRegistrySource(project);
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        + """
+
+                        dependencies {
+                            coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.3'
+                        }
+                        """);
+
+        BuildResult dependencyInsight =
+                run(
+                        project,
+                        "dependencyInsight",
+                        "--dependency",
+                        "desugar_jdk_libs",
+                        "--configuration",
+                        "coreLibraryDesugaring");
+        assertTrue(
+                dependencyInsight.getOutput().contains("com.android.tools:desugar_jdk_libs:2.1.5"));
+
+        run(project, "assembleRelease", "--configuration-cache");
+        BuildResult second = run(project, "assembleRelease", "--configuration-cache");
+
+        assertTrue(second.getOutput().contains("Reusing configuration cache."));
+        Path apk = releaseApk(project);
+        Path apkAnalyzer = requireApkAnalyzer(System.getenv(), project.resolve("local.properties"));
+        String definedPackages =
+                runProcess(apkAnalyzer, "dex", "packages", "--defined-only", apk.toString());
+        assertTrue(definedPackages.contains("j$.util"));
+
+        String mapping =
+                Files.readString(project.resolve("build/outputs/mapping/release/mapping.txt"));
+        Path mappingFile = project.resolve("build/outputs/mapping/release/mapping.txt");
+        String appCallSite =
+                runProcess(
+                        apkAnalyzer,
+                        "dex",
+                        "code",
+                        "--class",
+                        "example.DemoRegistry",
+                        "--proguard-mappings",
+                        mappingFile.toString(),
+                        apk.toString());
+        assertTrue(appCallSite.contains("Lj$/util/"), appCallSite);
+        String runtimeCallSite =
+                runProcess(
+                        apkAnalyzer,
+                        "dex",
+                        "code",
+                        "--class",
+                        "games.cafecito.foundry.runtime.FoundryRegistryBootstrap",
+                        "--proguard-mappings",
+                        mappingFile.toString(),
+                        apk.toString());
+        assertTrue(runtimeCallSite.contains("Lj$/util/"), runtimeCallSite);
+        assertTrue(
+                mapping.contains(
+                        "games.cafecito.foundry.java.FoundryJavaStartupProvider"
+                                + " -> games.cafecito.foundry.java."
+                                + "FoundryJavaStartupProvider:"));
+        assertTrue(
+                java.util.regex.Pattern.compile("(?m)^\\s+.*boolean onCreate\\(\\).* -> onCreate$")
+                        .matcher(mapping)
+                        .find());
+        assertTrue(
+                java.util.regex.Pattern.compile(
+                                "(?m)^\\s+.*FoundryRegistryBootstrap bootstrap\\(\\)"
+                                        + ".* -> bootstrap$")
+                        .matcher(mapping)
+                        .find());
+        assertTrue(
+                mapping.contains(
+                        "games.cafecito.foundry.generated.FoundryGeneratedStartupProvider"
+                                + " -> games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider:"));
+        assertTrue(
+                mapping.contains(
+                        "games.cafecito.foundry.generated.FoundryGeneratedBootstrap"
+                                + " -> games.cafecito.foundry.generated."
+                                + "FoundryGeneratedBootstrap:"));
+        assertTrue(mapping.contains("example.DemoRegistry -> example.DemoRegistry:"));
+
+        Map<String, String> firstHashes = actualConsumerHashes(project);
+        run(project, "clean", "assembleRelease", "--configuration-cache");
+        assertEquals(firstHashes, actualConsumerHashes(project));
     }
 
     @Test
@@ -536,6 +866,266 @@ class FoundryJavaPluginTest {
         assertTrue(
                 Files.readString(project.resolve("build/outputs/apk/debug/output-metadata.json"))
                         .contains("games.cafecito.test"));
+        assertTrue(
+                mergedManifest(project, "debug")
+                        .contains(
+                                "android:authorities=\"games.cafecito.test."
+                                        + "foundry-java-startup\""));
+    }
+
+    @Test
+    void zeroModuleVariantIgnoresReservedPlaceholderValues() throws IOException {
+        Path binding =
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("zero-module-placeholder-binding.aar"),
+                        List.of("x86_64"));
+        Path project =
+                androidProject("zero-module-reserved-placeholders", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        .replace(
+                                "        applicationId 'games.cafecito.test.custom'\n",
+                                """
+                                        applicationId 'games.cafecito.test.custom'
+                                        manifestPlaceholders = [
+                                            foundryJavaStartupProvider: 'example.UnrelatedProvider',
+                                            foundryJavaStartupAuthority: 'shared.authority'
+                                        ]
+                                """));
+
+        BuildResult result = run(project, "assembleDebug");
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug").getOutcome());
+        assertFalse(mergedManifest(project, "debug").contains("FoundryGeneratedStartupProvider"));
+        assertFalse(
+                Files.exists(project.resolve("build/generated/foundryJava/verification/debug")));
+    }
+
+    @Test
+    void zeroModuleVariantRejectsAStaleGeneratedStartupProviderWithoutAnIndex() throws IOException {
+        Path binding =
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("stale-provider-binding.aar"),
+                        List.of("x86_64"));
+        Path project = androidProject("stale-zero-module-provider", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="games.cafecito.foundry.generated.FoundryGeneratedStartupProvider"
+                            android:authorities="example.stale"
+                            android:exported="false" />
+                    </application>
+                </manifest>
+                """);
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("has no registry index"));
+        assertTrue(
+                failure.getOutput()
+                        .contains(
+                                "games.cafecito.foundry.generated."
+                                        + "FoundryGeneratedStartupProvider"));
+    }
+
+    @Test
+    void zeroModuleVariantRejectsAStaleReservedStartupAuthorityWithoutAnIndex() throws IOException {
+        Path binding =
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("stale-authority-binding.aar"),
+                        List.of("x86_64"));
+        Path project = androidProject("stale-zero-module-authority", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="example.StaleFoundryProvider"
+                            android:authorities="${applicationId}.foundry-java-startup"
+                            android:exported="false" />
+                    </application>
+                </manifest>
+                """);
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("has no registry index"));
+        assertTrue(failure.getOutput().contains("example.StaleFoundryProvider"));
+        assertTrue(failure.getOutput().contains("games.cafecito.test.custom.foundry-java-startup"));
+    }
+
+    @Test
+    void variantPlaceholderCallbacksCannotRedirectModuleBearingStartup() throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("placeholder-order-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project = androidProject("placeholder-order", binding, List.of("x86_64"));
+        writeBootstrapStubs(project);
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        .replace("    id 'games.cafecito.foundry.java'\n", "")
+                        .replace(
+                                "android {\n",
+                                """
+                                androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                                    variant.manifestPlaceholders.put(
+                                        'foundryJavaStartupAuthority',
+                                        'before.foundry-java-startup')
+                                }
+                                apply plugin: 'games.cafecito.foundry.java'
+                                androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                                    variant.manifestPlaceholders.put(
+                                        'foundryJavaStartupProvider',
+                                        'example.AfterProvider')
+                                    variant.manifestPlaceholders.put(
+                                        'foundryJavaStartupAuthority',
+                                        'after.foundry-java-startup')
+                                }
+                                android {
+                                """));
+
+        BuildResult result = run(project, "assembleDebug");
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug").getOutcome());
+        String mergedManifest = mergedManifest(project, "debug");
+        assertTrue(
+                mergedManifest.contains(
+                        "android:name=\"games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider\""));
+        assertTrue(
+                mergedManifest.contains(
+                        "android:authorities=\"games.cafecito.test.custom."
+                                + "foundry-java-startup\""));
+        assertFalse(mergedManifest.contains("example.AfterProvider"));
+        assertFalse(mergedManifest.contains("after.foundry-java-startup"));
+    }
+
+    @Test
+    void mergedManifestAuthorityCollisionFailsWithVariantProviderAndAuthority() throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("authority-collision-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project = androidProject("authority-collision", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="example.ConflictingProvider"
+                            android:authorities="${applicationId}.foundry-java-startup"
+                            android:exported="false" />
+                    </application>
+                </manifest>
+                """);
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("Foundry-Java variant debug"));
+        assertTrue(failure.getOutput().contains("example.ConflictingProvider"));
+        assertTrue(failure.getOutput().contains("games.cafecito.test.custom.foundry-java-startup"));
+    }
+
+    @Test
+    void downstreamMergedManifestStartupOverrideFailsWithEveryCriticalAttribute()
+            throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("startup-override-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project = androidProject("startup-override", binding, List.of("x86_64"));
+        writeBootstrapStubs(project);
+        Files.createDirectories(project.resolve("src/main/res/values"));
+        Files.writeString(
+                project.resolve("src/main/res/values/bools.xml"),
+                """
+                <resources>
+                    <bool name="foundry_disabled">false</bool>
+                </resources>
+                """);
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        .replace(
+                                "android {\n",
+                                """
+                                abstract class CorruptStartupManifest extends DefaultTask {
+                                    @org.gradle.api.tasks.InputFile
+                                    @org.gradle.api.tasks.PathSensitive(
+                                        org.gradle.api.tasks.PathSensitivity.NONE)
+                                    abstract org.gradle.api.file.RegularFileProperty getInputManifest()
+
+                                    @org.gradle.api.tasks.OutputFile
+                                    abstract org.gradle.api.file.RegularFileProperty getOutputManifest()
+
+                                    @org.gradle.api.tasks.TaskAction
+                                    void corrupt() {
+                                        def source = inputManifest.get().asFile.text
+                                        def changed = source
+                                            .replace(
+                                                'android:authorities="games.cafecito.test.custom.foundry-java-startup"',
+                                                'android:authorities="games.cafecito.test.custom.foundry-java-startup;extra.authority"')
+                                            .replace(
+                                                'android:exported="false"',
+                                                'android:exported="true"')
+                                            .replace(
+                                                'android:initOrder="100"',
+                                                'android:enabled="@bool/foundry_disabled" android:initOrder="99" android:process=":wrong"')
+                                        if (changed == source) {
+                                            throw new GradleException(
+                                                'Expected generated startup provider in merged manifest')
+                                        }
+                                        def output = outputManifest.get().asFile
+                                        output.parentFile.mkdirs()
+                                        output.text = changed
+                                    }
+                                }
+                                androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                                    def task = tasks.register(
+                                        "corrupt${variant.name.capitalize()}StartupManifest",
+                                        CorruptStartupManifest)
+                                    variant.artifacts
+                                        .use(task)
+                                        .wiredWithFiles(
+                                            { it.inputManifest },
+                                            { it.outputManifest })
+                                        .toTransform(
+                                            com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST.INSTANCE)
+                                }
+                                android {
+                                """));
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
+
+        assertTrue(failure.getOutput().contains("Foundry-Java variant debug"));
+        assertTrue(
+                failure.getOutput()
+                        .contains(
+                                "games.cafecito.foundry.generated."
+                                        + "FoundryGeneratedStartupProvider"));
+        assertTrue(failure.getOutput().contains("authority expected=games.cafecito.test.custom"));
+        assertTrue(failure.getOutput().contains("actual=games.cafecito.test.custom"));
+        assertTrue(failure.getOutput().contains("extra.authority"));
+        assertTrue(failure.getOutput().contains("exported expected=false, actual=true"));
+        assertTrue(failure.getOutput().contains("process expected=<empty>, actual=:wrong"));
+        assertTrue(failure.getOutput().contains("initOrder expected=100, actual=99"));
+        assertTrue(
+                failure.getOutput()
+                        .contains("enabled expected=<empty>|true, actual=@bool/foundry_disabled"));
     }
 
     @Test
@@ -571,6 +1161,9 @@ class FoundryJavaPluginTest {
 
         assertEquals(
                 TaskOutcome.SUCCESS, first.task(":generateDebugFoundryJavaRegistry").getOutcome());
+        assertEquals(
+                TaskOutcome.SUCCESS,
+                first.task(":verifyDebugFoundryJavaStartupManifest").getOutcome());
         assertTrue(first.getOutput().contains("AGP_VERSION=8.9.1"));
         assertTrue(second.getOutput().contains("Reusing configuration cache."));
         Path generatedAssets =
@@ -589,6 +1182,18 @@ class FoundryJavaPluginTest {
                                                 + "games/cafecito/foundry/generated/"
                                                 + "FoundryGeneratedBootstrap.java"))
                         .contains("example.DemoRegistry.PROVIDER"));
+        String mergedManifest = mergedManifest(project, "debug");
+        assertTrue(
+                mergedManifest.contains(
+                        "android:name=\"games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider\""));
+        assertTrue(
+                mergedManifest.contains(
+                        "android:authorities=\"games.cafecito.test.custom."
+                                + "foundry-java-startup\""));
+        assertTrue(mergedManifest.contains("android:exported=\"false\""));
+        assertTrue(mergedManifest.contains("android:initOrder=\"100\""));
+        assertFalse(mergedManifest.contains("android:process="));
         Path apk =
                 Files.list(project.resolve("build/outputs/apk/debug"))
                         .filter(path -> path.getFileName().toString().endsWith(".apk"))
@@ -900,9 +1505,62 @@ class FoundryJavaPluginTest {
 
     private void writeBootstrapStubs(Path project) throws IOException {
         Path runtime = project.resolve("src/main/java/games/cafecito/foundry/runtime");
+        Path android = project.resolve("src/main/java/games/cafecito/foundry/java");
         Path example = project.resolve("src/main/java/example");
         Files.createDirectories(runtime);
+        Files.createDirectories(android);
         Files.createDirectories(example);
+        Files.writeString(
+                android.resolve("FoundryJavaStartupProvider.java"),
+                """
+                package games.cafecito.foundry.java;
+
+                public abstract class FoundryJavaStartupProvider
+                        extends android.content.ContentProvider {
+                    protected abstract Object bootstrap();
+
+                    @Override
+                    public boolean onCreate() {
+                        return bootstrap() != null;
+                    }
+
+                    @Override
+                    public android.database.Cursor query(
+                            android.net.Uri uri,
+                            String[] projection,
+                            String selection,
+                            String[] selectionArgs,
+                            String sortOrder) {
+                        return null;
+                    }
+
+                    @Override
+                    public String getType(android.net.Uri uri) {
+                        return null;
+                    }
+
+                    @Override
+                    public android.net.Uri insert(
+                            android.net.Uri uri, android.content.ContentValues values) {
+                        return null;
+                    }
+
+                    @Override
+                    public int delete(
+                            android.net.Uri uri, String selection, String[] selectionArgs) {
+                        return 0;
+                    }
+
+                    @Override
+                    public int update(
+                            android.net.Uri uri,
+                            android.content.ContentValues values,
+                            String selection,
+                            String[] selectionArgs) {
+                        return 0;
+                    }
+                }
+                """);
         Files.writeString(
                 runtime.resolve("FoundryModuleProvider.java"),
                 """
@@ -1036,6 +1694,48 @@ class FoundryJavaPluginTest {
                 """);
     }
 
+    private void writeActualRegistrySource(Path project) throws IOException {
+        Path example = project.resolve("src/main/java/example");
+        Files.createDirectories(example);
+        Files.writeString(
+                example.resolve("DemoRegistry.java"),
+                """
+                package example;
+
+                public final class DemoRegistry
+                        implements games.cafecito.foundry.runtime.FoundryModuleProvider {
+                    public static final games.cafecito.foundry.runtime.FoundryModuleProvider
+                            PROVIDER = new DemoRegistry();
+
+                    private static final games.cafecito.foundry.runtime.FoundryModuleDescriptor
+                            DESCRIPTOR =
+                                    new games.cafecito.foundry.runtime.FoundryModuleDescriptor(
+                                            games.cafecito.foundry.runtime
+                                                    .FoundryModuleDescriptor.CURRENT_FORMAT,
+                                            "demo",
+                                            "example.DemoRegistry",
+                                            games.cafecito.foundry.runtime.FoundryRuntime.API_SHA256,
+                                            games.cafecito.foundry.runtime.FoundryRuntime
+                                                    .GENERATOR_VERSION,
+                                            games.cafecito.foundry.runtime.FoundryRuntime
+                                                    .RUNTIME_CONTRACT_VERSION,
+                                            games.cafecito.foundry.runtime.FoundryRuntime
+                                                    .BRIDGE_CONTRACT_VERSION,
+                                            java.util.List.of());
+
+                    @Override
+                    public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor() {
+                        return DESCRIPTOR;
+                    }
+
+                    public static java.util.List<String> desugarProbe(
+                            java.util.List<String> values) {
+                        return values.stream().map(String::trim).toList();
+                    }
+                }
+                """);
+    }
+
     private Path androidProject(String name, Path binding, List<String> requestedAbis)
             throws IOException {
         return androidProject(name, List.of(binding), requestedAbis);
@@ -1086,6 +1786,107 @@ class FoundryJavaPluginTest {
                 .withArguments(arguments)
                 .forwardOutput()
                 .buildAndFail();
+    }
+
+    private static Path releaseApk(Path project) throws IOException {
+        try (var paths = Files.list(project.resolve("build/outputs/apk/release"))) {
+            return paths.filter(path -> path.getFileName().toString().endsWith(".apk"))
+                    .findFirst()
+                    .orElseThrow();
+        }
+    }
+
+    private static Path requireApkAnalyzer(
+            Map<String, String> environment, Path localPropertiesPath) throws IOException {
+        String sdkRoot = environment.get("ANDROID_SDK_ROOT");
+        if (sdkRoot == null || sdkRoot.isBlank()) {
+            sdkRoot = environment.get("ANDROID_HOME");
+        }
+        if ((sdkRoot == null || sdkRoot.isBlank()) && Files.isRegularFile(localPropertiesPath)) {
+            Properties localProperties = new Properties();
+            try (var input = Files.newInputStream(localPropertiesPath)) {
+                localProperties.load(input);
+            }
+            sdkRoot = localProperties.getProperty("sdk.dir");
+        }
+        if (sdkRoot == null || sdkRoot.isBlank()) {
+            throw new IllegalStateException(
+                    "Android SDK root unavailable; set ANDROID_SDK_ROOT or ANDROID_HOME, "
+                            + "or provide sdk.dir in "
+                            + localPropertiesPath);
+        }
+        Path apkAnalyzer = Path.of(sdkRoot.strip()).resolve("cmdline-tools/latest/bin/apkanalyzer");
+        if (!Files.isRegularFile(apkAnalyzer)) {
+            throw new IllegalStateException(
+                    "Required apkanalyzer not found at "
+                            + apkAnalyzer
+                            + "; install Android SDK command-line tools");
+        }
+        return apkAnalyzer;
+    }
+
+    private static Map<String, String> actualConsumerHashes(Path project) throws Exception {
+        return Map.of(
+                "manifest",
+                sha256(
+                        project.resolve(
+                                "build/generated/manifests/"
+                                        + "generateReleaseFoundryJavaRegistry/"
+                                        + "AndroidManifest.xml")),
+                "provider",
+                sha256(
+                        project.resolve(
+                                "build/generated/java/"
+                                        + "generateReleaseFoundryJavaRegistry/"
+                                        + "games/cafecito/foundry/generated/"
+                                        + "FoundryGeneratedStartupProvider.java")),
+                "index",
+                sha256(
+                        project.resolve(
+                                "build/generated/assets/"
+                                        + "generateReleaseFoundryJavaRegistry/"
+                                        + "foundry_java/registry-index-v2.txt")),
+                "configuration",
+                sha256(
+                        project.resolve(
+                                "build/generated/assets/"
+                                        + "generateReleaseFoundryJavaRegistry/"
+                                        + "FoundryJava.foundryextension")),
+                "mapping",
+                sha256(project.resolve("build/outputs/mapping/release/mapping.txt")),
+                "apk",
+                sha256(releaseApk(project)));
+    }
+
+    private static String sha256(Path path) throws Exception {
+        return HexFormat.of()
+                .formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(path)));
+    }
+
+    private static String runProcess(Path executable, String... arguments) throws Exception {
+        List<String> command = new ArrayList<>();
+        command.add(executable.toString());
+        command.addAll(List.of(arguments));
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        int exitCode = process.waitFor();
+        assertEquals(0, exitCode, output);
+        return output;
+    }
+
+    private String mergedManifest(Path project, String variant) throws IOException {
+        Path root = project.resolve("build/intermediates/merged_manifest").resolve(variant);
+        try (var paths = Files.walk(root)) {
+            Path manifest =
+                    paths.filter(
+                                    path ->
+                                            path.getFileName()
+                                                    .toString()
+                                                    .equals("AndroidManifest.xml"))
+                            .findFirst()
+                            .orElseThrow();
+            return Files.readString(manifest);
+        }
     }
 
     private BuildResult runWithFoundryPluginOnly(Path project, String... arguments)
@@ -1164,6 +1965,45 @@ class FoundryJavaPluginTest {
 
     private Path bindingAarWithoutDescriptor(Path output, List<String> abis) throws IOException {
         return bindingAar(output, null, abis);
+    }
+
+    private Path descriptorAarWithConsumerRules(Path output, String module, String registry)
+            throws IOException {
+        Files.createDirectories(output.getParent());
+        byte[] classesBytes =
+                classesJar(
+                        "META-INF/foundry-java/modules/" + module + ".descriptor",
+                        descriptor(module, registry),
+                        false);
+        try (ZipOutputStream archive = new ZipOutputStream(Files.newOutputStream(output))) {
+            ZipEntry manifest = new ZipEntry("AndroidManifest.xml");
+            manifest.setTime(0);
+            archive.putNextEntry(manifest);
+            archive.write(
+                    "<manifest package=\"games.cafecito.module\" />\n"
+                            .getBytes(StandardCharsets.UTF_8));
+            archive.closeEntry();
+            ZipEntry classes = new ZipEntry("classes.jar");
+            classes.setTime(0);
+            archive.putNextEntry(classes);
+            archive.write(classesBytes);
+            archive.closeEntry();
+            ZipEntry consumerRules = new ZipEntry("proguard.txt");
+            consumerRules.setTime(0);
+            archive.putNextEntry(consumerRules);
+            archive.write(
+                    ("""
+                    -keep class %s {
+                        public static final games.cafecito.foundry.runtime.FoundryModuleProvider PROVIDER;
+                        public games.cafecito.foundry.runtime.FoundryModuleDescriptor descriptor();
+                        public static java.util.List desugarProbe(java.util.List);
+                    }
+                    """
+                                    .formatted(registry))
+                            .getBytes(StandardCharsets.UTF_8));
+            archive.closeEntry();
+        }
+        return output;
     }
 
     private Path bindingAar(Path output, String descriptorContents, List<String> abis)
@@ -1524,6 +2364,12 @@ class FoundryJavaPluginTest {
                 class=example.Extension|Extension|example.Node|SCENE|
                 """
                 .formatted(module, registry, API_SHA);
+    }
+
+    private static String encoded(String value) {
+        return Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(value.getBytes(StandardCharsets.UTF_8));
     }
 
     private record MavenDependency(String group, String artifact, String version, String scope) {}

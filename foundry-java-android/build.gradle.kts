@@ -28,11 +28,29 @@ android {
         }
     }
 
+    buildTypes {
+        getByName("debug") {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=ON"
+                }
+            }
+        }
+        getByName("release") {
+            externalNativeBuild {
+                cmake {
+                    arguments += "-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=OFF"
+                }
+            }
+        }
+    }
+
     testOptions {
         targetSdk = 36
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -51,6 +69,7 @@ android {
 
 dependencies {
     api(project(":foundry-java-runtime"))
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.jupiter.engine)
@@ -72,6 +91,21 @@ afterEvaluate {
 }
 
 val nativeTestScript = rootProject.layout.projectDirectory.file("gradle/run-native-tests.sh")
+val nativeAbiLayoutScript = rootProject.layout.projectDirectory.file("gradle/verify-native-abi-layout.sh")
+
+val nativeAbiLayoutTest =
+    tasks.register<Exec>("nativeAbiLayoutTest") {
+        group = "verification"
+        description = "Verifies deterministic native-only ABI layout generation."
+        inputs.files(
+            fileTree("src/main/cpp/cmake"),
+            file("src/main/cpp/foundry_java_abi_layout.h.in"),
+            rootProject.file("api/current/extension_api.json"),
+            rootProject.file("api/current/provenance.json"),
+        )
+        inputs.file(nativeAbiLayoutScript)
+        commandLine("bash", nativeAbiLayoutScript.asFile.absolutePath, projectDir.absolutePath)
+    }
 
 val nativeHostTest =
     tasks.register<Exec>("nativeHostTest") {
@@ -80,6 +114,7 @@ val nativeHostTest =
         inputs.files(
             fileTree("src/main/cpp"),
             fileTree("src/test/cpp"),
+            fileTree("src/androidTest/cpp"),
             rootProject.fileTree("api/current"),
         )
         inputs.file(nativeTestScript)
@@ -94,6 +129,7 @@ val nativeSanitizerTest =
         inputs.files(
             fileTree("src/main/cpp"),
             fileTree("src/test/cpp"),
+            fileTree("src/androidTest/cpp"),
             rootProject.fileTree("api/current"),
         )
         inputs.file(nativeTestScript)
@@ -102,5 +138,5 @@ val nativeSanitizerTest =
     }
 
 tasks.named("check") {
-    dependsOn(nativeHostTest, nativeSanitizerTest)
+    dependsOn(nativeAbiLayoutTest, nativeHostTest, nativeSanitizerTest)
 }
