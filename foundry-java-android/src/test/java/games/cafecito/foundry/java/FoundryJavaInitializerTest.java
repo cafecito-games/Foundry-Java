@@ -53,6 +53,8 @@ class FoundryJavaInitializerTest {
 
         assertTrue(rules.contains("FoundryJavaInitializer"));
         assertTrue(rules.contains("FoundryGeneratedBootstrap"));
+        assertTrue(rules.contains("FoundryGeneratedStartupProvider"));
+        assertTrue(rules.contains("FoundryJavaStartupProvider"));
         assertTrue(rules.contains("FoundryModuleProvider"));
         assertTrue(rules.contains("FoundryBridgeCallbacks"));
         assertFalse(rules.contains("games.cafecito.foundry.**"));

@@ -3,6 +3,7 @@ package games.cafecito.foundry.gradle;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -54,6 +55,69 @@ class FoundryJavaPluginTest {
                     .getBytes(StandardCharsets.UTF_8);
 
     @TempDir Path temporaryDirectory;
+
+    @Test
+    void apkAnalyzerResolutionPrefersSdkRootEnvironment() throws Exception {
+        Path sdkRoot = temporaryDirectory.resolve("sdk-root");
+        Path androidHome = temporaryDirectory.resolve("android-home");
+        Path apkAnalyzer = sdkRoot.resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Files.createDirectories(apkAnalyzer.getParent());
+        Files.createFile(apkAnalyzer);
+        Path localProperties = temporaryDirectory.resolve("local.properties");
+        Files.writeString(localProperties, "sdk.dir=" + temporaryDirectory.resolve("local-sdk"));
+
+        assertEquals(
+                apkAnalyzer,
+                requireApkAnalyzer(
+                        Map.of(
+                                "ANDROID_SDK_ROOT",
+                                sdkRoot.toString(),
+                                "ANDROID_HOME",
+                                androidHome.toString()),
+                        localProperties));
+    }
+
+    @Test
+    void apkAnalyzerResolutionReportsMissingRequiredTool() throws Exception {
+        Path sdkRoot = temporaryDirectory.resolve("sdk-without-command-line-tools");
+
+        IllegalStateException failure =
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                requireApkAnalyzer(
+                                        Map.of("ANDROID_SDK_ROOT", sdkRoot.toString()),
+                                        temporaryDirectory.resolve("missing-local.properties")));
+
+        assertTrue(failure.getMessage().contains("Required apkanalyzer not found"));
+        assertTrue(failure.getMessage().contains(sdkRoot.toString()));
+    }
+
+    @Test
+    void apkAnalyzerResolutionFallsBackToAndroidHome() throws Exception {
+        Path androidHome = temporaryDirectory.resolve("android-home");
+        Path apkAnalyzer = androidHome.resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Files.createDirectories(apkAnalyzer.getParent());
+        Files.createFile(apkAnalyzer);
+
+        assertEquals(
+                apkAnalyzer,
+                requireApkAnalyzer(
+                        Map.of("ANDROID_SDK_ROOT", " ", "ANDROID_HOME", androidHome.toString()),
+                        temporaryDirectory.resolve("missing-local.properties")));
+    }
+
+    @Test
+    void apkAnalyzerResolutionFallsBackToLocalProperties() throws Exception {
+        Path sdkRoot = temporaryDirectory.resolve("local-sdk");
+        Path apkAnalyzer = sdkRoot.resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Files.createDirectories(apkAnalyzer.getParent());
+        Files.createFile(apkAnalyzer);
+        Path localProperties = temporaryDirectory.resolve("local.properties");
+        Files.writeString(localProperties, "sdk.dir=" + sdkRoot);
+
+        assertEquals(apkAnalyzer, requireApkAnalyzer(Map.of(), localProperties));
+    }
 
     @Test
     void zeroModulesProducesNoOptInMarkerOrBootstrap() throws IOException {
@@ -653,13 +717,8 @@ class FoundryJavaPluginTest {
 
         assertTrue(second.getOutput().contains("Reusing configuration cache."));
         Path apk = releaseApk(project);
-        Properties localProperties = new Properties();
-        try (var input = Files.newInputStream(project.resolve("local.properties"))) {
-            localProperties.load(input);
-        }
         Path apkAnalyzer =
-                Path.of(localProperties.getProperty("sdk.dir"))
-                        .resolve("cmdline-tools/latest/bin/apkanalyzer");
+                requireApkAnalyzer(System.getenv(), project.resolve("local.properties"));
         String definedPackages =
                 runProcess(apkAnalyzer, "dex", "packages", "--defined-only", apk.toString());
         assertTrue(definedPackages.contains("j$.util"));
@@ -1625,6 +1684,37 @@ class FoundryJavaPluginTest {
                     .findFirst()
                     .orElseThrow();
         }
+    }
+
+    private static Path requireApkAnalyzer(
+            Map<String, String> environment, Path localPropertiesPath) throws IOException {
+        String sdkRoot = environment.get("ANDROID_SDK_ROOT");
+        if (sdkRoot == null || sdkRoot.isBlank()) {
+            sdkRoot = environment.get("ANDROID_HOME");
+        }
+        if ((sdkRoot == null || sdkRoot.isBlank())
+                && Files.isRegularFile(localPropertiesPath)) {
+            Properties localProperties = new Properties();
+            try (var input = Files.newInputStream(localPropertiesPath)) {
+                localProperties.load(input);
+            }
+            sdkRoot = localProperties.getProperty("sdk.dir");
+        }
+        if (sdkRoot == null || sdkRoot.isBlank()) {
+            throw new IllegalStateException(
+                    "Android SDK root unavailable; set ANDROID_SDK_ROOT or ANDROID_HOME, "
+                            + "or provide sdk.dir in "
+                            + localPropertiesPath);
+        }
+        Path apkAnalyzer =
+                Path.of(sdkRoot.strip()).resolve("cmdline-tools/latest/bin/apkanalyzer");
+        if (!Files.isRegularFile(apkAnalyzer)) {
+            throw new IllegalStateException(
+                    "Required apkanalyzer not found at "
+                            + apkAnalyzer
+                            + "; install Android SDK command-line tools");
+        }
+        return apkAnalyzer;
     }
 
     private static Map<String, String> actualConsumerHashes(Path project) throws Exception {
