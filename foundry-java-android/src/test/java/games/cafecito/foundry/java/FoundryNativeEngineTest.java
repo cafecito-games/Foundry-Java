@@ -11,7 +11,9 @@ import games.cafecito.foundry.runtime.FoundryClassDescriptor;
 import games.cafecito.foundry.runtime.FoundryEngine;
 import games.cafecito.foundry.runtime.FoundryNativeDispatch;
 import games.cafecito.foundry.runtime.FoundrySignal;
+import games.cafecito.foundry.types.FoundryArray;
 import games.cafecito.foundry.types.FoundryDictionary;
+import games.cafecito.foundry.types.Rid;
 import games.cafecito.foundry.types.Variant;
 import games.cafecito.foundry.types.VariantCodec;
 import java.lang.reflect.Method;
@@ -19,6 +21,9 @@ import java.lang.reflect.Modifier;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
@@ -209,6 +214,67 @@ class FoundryNativeEngineTest {
     }
 
     @Test
+    void rejectsNonzeroLocalRidBeforeGatewayButAcceptsNativeBackedRid() {
+        RecordingGateway gateway = new RecordingGateway();
+        FoundryNativeEngine engine =
+                new FoundryNativeEngine(11, ignored -> utility("Variant", 0, true), gateway);
+
+        IllegalArgumentException local =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> engine.encodeVariant(11, Variant.of(new Rid(9))));
+        assertTrue(local.getMessage().contains("nonzero local RID"));
+        assertEquals(0, gateway.encodes);
+
+        Rid nativeRid = Rid.nativeBacked(11, 91, (context, handle) -> {});
+        engine.encodeVariant(11, Variant.of(nativeRid));
+        assertEquals(1, gateway.encodes);
+
+        IllegalArgumentException foreign =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () ->
+                                engine.encodeVariant(
+                                        11,
+                                        Variant.of(
+                                                Rid.nativeBacked(
+                                                        12, 92, (context, handle) -> {}))));
+        assertTrue(foreign.getMessage().contains("RID context mismatch"));
+        assertEquals(1, gateway.encodes);
+    }
+
+    @Test
+    void collectionBridgeSnapshotsExposeRawVariantsWithoutReflection() {
+        FoundryArray<Variant> array = FoundryArray.untyped();
+        array.addVariant(Variant.of(7L));
+        array.addVariant(Variant.of("value"));
+        assertEquals(
+                List.of(Variant.of(7L), Variant.of("value")), List.of(array.variantSnapshot()));
+
+        FoundryDictionary<Variant, Variant> dictionary =
+                new FoundryDictionary<>(VariantCodec.VARIANT, VariantCodec.VARIANT);
+        dictionary.putVariants(Variant.of("key"), Variant.of(8L));
+        FoundryDictionary.VariantSnapshot snapshot = dictionary.variantSnapshot();
+        assertEquals(List.of(Variant.of("key")), List.of(snapshot.keys()));
+        assertEquals(List.of(Variant.of(8L)), List.of(snapshot.values()));
+    }
+
+    @Test
+    void decodedNativeCallableUsesUnknownVariadicArity() {
+        new FoundryNativeEngine(
+                11,
+                ignored ->
+                        builtinMethod(
+                                "Callable", "call", 3643564216L, List.of(), 0, true, "Variant"),
+                new RecordingGateway());
+
+        FoundryCallable callable = FoundryNativeEngine.nativeCallableFromBridge(11, 81);
+
+        assertEquals(-1, callable.arity());
+        callable.close();
+    }
+
+    @Test
     void delegatesEveryImplementedHostNeutralOperationToTheInjectedGateway() {
         RecordingGateway gateway = new RecordingGateway();
         FoundryNativeEngine engine =
@@ -289,7 +355,7 @@ class FoundryNativeEngineTest {
                         "builtin_classes/Signal/methods/emit#3286317445",
                         "builtin_classes/Signal/methods/disconnect#3470848906"),
                 gateway.dispatchIdentities);
-        assertEquals(List.of(81L, 82L), gateway.releasedHandles);
+        assertEquals(List.of(81L, 81L, 82L), gateway.releasedHandles);
     }
 
     @Test
@@ -367,7 +433,70 @@ class FoundryNativeEngineTest {
     }
 
     @Test
-    void nativeSignalCloseAttemptsAllCleanupAndRetriesFailuresWithoutLeaking() {
+    void nativeSignalKeepsIndependentNativeCallableLeaseUntilDisconnect() {
+        RecordingGateway gateway = new RecordingGateway();
+        new FoundryNativeEngine(11, signalDispatches()::get, gateway);
+        FoundryCallable callable = FoundryNativeEngine.nativeCallableFromBridge(11, 81, 0);
+        FoundrySignal signal = FoundryNativeEngine.nativeSignalFromBridge(11, 82);
+        gateway.callResults.add(FoundryEngine.CallResult.success(Variant.of(0L)));
+
+        FoundrySignal.Connection connection = signal.connect(callable);
+        callable.close();
+        connection.disconnect();
+        signal.close();
+
+        assertEquals(1, gateway.events.stream().filter(event -> event.equals("retain:81")).count());
+        assertEquals(2, gateway.releasedHandles.stream().filter(handle -> handle == 81L).count());
+        assertFalse(connection.isConnected());
+    }
+
+    @Test
+    void nativeSignalCanDisconnectClosedLocalCallableUsingExactConnectedIdentity() {
+        RecordingGateway gateway = new RecordingGateway();
+        new FoundryNativeEngine(11, signalDispatches()::get, gateway);
+        FoundryCallable callable = FoundryCallable.fixed(0, ignored -> Variant.nil());
+        FoundrySignal signal = FoundryNativeEngine.nativeSignalFromBridge(11, 82);
+        gateway.callResults.add(FoundryEngine.CallResult.success(Variant.of(0L)));
+
+        FoundrySignal.Connection connection = signal.connect(callable);
+        callable.close();
+        connection.disconnect();
+        signal.close();
+
+        assertFalse(connection.isConnected());
+        assertEquals(
+                1,
+                gateway.dispatchIdentities.stream()
+                        .filter("builtin_classes/Signal/methods/disconnect#3470848906"::equals)
+                        .count());
+    }
+
+    @Test
+    void failedConnectPreservesRetryableNativeCallableCleanupForSignalClose() {
+        RecordingGateway gateway = new RecordingGateway();
+        new FoundryNativeEngine(11, signalDispatches()::get, gateway);
+        FoundryCallable callable = FoundryNativeEngine.nativeCallableFromBridge(11, 81, 0);
+        FoundrySignal signal = FoundryNativeEngine.nativeSignalFromBridge(11, 82);
+        gateway.callFailures.add(new IllegalStateException("connect failed"));
+        gateway.releaseFailures.add(new IllegalStateException("callable cleanup failed"));
+
+        IllegalStateException failure =
+                assertThrows(IllegalStateException.class, () -> signal.connect(callable));
+
+        assertEquals("connect failed", failure.getMessage());
+        assertEquals(1, failure.getSuppressed().length);
+        assertEquals("callable cleanup failed", failure.getSuppressed()[0].getMessage());
+        assertEquals(0, gateway.releasedHandles.stream().filter(handle -> handle == 81L).count());
+
+        signal.close();
+
+        assertEquals(1, gateway.releasedHandles.stream().filter(handle -> handle == 81L).count());
+        assertEquals(1, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
+        callable.close();
+    }
+
+    @Test
+    void nativeSignalClosePreservesOnlyFailedDisconnectsForRetryBeforeHandleRelease() {
         RecordingGateway gateway = new RecordingGateway();
         Map<String, FoundryNativeDispatch> dispatches =
                 Map.of(
@@ -398,14 +527,13 @@ class FoundryNativeEngineTest {
         signal.connect(first);
         signal.connect(second);
         gateway.callFailures.add(new IllegalStateException("disconnect failed"));
-        gateway.releaseFailures.add(new IllegalStateException("release failed"));
 
         IllegalStateException failure = assertThrows(IllegalStateException.class, signal::close);
 
         assertEquals("disconnect failed", failure.getMessage());
-        assertEquals(1, failure.getSuppressed().length);
-        assertEquals("release failed", failure.getSuppressed()[0].getMessage());
+        assertEquals(0, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
 
+        signal.close();
         signal.close();
 
         assertEquals(
@@ -419,6 +547,76 @@ class FoundryNativeEngineTest {
         assertEquals(1, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
         first.close();
         second.close();
+    }
+
+    @Test
+    void nativeSignalCloseDisconnectsActiveConnectionsBeforeReleasingHandleExactlyOnce() {
+        RecordingGateway gateway = new RecordingGateway();
+        Map<String, FoundryNativeDispatch> dispatches = signalDispatches();
+        new FoundryNativeEngine(11, dispatches::get, gateway);
+        FoundryCallable first = FoundryNativeEngine.nativeCallableFromBridge(11, 81, 0);
+        FoundryCallable second = FoundryNativeEngine.nativeCallableFromBridge(11, 83, 0);
+        FoundrySignal signal = FoundryNativeEngine.nativeSignalFromBridge(11, 82);
+        gateway.callResults.add(FoundryEngine.CallResult.success(Variant.of(0L)));
+        gateway.callResults.add(FoundryEngine.CallResult.success(Variant.of(0L)));
+        signal.connect(first);
+        signal.connect(second);
+
+        signal.close();
+        signal.close();
+
+        assertEquals(
+                List.of(
+                        "builtin_classes/Signal/methods/connect#979702392",
+                        "builtin_classes/Signal/methods/connect#979702392",
+                        "builtin_classes/Signal/methods/disconnect#3470848906",
+                        "builtin_classes/Signal/methods/disconnect#3470848906"),
+                gateway.dispatchIdentities);
+        assertEquals(1, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
+        first.close();
+        second.close();
+    }
+
+    @Test
+    void nativeSignalCloseRacingConnectDisconnectsTheLateConnectionAndReleasesExactlyOnce()
+            throws Exception {
+        RecordingGateway gateway = new RecordingGateway();
+        Map<String, FoundryNativeDispatch> dispatches = signalDispatches();
+        new FoundryNativeEngine(11, dispatches::get, gateway);
+        FoundryCallable callable = FoundryNativeEngine.nativeCallableFromBridge(11, 81, 0);
+        FoundrySignal signal = FoundryNativeEngine.nativeSignalFromBridge(11, 82);
+        gateway.callResults.add(FoundryEngine.CallResult.success(Variant.of(0L)));
+        gateway.blockCall("builtin_classes/Signal/methods/connect#979702392");
+        AtomicReference<Throwable> connectFailure = new AtomicReference<>();
+        Thread connector =
+                new Thread(
+                        () -> {
+                            try {
+                                signal.connect(callable);
+                            } catch (Throwable failure) {
+                                connectFailure.set(failure);
+                            }
+                        });
+
+        connector.start();
+        assertTrue(gateway.callEntered.await(5, TimeUnit.SECONDS));
+        signal.close();
+        gateway.allowCall.countDown();
+        connector.join(5_000);
+
+        assertFalse(connector.isAlive());
+        assertTrue(connectFailure.get() instanceof IllegalStateException);
+        assertTrue(connectFailure.get().getMessage().contains("closed while connecting"));
+        assertEquals(
+                1,
+                gateway.dispatchIdentities.stream()
+                        .filter(
+                                identity ->
+                                        identity.equals(
+                                                "builtin_classes/Signal/methods/disconnect#3470848906"))
+                        .count());
+        assertEquals(1, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
+        callable.close();
     }
 
     @Test
@@ -541,6 +739,22 @@ class FoundryNativeEngineTest {
                 false);
     }
 
+    private static Map<String, FoundryNativeDispatch> signalDispatches() {
+        FoundryNativeDispatch connect =
+                builtinMethod(
+                        "Signal",
+                        "connect",
+                        979702392L,
+                        List.of("Callable", "int"),
+                        1,
+                        false,
+                        "int");
+        FoundryNativeDispatch disconnect =
+                builtinMethod(
+                        "Signal", "disconnect", 3470848906L, List.of("Callable"), 1, false, "Nil");
+        return Map.of(connect.identity(), connect, disconnect.identity(), disconnect);
+    }
+
     private static final class RecordingGateway implements FoundryNativeEngine.NativeGateway {
         private final java.util.ArrayList<String> events = new java.util.ArrayList<>();
         private final java.util.ArrayDeque<FoundryEngine.CallResult> callResults =
@@ -554,6 +768,15 @@ class FoundryNativeEngineTest {
         private int calls;
         private int encodes;
         private int registrations;
+        private String blockedCallIdentity;
+        private CountDownLatch callEntered = new CountDownLatch(0);
+        private CountDownLatch allowCall = new CountDownLatch(0);
+
+        private void blockCall(String identity) {
+            blockedCallIdentity = identity;
+            callEntered = new CountDownLatch(1);
+            allowCall = new CountDownLatch(1);
+        }
 
         @Override
         public FoundryEngine.CallResult call(
@@ -563,6 +786,19 @@ class FoundryNativeEngineTest {
                 Variant[] arguments) {
             calls++;
             dispatchIdentities.add(dispatch.identity());
+            if (dispatch.identity().equals(blockedCallIdentity)) {
+                callEntered.countDown();
+                try {
+                    if (!allowCall.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException(
+                                "timed out waiting to release blocked call");
+                    }
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while blocking call", failure);
+                }
+                blockedCallIdentity = null;
+            }
             if (!callFailures.isEmpty()) {
                 throw callFailures.removeFirst();
             }
@@ -630,12 +866,16 @@ class FoundryNativeEngineTest {
 
         @Override
         public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {
-            registrations++;
+            throw registrationFailure();
         }
 
         @Override
         public void unregisterExtensionClass(long contextHandle, String foundryName) {
-            registrations++;
+            throw registrationFailure();
+        }
+
+        private UnsupportedOperationException registrationFailure() {
+            return new UnsupportedOperationException("registration_unavailable_before_task5");
         }
     }
 

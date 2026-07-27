@@ -376,6 +376,56 @@ class CallAndSignalTest {
         assertThrows(IllegalStateException.class, signal[0]::emit);
     }
 
+    @Test
+    void nativeSignalConnectFailureRemainsPrimaryWhenConcurrentCloseReleaseFails() {
+        FoundrySignal[] signal = new FoundrySignal[1];
+        int[] releaseAttempts = {0};
+        signal[0] =
+                FoundrySignal.nativeBacked(
+                        12,
+                        99,
+                        new FoundrySignal.NativeBackend() {
+                            @Override
+                            public long connect(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    FoundryCallable callable) {
+                                signal[0].close();
+                                throw new IllegalStateException("connect failed");
+                            }
+
+                            @Override
+                            public void disconnect(
+                                    long contextHandle, long signalHandle, long connectionHandle) {}
+
+                            @Override
+                            public void emit(
+                                    long contextHandle,
+                                    long signalHandle,
+                                    List<Variant> arguments) {}
+
+                            @Override
+                            public void release(long contextHandle, long signalHandle) {
+                                if (++releaseAttempts[0] == 1) {
+                                    throw new IllegalStateException("release failed");
+                                }
+                            }
+                        });
+
+        IllegalStateException failure =
+                assertThrows(
+                        IllegalStateException.class,
+                        () ->
+                                signal[0].connect(
+                                        FoundryCallable.fixed(0, ignored -> Variant.nil())));
+
+        assertEquals("connect failed", failure.getMessage());
+        assertEquals(1, failure.getSuppressed().length);
+        assertEquals("release failed", failure.getSuppressed()[0].getMessage());
+        signal[0].close();
+        assertEquals(2, releaseAttempts[0]);
+    }
+
     static final class CallableObject extends FoundryObject {
         CallableObject(FoundryBindingContext context, ObjectLease lease) {
             super(context, lease);

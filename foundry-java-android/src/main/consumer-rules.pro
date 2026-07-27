@@ -12,6 +12,10 @@
 # The production engine exposes only the frozen, versioned JNI boundary.
 -keepnames class games.cafecito.foundry.java.FoundryNativeEngine
 -keepclassmembers,includedescriptorclasses class games.cafecito.foundry.java.FoundryNativeEngine {
+    private static games.cafecito.foundry.java.FoundryNativeEngine$NativeVariantSnapshot nativeSnapshotV1(long, games.cafecito.foundry.types.Variant);
+    private static games.cafecito.foundry.types.Variant nativeVariantFromSnapshotV1(long, long, games.cafecito.foundry.java.FoundryNativeEngine$NativeVariantSnapshot);
+    private static games.cafecito.foundry.types.Variant invokeLocalCallableV1(long, games.cafecito.foundry.runtime.FoundryCallable, games.cafecito.foundry.types.Variant[]);
+    private static java.lang.String[] nativeDispatchArgumentTypesV1(games.cafecito.foundry.runtime.FoundryNativeDispatch);
     private static native games.cafecito.foundry.runtime.FoundryEngine$CallResult nativeCallV1(long, long, games.cafecito.foundry.runtime.FoundryNativeDispatch, games.cafecito.foundry.types.Variant[]);
     private static native games.cafecito.foundry.types.Variant nativeDecodeVariantV1(long, long);
     private static native long nativeEncodeVariantV1(long, games.cafecito.foundry.types.Variant);
@@ -24,6 +28,51 @@
     private static native void nativeReportCallbackExceptionV1(long, long, java.lang.Throwable);
     private static native void nativeRegisterExtensionClassV1(long, games.cafecito.foundry.runtime.FoundryClassDescriptor);
     private static native void nativeUnregisterExtensionClassV1(long, java.lang.String);
+}
+
+-keep,allowoptimization class games.cafecito.foundry.java.FoundryNativeEngine$NativeVariantSnapshot {
+    <init>(int, long[], double[], java.lang.String, games.cafecito.foundry.types.Variant[], games.cafecito.foundry.types.Variant[], long, long, games.cafecito.foundry.runtime.FoundryCallable, int);
+    int type();
+    long[] integers();
+    double[] reals();
+    java.lang.String text();
+    games.cafecito.foundry.types.Variant[] keys();
+    games.cafecito.foundry.types.Variant[] values();
+    long nativeContext();
+    long nativeHandle();
+    games.cafecito.foundry.runtime.FoundryCallable callback();
+    int callableArity();
+}
+
+-keep,allowoptimization class games.cafecito.foundry.runtime.FoundryNativeDispatch {
+    java.lang.String identity();
+    games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind kind();
+    java.lang.String ownerNativeType();
+    java.lang.String nativeName();
+    long compatibilityHash();
+    int constructorIndex();
+    int minimumArgumentCount();
+    java.lang.String returnNativeType();
+    java.lang.String getterIdentity();
+    java.lang.String getterNativeName();
+    long getterCompatibilityHash();
+    java.lang.String setterIdentity();
+    java.lang.String setterNativeName();
+    long setterCompatibilityHash();
+    boolean vararg();
+    boolean staticCall();
+}
+
+-keep,allowoptimization class games.cafecito.foundry.runtime.FoundryNativeDispatch$Kind {
+    int wireCode();
+}
+
+-keep,allowoptimization class games.cafecito.foundry.runtime.FoundryEngine$CallResult {
+    <init>(games.cafecito.foundry.types.Variant, games.cafecito.foundry.runtime.FoundryCallError, int, java.lang.String);
+}
+
+-keep,allowoptimization enum games.cafecito.foundry.runtime.FoundryCallError {
+    public static games.cafecito.foundry.runtime.FoundryCallError valueOf(java.lang.String);
 }
 
 # The generated application bootstrap is the single registry handoff.

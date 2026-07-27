@@ -35,7 +35,7 @@ public final class ObjectLease implements Runnable {
     private final LinkedHashMap<Long, InvalidationListener> invalidationListeners =
             new LinkedHashMap<>();
     private long nextInvalidationSubscriptionId = 1;
-    private boolean retained;
+    private ObjectOwnership ownership;
     private boolean released;
 
     ObjectLease(
@@ -49,9 +49,9 @@ public final class ObjectLease implements Runnable {
         Objects.requireNonNull(ownership, "ownership");
         this.engine = Objects.requireNonNull(engine, "engine");
         this.contextAlive = Objects.requireNonNull(contextAlive, "contextAlive");
+        this.ownership = ownership;
         if (ownership == ObjectOwnership.REFERENCE_COUNTED) {
             engine.retain(contextHandle, objectHandle);
-            retained = true;
         }
     }
 
@@ -65,7 +65,7 @@ public final class ObjectLease implements Runnable {
 
     public ObjectOwnership ownership() {
         synchronized (stateLock) {
-            return retained ? ObjectOwnership.REFERENCE_COUNTED : ObjectOwnership.BORROWED;
+            return ownership;
         }
     }
 
@@ -124,14 +124,16 @@ public final class ObjectLease implements Runnable {
     void upgrade(ObjectOwnership requestedOwnership) {
         Objects.requireNonNull(requestedOwnership, "requestedOwnership");
         synchronized (stateLock) {
-            if (requestedOwnership != ObjectOwnership.REFERENCE_COUNTED
-                    || retained
+            if (requestedOwnership == ObjectOwnership.BORROWED
+                    || ownership != ObjectOwnership.BORROWED
                     || released
                     || !alive.get()) {
                 return;
             }
-            engine.retain(contextHandle, objectHandle);
-            retained = true;
+            if (requestedOwnership == ObjectOwnership.REFERENCE_COUNTED) {
+                engine.retain(contextHandle, objectHandle);
+            }
+            ownership = requestedOwnership;
         }
     }
 
@@ -151,7 +153,7 @@ public final class ObjectLease implements Runnable {
                 listeners.add(entry.listener());
             }
             invalidationListeners.clear();
-            shouldRelease = releaseReference && retained && !released;
+            shouldRelease = releaseReference && ownership != ObjectOwnership.BORROWED && !released;
             released = released || shouldRelease;
         }
         return new Transition(listeners, shouldRelease);

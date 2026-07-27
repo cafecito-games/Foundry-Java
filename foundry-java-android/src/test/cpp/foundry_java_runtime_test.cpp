@@ -35,8 +35,11 @@ int native_object_destroy_count = 0;
 std::uint64_t requested_object_id = 0;
 int ref_method_lookup_count = 0;
 int ref_reference_count = 0;
+int ref_init_count = 0;
 int ref_unreference_count = 0;
 bool ref_hashes_valid = true;
+foundry_java::NativeTransport *reentrant_transport = nullptr;
+bool ref_cleanup_reentered = false;
 FoundryExtensionVariantType copied_variant_type = FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
 int variant_copy_count = 0;
 int variant_destroy_count = 0;
@@ -73,6 +76,7 @@ int signal_construct_count = 0;
 int rid_default_construct_count = 0;
 int callable_custom_create_count = 0;
 FoundryExtensionInt callable_reported_argument_count = -2;
+std::vector<FoundryExtensionCallableCustomInfo2> callable_custom_infos;
 
 struct FakeCallableBox {
 	FoundryExtensionCallableCustomInfo2 info{};
@@ -203,6 +207,52 @@ void fake_ref_ptrcall(
 		ref_reference_count++;
 		*static_cast<FoundryExtensionBool *>(result) = 1;
 	} else if (index == 2) {
+		ref_unreference_count++;
+		*static_cast<FoundryExtensionBool *>(result) = 1;
+	}
+}
+
+void fake_ref_reentrant_ptrcall(
+		FoundryExtensionMethodBindPtr method,
+		FoundryExtensionObjectPtr object,
+		const FoundryExtensionConstTypePtr *arguments,
+		FoundryExtensionTypePtr result) {
+	fake_ref_ptrcall(method, object, arguments, result);
+	if (reinterpret_cast<std::uintptr_t>(method) == 2 &&
+			reentrant_transport != nullptr) {
+		(void)reentrant_transport->track_object(
+				45, 3, object, "Node", false);
+		ref_cleanup_reentered = true;
+	}
+}
+
+FoundryExtensionMethodBindPtr fake_ref_instantiate_method_bind(
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionConstStringNamePtr,
+		FoundryExtensionInt hash) {
+	if (hash == 4023243586) {
+		return reinterpret_cast<FoundryExtensionMethodBindPtr>(10);
+	}
+	if (hash == 2240911060) {
+		ref_method_lookup_count++;
+		return reinterpret_cast<FoundryExtensionMethodBindPtr>(
+				ref_method_lookup_count == 1 ? 11 : 12);
+	}
+	return nullptr;
+}
+
+void fake_ref_instantiate_ptrcall(
+		FoundryExtensionMethodBindPtr method,
+		FoundryExtensionObjectPtr,
+		const FoundryExtensionConstTypePtr *,
+		FoundryExtensionTypePtr result) {
+	const auto index = reinterpret_cast<std::uintptr_t>(method);
+	if (index == 10) {
+		postinitialize_count++;
+	} else if (index == 11) {
+		ref_init_count++;
+		*static_cast<FoundryExtensionBool *>(result) = 1;
+	} else if (index == 12) {
 		ref_unreference_count++;
 		*static_cast<FoundryExtensionBool *>(result) = 1;
 	}
@@ -593,6 +643,7 @@ void fake_callable_custom_create(
 	}
 	auto *box = new FakeCallableBox;
 	box->info = *info;
+	callable_custom_infos.push_back(*info);
 	*static_cast<FakeCallableBox **>(destination) = box;
 	fake_callable_native_values[destination] = box;
 }
@@ -1008,6 +1059,9 @@ void test_context_identity_reentrancy_and_exception_containment() {
 	foundry_java::BridgeRuntime runtime(callbacks, logger);
 	callbacks->runtime = &runtime;
 
+	expect(
+			runtime.create_native_context() == 0,
+			"producer context admission must reject before native services are installed");
 	const auto context = runtime.create_context();
 	const auto second_context = runtime.create_context();
 	expect(context != 0, "context handle must be nonzero");
@@ -1073,6 +1127,57 @@ void test_shutdown_waits_for_active_callback_lease() {
 	expect(callback_result == 99, "active callback must complete before shutdown");
 	expect(shutdown_finished, "shutdown must finish after callback drain");
 	expect(callbacks->invalidate_count == 1, "racing shutdown must invalidate exactly once");
+}
+
+void test_shutdown_waits_for_native_operations_then_tears_down_resources() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	const auto context = runtime.create_context();
+	std::atomic<bool> resources_torn_down = false;
+	std::atomic<bool> shutdown_finished = false;
+	runtime.set_context_teardown(
+			[&callbacks, &resources_torn_down](foundry_java::ContextHandle torn_down_context, std::uint64_t generation) {
+				expect(torn_down_context != 0 && generation != 0, "teardown must receive authenticated identity");
+				expect(
+						callbacks->last_context == torn_down_context &&
+								callbacks->deinitialize_count == 1 &&
+								callbacks->invalidate_count == 1,
+						"Java cleanup must complete before final native resource teardown");
+				resources_torn_down = true;
+			});
+	auto operation = runtime.acquire_operation(context);
+	expect(operation && operation.generation() != 0, "live context must admit native operation");
+
+	std::thread shutdown([&] {
+		expect(
+				runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+				"context shutdown must succeed");
+		shutdown_finished = true;
+	});
+	while (runtime.acquire_operation(context)) {
+		std::this_thread::yield();
+	}
+	expect(!shutdown_finished && !resources_torn_down, "shutdown must drain the admitted operation first");
+	operation = {};
+	shutdown.join();
+	expect(
+			resources_torn_down && shutdown_finished,
+			"resource teardown must run after operation drain and Java cleanup");
+}
+
+void test_native_operation_can_finish_on_a_different_thread() {
+	auto callbacks = std::make_shared<RecordingCallbacks>();
+	auto errors = std::make_shared<RecordingLogger>();
+	foundry_java::BridgeRuntime runtime(callbacks, errors);
+	const auto context = runtime.create_context();
+	auto operation = runtime.acquire_operation(context);
+	expect(static_cast<bool>(operation), "live context must admit transferable operation");
+	std::thread finisher([lease = std::move(operation)]() mutable { lease = {}; });
+	finisher.join();
+	expect(
+			runtime.shutdown_context(context, FOUNDRY_EXTENSION_INITIALIZATION_CORE),
+			"cross-thread operation completion must drain without termination or stale ownership");
 }
 
 void test_shutdown_all_waits_for_concurrent_context_teardown() {
@@ -1263,6 +1368,34 @@ void test_typed_handles_reject_wrong_identity_and_destroy_once() {
 			!handles.release(handle, 11, 7, foundry_java::HandleKind::VARIANT, "Variant"),
 			"released handle must stay dead");
 	expect(destroy_count == 1, "repeated release must not destroy twice");
+}
+
+void test_handles_authenticate_themselves_retain_same_identity_and_release_without_type() {
+	foundry_java::NativeHandleStore handles;
+	int destroyed = 0;
+	auto value = foundry_java::NativeValue::storage(sizeof(std::uint64_t));
+	const auto handle = handles.insert(
+			71,
+			9,
+			foundry_java::HandleKind::CALLABLE,
+			"CALLABLE",
+			std::move(value),
+			true,
+			[&destroyed](foundry_java::HandleRecord &) { destroyed++; });
+
+	auto inspected = handles.inspect(handle, 71, 9);
+	expect(
+			inspected && inspected.record().kind == foundry_java::HandleKind::CALLABLE &&
+					inspected.record().expected_type == "CALLABLE",
+			"generic inspection must return the authenticated stored identity");
+	inspected = {};
+	expect(handles.retain(handle, 71, 9) == handle, "retain must preserve the exact handle identity");
+	expect(handles.release(handle, 71, 9), "first generic release must decrement retention");
+	expect(
+			static_cast<bool>(handles.inspect(handle, 71, 9)),
+			"retained handle must remain live after one release");
+	expect(handles.release(handle, 71, 9), "final generic release must succeed without caller type");
+	expect(!handles.inspect(handle, 71, 9) && destroyed == 1, "final release must destroy exactly once");
 }
 
 void test_handle_teardown_waits_for_active_lease() {
@@ -1524,25 +1657,90 @@ void test_dispatch_families_and_ref_counted_ownership() {
 	ref_unreference_count = 0;
 	ref_hashes_valid = true;
 	native_object_destroy_count = 0;
+	const auto borrowed_ref = transport.track_object(
+			44,
+			2,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"Object",
+			false);
 	const auto ref_handle = transport.retain_ref_counted(
 			44,
 			2,
 			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
 			"Resource");
-	expect(ref_handle != 0, "validated RefCounted object must retain");
+	expect(
+			ref_handle != 0 && ref_handle == borrowed_ref,
+			"RefCounted ownership must promote a pre-canonicalized borrowed token");
 	expect(ref_method_lookup_count == 2, "reference and unreference MethodBinds must resolve exactly once");
 	expect(ref_hashes_valid, "reference MethodBinds must use compatibility hash 2240911060");
 	expect(ref_reference_count == 1, "retain must invoke RefCounted.reference");
 	expect(
-			transport.handles().release(
-					ref_handle,
-					44,
-					2,
-					foundry_java::HandleKind::OBJECT,
-					"Resource"),
+			transport.release_handle(ref_handle, 44, 2),
 			"retained RefCounted handle must release");
 	expect(ref_unreference_count == 1, "release must invoke RefCounted.unreference exactly once");
 	expect(native_object_destroy_count == 1, "true unreference result must destroy the object exactly once");
+
+	auto failing_services = std::make_shared<foundry_java::BridgeServices>(*services);
+	failing_services->object_method_bind_ptrcall = &fake_ref_reentrant_ptrcall;
+	foundry_java::NativeTransport failing_transport(failing_services);
+	(void)failing_transport.handles().teardown(45, 3);
+	ref_method_lookup_count = 0;
+	ref_reference_count = 0;
+	ref_unreference_count = 0;
+	native_object_destroy_count = 0;
+	ref_cleanup_reentered = false;
+	reentrant_transport = &failing_transport;
+	bool ownership_consumed = false;
+
+	const auto failed = failing_transport.retain_ref_counted(
+			45,
+			3,
+			reinterpret_cast<FoundryExtensionObjectPtr>(0x1234),
+			"Resource",
+			false,
+			&ownership_consumed);
+
+	reentrant_transport = nullptr;
+	expect(failed == 0 && ownership_consumed, "closed-generation insertion must consume cleanup");
+	expect(ref_reference_count == 1, "failed insertion must acquire one native reference");
+	expect(ref_unreference_count == 1, "failed insertion must unreference exactly once");
+	expect(native_object_destroy_count == 1, "failed insertion must destroy at most once");
+	expect(ref_cleanup_reentered, "failure cleanup must permit reentrant object tracking");
+}
+
+void test_ref_counted_instantiation_initializes_and_unreferences() {
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->string_name_new_with_utf8_chars_and_len = &fake_string_name_from_utf8_and_len;
+	services->variant_get_ptr_destructor = &fake_transport_variant_destructor;
+	services->classdb_construct_object2 = &fake_construct_object;
+	services->classdb_get_class_tag = &fake_ref_counted_class_tag;
+	services->object_cast_to = &fake_object_cast_to;
+	services->classdb_get_method_bind = &fake_ref_instantiate_method_bind;
+	services->object_method_bind_ptrcall = &fake_ref_instantiate_ptrcall;
+	services->object_get_instance_id = &fake_object_instance_id;
+	services->object_get_instance_from_id = &fake_object_from_id;
+	services->object_destroy = &fake_object_destroy;
+	foundry_java::NativeTransport transport(services);
+	construct_object_count = 0;
+	postinitialize_count = 0;
+	ref_method_lookup_count = 0;
+	ref_init_count = 0;
+	ref_unreference_count = 0;
+	native_object_destroy_count = 0;
+
+	const auto resource = transport.instantiate(45, 3, "Resource");
+
+	expect(resource != 0, "RefCounted construction must return an adopted object token");
+	expect(construct_object_count == 1, "RefCounted construction must construct once");
+	expect(postinitialize_count == 1, "RefCounted construction must postinitialize once");
+	expect(ref_init_count == 1, "fresh RefCounted construction must call init_ref exactly once");
+	expect(
+			transport.release_handle(resource, 45, 3),
+			"adopted RefCounted token must release");
+	expect(ref_unreference_count == 1, "adopted RefCounted token must unreference exactly once");
+	expect(
+			native_object_destroy_count == 1,
+			"true RefCounted unreference result must destroy exactly once");
 }
 
 void test_all_variant_categories_copy_and_destroy_through_public_abi() {
@@ -1969,6 +2167,7 @@ void test_category_specific_conversion_and_executable_dispatch() {
 			"generic Callable invocation must execute through variant_call");
 	expect(callable_call_count == 1, "generic Callable must execute exactly once");
 	callable_custom_create_count = 0;
+	callable_custom_infos.clear();
 	int local_callable_calls = 0;
 	auto callable_lifetime = std::make_shared<int>(9);
 	std::weak_ptr<int> callable_lifetime_probe = callable_lifetime;
@@ -1983,7 +2182,7 @@ void test_category_specific_conversion_and_executable_dispatch() {
 				local_callable_calls += *callable_lifetime;
 				error->error = FOUNDRY_EXTENSION_CALL_OK;
 			},
-			reinterpret_cast<void *>(0x777),
+			0x777,
 			0);
 	callable_lifetime.reset();
 	expect(local_callable != 0 && callable_custom_create_count == 1, "local Callable must use custom_create2");
@@ -1997,7 +2196,10 @@ void test_category_specific_conversion_and_executable_dispatch() {
 				"CALLABLE");
 		expect(static_cast<bool>(lease), "local Callable Variant must be acquirable");
 		expect(
-				transport.invoke_callable(lease.record().value.data(), {}, variant_storage).ok,
+				transport
+						.invoke_callable(
+								const_cast<void *>(lease.record().value.data()), {}, variant_storage)
+						.ok,
 				"local Callable must round-trip through generic invocation");
 	}
 	expect(local_callable_calls == 9, "local Callable callback must execute with live userdata");
@@ -2028,7 +2230,7 @@ void test_category_specific_conversion_and_executable_dispatch() {
 		expect(
 				lease &&
 						transport.invoke_callable(
-								lease.record().value.data(),
+								const_cast<void *>(lease.record().value.data()),
 								{},
 								variant_storage)
 								.ok,
@@ -2044,6 +2246,33 @@ void test_category_specific_conversion_and_executable_dispatch() {
 					"CALLABLE"),
 			"native-backed Callable copy must release");
 	expect(callable_lifetime_probe.expired(), "custom Callable userdata must free exactly at final release");
+	const auto same_identity_a =
+			transport.construct_local_callable(81, 12, [](auto...) {}, 0x12345678, -1);
+	const auto same_identity_b =
+			transport.construct_local_callable(81, 12, [](auto...) {}, 0x12345678, -1);
+	const auto distinct_identity =
+			transport.construct_local_callable(81, 12, [](auto...) {}, 0x12345679, -1);
+	expect(
+			same_identity_a != 0 && same_identity_b != 0 && distinct_identity != 0 &&
+					callable_custom_infos.size() >= 4,
+			"local Callable identity fixtures must construct");
+	const auto &identity_a = callable_custom_infos[callable_custom_infos.size() - 3];
+	const auto &identity_b = callable_custom_infos[callable_custom_infos.size() - 2];
+	const auto &identity_other = callable_custom_infos.back();
+	expect(
+			identity_a.token != nullptr && identity_a.token == identity_b.token &&
+					identity_a.hash_func(identity_a.callable_userdata) ==
+							identity_b.hash_func(identity_b.callable_userdata) &&
+					identity_a.equal_func(
+							identity_a.callable_userdata, identity_b.callable_userdata) &&
+					!identity_a.equal_func(
+							identity_a.callable_userdata, identity_other.callable_userdata),
+			"local Callable equality must use stable Java identity under one extension token");
+	expect(
+			transport.release_handle(same_identity_a, 81, 12) &&
+					transport.release_handle(same_identity_b, 81, 12) &&
+					transport.release_handle(distinct_identity, 81, 12),
+			"local Callable identity fixtures must release");
 
 	keyed_get_count = keyed_set_count = indexed_get_count = indexed_set_count = 0;
 	iter_init_count = iter_next_count = iter_get_count = 0;
@@ -2276,6 +2505,23 @@ void test_category_specific_conversion_and_executable_dispatch() {
 	expect(native_object_destroy_count == 1, "owned constructed object must destroy exactly once");
 	const auto singleton = transport.singleton(81, 12, "Engine");
 	expect(singleton != 0 && singleton_count == 1, "singleton route must track the returned instance ID");
+	const auto repeated_singleton = transport.singleton(81, 12, "Engine");
+	expect(
+			repeated_singleton == singleton && singleton_count == 2,
+			"repeated singleton lookup must reuse one canonical object token");
+	const auto singleton_variant =
+			transport.construct_object_variant(81, 12, singleton, "Engine");
+	const auto canonical_object_a =
+			transport.track_object_variant(singleton_variant, 81, 12);
+	const auto canonical_object_b =
+			transport.track_object_variant(singleton_variant, 81, 12);
+	expect(
+			singleton_variant != 0 && canonical_object_a != 0 &&
+					canonical_object_a == canonical_object_b,
+			"repeated Object decode must reuse one context-bound instance-id handle");
+	expect(
+			transport.release_handle(singleton_variant, 81, 12),
+			"Object Variant identity fixture must release independently");
 	expect(
 			transport.handles().release(
 					singleton,
@@ -2324,6 +2570,12 @@ void jni_bridge_install_foundry_error_interface(FoundryExtensionInterfacePrintEr
 	installed_print_error = print_error;
 }
 
+bool jni_bridge_install_native_services(
+		std::shared_ptr<const BridgeServices>,
+		FoundryExtensionClassLibraryPtr) noexcept {
+	return true;
+}
+
 bool jni_bridge_shutdown() noexcept {
 	jni_shutdown_count++;
 	return jni_shutdown_result;
@@ -2334,15 +2586,19 @@ bool jni_bridge_shutdown() noexcept {
 int main() {
 	test_context_identity_reentrancy_and_exception_containment();
 	test_shutdown_waits_for_active_callback_lease();
+	test_shutdown_waits_for_native_operations_then_tears_down_resources();
+	test_native_operation_can_finish_on_a_different_thread();
 	test_shutdown_all_waits_for_concurrent_context_teardown();
 	test_extension_entry_validates_and_orders_lifecycle();
 	test_generated_abi_layout_is_complete();
 	test_bridge_services_resolve_all_or_nothing();
 	test_typed_handles_reject_wrong_identity_and_destroy_once();
+	test_handles_authenticate_themselves_retain_same_identity_and_release_without_type();
 	test_handle_teardown_waits_for_active_lease();
 	test_variant_inventory_and_dispatch_validation();
 	test_native_structure_and_object_transport();
 	test_dispatch_families_and_ref_counted_ownership();
+	test_ref_counted_instantiation_initializes_and_unreferences();
 	test_all_variant_categories_copy_and_destroy_through_public_abi();
 	test_category_specific_conversion_and_executable_dispatch();
 	std::cout << "Foundry Java native runtime tests passed\n";

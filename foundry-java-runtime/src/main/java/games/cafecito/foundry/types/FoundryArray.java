@@ -77,6 +77,15 @@ public final class FoundryArray<T> {
         return Collections.unmodifiableList(copy);
     }
 
+    /**
+     * Returns a stable raw-Variant snapshot for native bridge marshalling.
+     *
+     * <p>The returned array is independent of this collection's mutable storage.
+     */
+    public Variant[] variantSnapshot() {
+        return storage.values.toArray(Variant[]::new);
+    }
+
     public FoundryArray<T> duplicate() {
         return new FoundryArray<>(codec, new Storage(storage.values));
     }

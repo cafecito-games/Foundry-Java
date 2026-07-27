@@ -1087,11 +1087,18 @@ public final class FoundrySourceGenerator {
                                         java.util.Objects.requireNonNull(context, "context");
                                         long objectHandle = context.engine().instantiate(
                                                 context.contextHandle(), "%s");
-                                        return bind(context, objectHandle);
+                                        return context.bind(
+                                                objectHandle,
+                                                games.cafecito.foundry.runtime.ObjectOwnership.OWNED,
+                                                %s.class,
+                                                %s::new);
                                     }
 
                                 """
-                                    .formatted(javaStringBody(sourceName(classEntity))));
+                                    .formatted(
+                                            javaStringBody(sourceName(classEntity)),
+                                            root.className(),
+                                            root.className()));
         }
         source.append("    public static void registerObjectType(\n")
                 .append(
@@ -1099,6 +1106,8 @@ public final class FoundrySourceGenerator {
                 .append("        context.registerObjectType(\"")
                 .append(javaStringBody(sourceName(root.descriptor().entities().get(0))))
                 .append("\", ")
+                .append(ownership)
+                .append(", ")
                 .append(root.className())
                 .append(".class, ")
                 .append(root.className())
@@ -1170,7 +1179,7 @@ public final class FoundrySourceGenerator {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
         source.append("public final class ")
                 .append(root.className())
-                .append(" {\n")
+                .append(" implements java.lang.AutoCloseable {\n")
                 .append("    private final games.cafecito.foundry.runtime.FoundryNativeHandle<")
                 .append(root.className())
                 .append("> handle;\n\n")
@@ -1189,8 +1198,8 @@ public final class FoundrySourceGenerator {
                                     games.cafecito.foundry.runtime.FoundryBindingContext context,
                                     long bridgeHandle) {
                                 java.util.Objects.requireNonNull(context, "context");
-                                return new %s(games.cafecito.foundry.runtime.FoundryNativeHandle.of(
-                                        context.contextHandle(), %s.class, bridgeHandle));
+                                return new %s(games.cafecito.foundry.runtime.FoundryNativeHandle.owned(
+                                        context.contextHandle(), %s.class, bridgeHandle, context.engine()));
                             }
 
                             public static %s nullValue(
@@ -1204,6 +1213,11 @@ public final class FoundrySourceGenerator {
 
                             public boolean isNull() {
                                 return handle.isNull();
+                            }
+
+                            @Override
+                            public void close() {
+                                handle.close();
                             }
 
                             public static String layoutFormat() {
@@ -2283,13 +2297,15 @@ public final class FoundrySourceGenerator {
                                 + resultExpression
                                 + ".asLong())";
                     }
-                    yield "games.cafecito.foundry.runtime.FoundryNativeHandle.of("
+                    yield "games.cafecito.foundry.runtime.FoundryNativeHandle.owned("
                             + contextExpression
                             + ".contextHandle(), "
                             + opaquePointerMarkerType(foundryType)
                             + ".class, "
                             + resultExpression
-                            + ".asLong())";
+                            + ".asLong(), "
+                            + contextExpression
+                            + ".engine())";
                 }
                 yield "("
                         + type

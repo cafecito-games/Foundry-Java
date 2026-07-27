@@ -43,6 +43,7 @@ import games.cafecito.foundry.types.Vector4;
 import games.cafecito.foundry.types.Vector4i;
 import java.util.EnumSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -329,6 +330,28 @@ class VariantTest {
         assertThrows(NullPointerException.class, () -> new NodePath(null));
         assertThrows(IllegalArgumentException.class, () -> new Rid(-1));
         assertEquals(0L, new Rid(0).id());
+    }
+
+    @Test
+    void nativeRidReleaseCanRetryAfterFailureAndConvergesExactlyOnce() {
+        AtomicInteger releases = new AtomicInteger();
+        Rid rid =
+                Rid.nativeBacked(
+                        7,
+                        11,
+                        (context, handle) -> {
+                            assertEquals(7, context);
+                            assertEquals(11, handle);
+                            if (releases.incrementAndGet() == 1) {
+                                throw new IllegalStateException("retry");
+                            }
+                        });
+
+        assertThrows(IllegalStateException.class, rid::close);
+        assertTrue(rid.isClosed());
+        rid.close();
+        rid.close();
+        assertEquals(2, releases.get());
     }
 
     static final class TestVariantObject extends FoundryObject {

@@ -6,10 +6,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace foundry_java {
@@ -181,7 +184,6 @@ public:
 
 	explicit operator bool() const noexcept;
 	const HandleRecord &record() const;
-	HandleRecord &record();
 
 private:
 	explicit HandleLease(std::shared_ptr<SharedHandleRecord> record);
@@ -215,6 +217,23 @@ public:
 			std::uint64_t generation,
 			HandleKind kind,
 			const std::string &expected_type);
+	HandleLease inspect(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation);
+	NativeHandle retain(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation) noexcept;
+	bool promote_ownership(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			Destroy destroy) noexcept;
+	bool release(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation) noexcept;
 	bool release(
 			NativeHandle handle,
 			ContextHandle context,
@@ -240,7 +259,9 @@ struct ObjectLease {
 
 class NativeTransport final {
 public:
-	explicit NativeTransport(std::shared_ptr<const BridgeServices> services);
+	explicit NativeTransport(
+			std::shared_ptr<const BridgeServices> services,
+			void *extension_token = nullptr);
 
 	NativeHandleStore &handles() noexcept;
 	const NativeHandleStore &handles() const noexcept;
@@ -253,7 +274,8 @@ public:
 			std::uint64_t generation,
 			FoundryExtensionObjectPtr object,
 			std::string expected_type,
-			bool owned);
+			bool owned,
+			bool *created = nullptr);
 	ObjectLease acquire_object(
 			NativeHandle handle,
 			ContextHandle context,
@@ -263,7 +285,9 @@ public:
 			ContextHandle context,
 			std::uint64_t generation,
 			FoundryExtensionObjectPtr object,
-			std::string expected_type);
+			std::string expected_type,
+			bool initialize = false,
+			bool *ownership_consumed = nullptr);
 	NativeHandle copy_variant(
 			ContextHandle context,
 			std::uint64_t generation,
@@ -288,7 +312,7 @@ public:
 			ContextHandle context,
 			std::uint64_t generation,
 			LocalCallable callable,
-			void *identity_token,
+			std::uint64_t identity,
 			FoundryExtensionInt argument_count = -1);
 	TransportResult inspect_variant(
 			NativeHandle handle,
@@ -380,10 +404,48 @@ public:
 			ContextHandle context,
 			std::uint64_t generation,
 			const std::string &native_name);
+	bool is_object_valid(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation);
+	bool is_object_assignable(
+			FoundryExtensionObjectPtr object,
+			const std::string &expected_type);
+	TransportResult object_type(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionClassLibraryPtr library,
+			std::string &destination);
+	bool retain_handle(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation);
+	bool release_handle(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation) noexcept;
+	NativeHandle track_object_variant(
+			NativeHandle variant_handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			bool *created = nullptr);
+	TransportResult copy_variant_to(
+			NativeHandle handle,
+			ContextHandle context,
+			std::uint64_t generation,
+			FoundryExtensionUninitializedVariantPtr destination);
+	void destroy_native_value(
+			FoundryExtensionVariantType type,
+			FoundryExtensionTypePtr value) noexcept;
 
 private:
 	std::shared_ptr<const BridgeServices> services;
+	void *extension_token = nullptr;
 	NativeHandleStore handle_store;
+	std::mutex object_identity_mutex;
+	std::condition_variable object_identity_condition;
+	std::unordered_map<std::string, NativeHandle> object_identity_handles;
 };
 
 } // namespace foundry_java

@@ -343,10 +343,10 @@ class FoundrySourceGeneratorTest {
                                 + "NativePointers.ConstVoid.class).bridgeHandle()"));
         assertTrue(
                 node.contains(
-                        "FoundryNativeHandle.of(context().contextHandle(), "
+                        "FoundryNativeHandle.owned(context().contextHandle(), "
                                 + "games.cafecito.foundry.generated.pointers."
                                 + "NativePointers.ConstVoid.class, "
-                                + "__foundryGeneratedResult.asLong())"));
+                                + "__foundryGeneratedResult.asLong(), context().engine())"));
 
         Path output = temporaryDirectory.resolve("pointer-calls");
         generated.writeTo(output);
@@ -1137,7 +1137,7 @@ class FoundrySourceGeneratorTest {
                 runtime.resolve("ObjectOwnership.java"),
                 """
                 package games.cafecito.foundry.runtime;
-                public enum ObjectOwnership { BORROWED, REFERENCE_COUNTED }
+                public enum ObjectOwnership { BORROWED, OWNED, REFERENCE_COUNTED }
                 """);
         Files.writeString(
                 runtime.resolve("ObjectLease.java"),
@@ -1264,11 +1264,19 @@ class FoundrySourceGeneratorTest {
                             long contextHandle, Class<T> nativeType, long bridgeHandle) {
                         return new FoundryNativeHandle<>(contextHandle, nativeType, bridgeHandle);
                     }
+                    public static <T> FoundryNativeHandle<T> owned(
+                            long contextHandle,
+                            Class<T> nativeType,
+                            long bridgeHandle,
+                            FoundryEngine engine) {
+                        return new FoundryNativeHandle<>(contextHandle, nativeType, bridgeHandle);
+                    }
                     public FoundryNativeHandle<T> requireContext(long contextHandle) { return this; }
                     public <U> FoundryNativeHandle<T> requireType(Class<U> nativeType) {
                         return this;
                     }
                     public boolean isNull() { return bridgeHandle == 0; }
+                    public void close() {}
                 }
                 """);
         Files.writeString(
@@ -1283,6 +1291,7 @@ class FoundrySourceGeneratorTest {
                             java.util.List<games.cafecito.foundry.types.Variant> arguments);
                     long singleton(long contextHandle, String name);
                     long instantiate(long contextHandle, String className);
+                    void release(long contextHandle, long objectHandle);
                     record CallResult(
                             games.cafecito.foundry.types.Variant value,
                             FoundryCallError error) {}
@@ -1317,6 +1326,11 @@ class FoundrySourceGeneratorTest {
                     }
                     public <T extends FoundryObject> void registerObjectType(
                             String type, Class<T> wrapperClass, ObjectFactory<T> factory) {}
+                    public <T extends FoundryObject> void registerObjectType(
+                            String type,
+                            ObjectOwnership ownership,
+                            Class<T> wrapperClass,
+                            ObjectFactory<T> factory) {}
                     public interface ObjectFactory<T extends FoundryObject> {
                         T create(FoundryBindingContext context, ObjectLease lease);
                     }

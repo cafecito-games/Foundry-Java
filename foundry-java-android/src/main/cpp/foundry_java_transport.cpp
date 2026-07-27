@@ -237,6 +237,7 @@ struct SharedHandleRecord {
 	HandleRecord record;
 	NativeHandleStore::Destroy destroy;
 	std::size_t active_leases = 0;
+	std::size_t retain_count = 1;
 	bool accepting = true;
 	bool destroyed = false;
 };
@@ -305,13 +306,6 @@ HandleLease::operator bool() const noexcept {
 }
 
 const HandleRecord &HandleLease::record() const {
-	if (shared_record == nullptr) {
-		throw std::logic_error("empty Foundry Java handle lease");
-	}
-	return shared_record->record;
-}
-
-HandleRecord &HandleLease::record() {
 	if (shared_record == nullptr) {
 		throw std::logic_error("empty Foundry Java handle lease");
 	}
@@ -419,6 +413,101 @@ HandleLease NativeHandleStore::acquire(
 	return HandleLease(shared);
 }
 
+HandleLease NativeHandleStore::inspect(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation) {
+	std::lock_guard lock(impl->mutex);
+	const auto found = impl->records.find(handle);
+	if (found == impl->records.end()) {
+		return {};
+	}
+	const auto &shared = found->second;
+	std::lock_guard record_lock(shared->mutex);
+	if (!shared->accepting || !shared->record.live ||
+			shared->record.context != context ||
+			shared->record.generation != generation) {
+		return {};
+	}
+	shared->active_leases++;
+	return HandleLease(shared);
+}
+
+NativeHandle NativeHandleStore::retain(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation) noexcept {
+	std::lock_guard lock(impl->mutex);
+	const auto found = impl->records.find(handle);
+	if (found == impl->records.end()) {
+		return 0;
+	}
+	const auto &shared = found->second;
+	std::lock_guard record_lock(shared->mutex);
+	if (!shared->accepting || !shared->record.live ||
+			shared->record.context != context ||
+			shared->record.generation != generation ||
+			shared->retain_count == std::numeric_limits<std::size_t>::max()) {
+		return 0;
+	}
+	shared->retain_count++;
+	return handle;
+}
+
+bool NativeHandleStore::promote_ownership(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation,
+		Destroy destroy) noexcept {
+	std::lock_guard lock(impl->mutex);
+	const auto found = impl->records.find(handle);
+	if (found == impl->records.end()) {
+		return false;
+	}
+	const auto &shared = found->second;
+	std::lock_guard record_lock(shared->mutex);
+	if (!shared->accepting || !shared->record.live ||
+			shared->record.context != context ||
+			shared->record.generation != generation ||
+			shared->record.kind != HandleKind::OBJECT ||
+			shared->record.owned) {
+		return false;
+	}
+	shared->record.owned = true;
+	shared->destroy = std::move(destroy);
+	return true;
+}
+
+bool NativeHandleStore::release(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation) noexcept {
+	std::shared_ptr<SharedHandleRecord> shared;
+	{
+		std::lock_guard lock(impl->mutex);
+		const auto found = impl->records.find(handle);
+		if (found == impl->records.end()) {
+			return false;
+		}
+		shared = found->second;
+		std::lock_guard record_lock(shared->mutex);
+		if (!shared->accepting || !shared->record.live ||
+				shared->record.context != context ||
+				shared->record.generation != generation ||
+				shared->retain_count == 0) {
+			return false;
+		}
+		shared->retain_count--;
+		if (shared->retain_count != 0) {
+			return true;
+		}
+		shared->accepting = false;
+		impl->records.erase(found);
+	}
+	drain_and_destroy(shared);
+	return true;
+}
+
 bool NativeHandleStore::release(
 		NativeHandle handle,
 		ContextHandle context,
@@ -436,6 +525,13 @@ bool NativeHandleStore::release(
 		std::lock_guard record_lock(shared->mutex);
 		if (!shared->accepting || !matches(shared->record, context, generation, kind, expected_type)) {
 			return false;
+		}
+		if (shared->retain_count == 0) {
+			return false;
+		}
+		shared->retain_count--;
+		if (shared->retain_count != 0) {
+			return true;
 		}
 		shared->accepting = false;
 		impl->records.erase(found);
@@ -520,8 +616,11 @@ private:
 
 } // namespace
 
-NativeTransport::NativeTransport(std::shared_ptr<const BridgeServices> services) :
-		services(std::move(services)) {
+NativeTransport::NativeTransport(
+		std::shared_ptr<const BridgeServices> services,
+		void *extension_token) :
+		services(std::move(services)),
+		extension_token(extension_token == nullptr ? this : extension_token) {
 }
 
 NativeHandleStore &NativeTransport::handles() noexcept {
@@ -540,9 +639,18 @@ NativeHandle NativeTransport::create_native_structure(
 		return 0;
 	}
 	const NormalizedNativeType normalized = normalize_native_type(expected_type);
-	if (normalized.kind != NativeTypeKind::NATIVE_STRUCTURE ||
-			normalized.token.find('*') != std::string_view::npos) {
+	if (normalized.kind != NativeTypeKind::NATIVE_STRUCTURE) {
 		return 0;
+	}
+	if (normalized.token.find('*') != std::string_view::npos) {
+		return handle_store.insert(
+				context,
+				generation,
+				HandleKind::NATIVE_STRUCTURE,
+				std::string(normalized.token),
+				NativeValue::storage(sizeof(void *)),
+				true,
+				{});
 	}
 	ScopedStringName native_type(*services, std::string(normalized.token));
 	if (!native_type) {
@@ -567,7 +675,11 @@ NativeHandle NativeTransport::track_object(
 		std::uint64_t generation,
 		FoundryExtensionObjectPtr object,
 		std::string expected_type,
-		bool owned) {
+		bool owned,
+		bool *created) {
+	if (created != nullptr) {
+		*created = false;
+	}
 	if (object == nullptr) {
 		return 0;
 	}
@@ -587,16 +699,77 @@ NativeHandle NativeTransport::track_object(
 		}
 		return 0;
 	}
+	const std::string identity_key =
+			std::to_string(context) + ":" +
+			std::to_string(generation) + ":" +
+			std::to_string(static_cast<std::uint64_t>(instance_id));
+	NativeHandle existing_handle = 0;
+	bool promote_existing = false;
+	{
+		std::unique_lock identity_lock(object_identity_mutex);
+		object_identity_condition.wait(identity_lock, [&] {
+			auto found = object_identity_handles.find(identity_key);
+			return found == object_identity_handles.end() || found->second != 0;
+		});
+		auto existing_identity = object_identity_handles.find(identity_key);
+		if (existing_identity != object_identity_handles.end()) {
+			HandleLease existing =
+					handle_store.inspect(existing_identity->second, context, generation);
+			if (existing && existing.record().kind == HandleKind::OBJECT) {
+				existing_handle = existing_identity->second;
+				promote_existing = owned && !existing.record().owned;
+				if (!promote_existing) {
+					return existing_handle;
+				}
+				existing = {};
+				existing_identity->second = 0;
+			} else {
+				object_identity_handles.erase(existing_identity);
+			}
+		}
+		if (existing_handle == 0) {
+			object_identity_handles.emplace(identity_key, 0);
+		}
+	}
+	if (promote_existing) {
+		auto captured_services = services;
+		const bool promoted = handle_store.promote_ownership(
+				existing_handle,
+				context,
+				generation,
+				[captured_services](HandleRecord &record) {
+					FoundryExtensionObjectPtr live_object =
+							captured_services->object_get_instance_from_id(
+									record.value.object_instance_id);
+					if (live_object != nullptr) {
+						captured_services->object_destroy(live_object);
+					}
+				});
+		{
+			std::lock_guard identity_lock(object_identity_mutex);
+			if (promoted) {
+				object_identity_handles[identity_key] = existing_handle;
+			} else {
+				object_identity_handles.erase(identity_key);
+			}
+		}
+		object_identity_condition.notify_all();
+		if (!promoted) {
+			services->object_destroy(object);
+			return 0;
+		}
+		return existing_handle;
+	}
 	NativeValue value;
 	value.object_instance_id = static_cast<std::uint64_t>(instance_id);
 	auto captured_services = services;
-	return handle_store.insert(
+	const NativeHandle handle = handle_store.insert(
 			context,
 			generation,
 			HandleKind::OBJECT,
 			std::move(expected_type),
 			std::move(value),
-			owned,
+			false,
 			[captured_services](HandleRecord &record) {
 				if (captured_services->object_get_instance_from_id == nullptr ||
 						captured_services->object_destroy == nullptr) {
@@ -608,6 +781,45 @@ NativeHandle NativeTransport::track_object(
 					captured_services->object_destroy(live_object);
 				}
 			});
+	bool ready = handle != 0;
+	if (ready && owned) {
+		ready = handle_store.promote_ownership(
+				handle,
+				context,
+				generation,
+				[captured_services](HandleRecord &record) {
+					FoundryExtensionObjectPtr live_object =
+							captured_services->object_get_instance_from_id(
+									record.value.object_instance_id);
+					if (live_object != nullptr) {
+						captured_services->object_destroy(live_object);
+					}
+				});
+	}
+	if (ready) {
+		if (created != nullptr) {
+			*created = true;
+		}
+	}
+	{
+		std::lock_guard identity_lock(object_identity_mutex);
+		if (!ready) {
+			object_identity_handles.erase(identity_key);
+		} else {
+			object_identity_handles[identity_key] = handle;
+		}
+	}
+	object_identity_condition.notify_all();
+	if (!ready) {
+		if (handle != 0) {
+			(void)handle_store.release(handle, context, generation);
+		}
+		if (owned) {
+			services->object_destroy(object);
+		}
+		return 0;
+	}
+	return handle;
 }
 
 ObjectLease NativeTransport::acquire_object(
@@ -618,13 +830,14 @@ ObjectLease NativeTransport::acquire_object(
 	if (services == nullptr || services->object_get_instance_from_id == nullptr) {
 		return {};
 	}
-	HandleLease lease = handle_store.acquire(handle, context, generation, HandleKind::OBJECT, expected_type);
-	if (!lease) {
+	HandleLease lease = handle_store.inspect(handle, context, generation);
+	if (!lease || lease.record().kind != HandleKind::OBJECT) {
 		return {};
 	}
+	const bool exact_type = lease.record().expected_type == expected_type;
 	FoundryExtensionObjectPtr object =
 			services->object_get_instance_from_id(lease.record().value.object_instance_id);
-	if (object == nullptr) {
+	if (object == nullptr || (!exact_type && !is_object_assignable(object, expected_type))) {
 		return {};
 	}
 	return { std::move(lease), object };
@@ -634,7 +847,12 @@ NativeHandle NativeTransport::retain_ref_counted(
 		ContextHandle context,
 		std::uint64_t generation,
 		FoundryExtensionObjectPtr object,
-		std::string expected_type) {
+		std::string expected_type,
+		bool initialize,
+		bool *ownership_consumed) {
+	if (ownership_consumed != nullptr) {
+		*ownership_consumed = false;
+	}
 	if (services == nullptr ||
 			services->classdb_get_class_tag == nullptr ||
 			services->object_cast_to == nullptr ||
@@ -647,7 +865,7 @@ NativeHandle NativeTransport::retain_ref_counted(
 		return 0;
 	}
 	ScopedStringName ref_counted_name(*services, "RefCounted");
-	ScopedStringName reference_name(*services, "reference");
+	ScopedStringName reference_name(*services, initialize ? "init_ref" : "reference");
 	ScopedStringName unreference_name(*services, "unreference");
 	if (!ref_counted_name || !reference_name || !unreference_name) {
 		return 0;
@@ -673,6 +891,9 @@ NativeHandle NativeTransport::retain_ref_counted(
 	if (!retained) {
 		return 0;
 	}
+	if (ownership_consumed != nullptr) {
+		*ownership_consumed = true;
+	}
 	const GDObjectInstanceID instance_id = services->object_get_instance_id(ref_counted);
 	if (instance_id == 0) {
 		FoundryExtensionBool destroy = 0;
@@ -682,29 +903,117 @@ NativeHandle NativeTransport::retain_ref_counted(
 		}
 		return 0;
 	}
+	const std::string identity_key =
+			std::to_string(context) + ":" +
+			std::to_string(generation) + ":" +
+			std::to_string(static_cast<std::uint64_t>(instance_id));
+	NativeHandle existing_handle = 0;
+	bool promote_existing = false;
+	{
+		std::unique_lock identity_lock(object_identity_mutex);
+		object_identity_condition.wait(identity_lock, [&] {
+			auto found = object_identity_handles.find(identity_key);
+			return found == object_identity_handles.end() || found->second != 0;
+		});
+		auto existing_identity = object_identity_handles.find(identity_key);
+		if (existing_identity != object_identity_handles.end()) {
+			HandleLease existing =
+					handle_store.inspect(existing_identity->second, context, generation);
+			if (existing && existing.record().kind == HandleKind::OBJECT) {
+				existing_handle = existing_identity->second;
+				promote_existing = !existing.record().owned;
+				if (promote_existing) {
+					existing = {};
+					existing_identity->second = 0;
+				}
+			} else {
+				object_identity_handles.erase(existing_identity);
+			}
+		}
+		if (existing_handle == 0) {
+			object_identity_handles.emplace(identity_key, 0);
+		}
+	}
+	auto captured_services = services;
+	auto ref_counted_cleanup =
+			[captured_services, unreference](HandleRecord &record) {
+				FoundryExtensionObjectPtr live_object =
+						captured_services->object_get_instance_from_id(
+								record.value.object_instance_id);
+				if (live_object == nullptr) {
+					return;
+				}
+				FoundryExtensionBool destroy = 0;
+				captured_services->object_method_bind_ptrcall(
+						unreference, live_object, nullptr, &destroy);
+				if (destroy) {
+					captured_services->object_destroy(live_object);
+				}
+			};
+	if (existing_handle != 0) {
+		bool transferred = false;
+		if (promote_existing) {
+			transferred = handle_store.promote_ownership(
+					existing_handle,
+					context,
+					generation,
+					ref_counted_cleanup);
+			{
+				std::lock_guard identity_lock(object_identity_mutex);
+				if (transferred) {
+					object_identity_handles[identity_key] = existing_handle;
+				} else {
+					object_identity_handles.erase(identity_key);
+				}
+			}
+			object_identity_condition.notify_all();
+		}
+		if (!transferred) {
+			FoundryExtensionBool destroy = 0;
+			services->object_method_bind_ptrcall(
+					unreference, ref_counted, nullptr, &destroy);
+			if (destroy) {
+				services->object_destroy(ref_counted);
+			}
+		}
+		return transferred || !promote_existing ? existing_handle : 0;
+	}
 
 	NativeValue value;
 	value.object_instance_id = static_cast<std::uint64_t>(instance_id);
-	auto captured_services = services;
 	const NativeHandle handle = handle_store.insert(
 			context,
 			generation,
 			HandleKind::OBJECT,
 			std::move(expected_type),
 			std::move(value),
-			true,
-			[captured_services, unreference](HandleRecord &record) {
-				FoundryExtensionObjectPtr live_object =
-						captured_services->object_get_instance_from_id(record.value.object_instance_id);
-				if (live_object == nullptr) {
-					return;
-				}
-				FoundryExtensionBool destroy = 0;
-				captured_services->object_method_bind_ptrcall(unreference, live_object, nullptr, &destroy);
-				if (destroy) {
-					captured_services->object_destroy(live_object);
-				}
-			});
+			false,
+			ref_counted_cleanup);
+	const bool ready =
+			handle != 0 &&
+			handle_store.promote_ownership(
+					handle, context, generation, ref_counted_cleanup);
+	{
+		std::lock_guard identity_lock(object_identity_mutex);
+		if (!ready) {
+			object_identity_handles.erase(identity_key);
+		} else {
+			object_identity_handles[identity_key] = handle;
+		}
+	}
+	object_identity_condition.notify_all();
+	if (!ready) {
+		if (handle != 0) {
+			(void)handle_store.release(handle, context, generation);
+		}
+		FoundryExtensionBool destroy = 0;
+		services->object_method_bind_ptrcall(
+				unreference, ref_counted, nullptr, &destroy);
+		if (destroy) {
+			services->object_destroy(ref_counted);
+		}
+		return 0;
+	}
 	return handle;
 }
 
@@ -943,6 +1252,7 @@ namespace {
 
 struct CallableState {
 	LocalCallable callable;
+	std::uint64_t identity = 0;
 	FoundryExtensionInt argument_count = -1;
 };
 
@@ -976,6 +1286,23 @@ void local_callable_free(void *userdata) {
 	delete static_cast<CallableState *>(userdata);
 }
 
+std::uint32_t local_callable_hash(void *userdata) {
+	auto *state = static_cast<CallableState *>(userdata);
+	if (state == nullptr) {
+		return 0;
+	}
+	return static_cast<std::uint32_t>(state->identity ^ (state->identity >> 32));
+}
+
+FoundryExtensionBool local_callable_equal(void *left, void *right) {
+	auto *left_state = static_cast<CallableState *>(left);
+	auto *right_state = static_cast<CallableState *>(right);
+	return left_state != nullptr && right_state != nullptr &&
+					left_state->identity == right_state->identity ?
+			1 :
+			0;
+}
+
 FoundryExtensionInt local_callable_argument_count(void *userdata, FoundryExtensionBool *valid) {
 	auto *state = static_cast<CallableState *>(userdata);
 	if (valid != nullptr) {
@@ -998,17 +1325,19 @@ NativeHandle NativeTransport::construct_local_callable(
 		ContextHandle context,
 		std::uint64_t generation,
 		LocalCallable callable,
-		void *identity_token,
+		std::uint64_t identity,
 		FoundryExtensionInt argument_count) {
 	if (services == nullptr ||
 			services->callable_custom_create2 == nullptr ||
 			services->variant_get_ptr_destructor == nullptr ||
 			!callable ||
-			identity_token == nullptr) {
+			identity == 0 ||
+			extension_token == nullptr) {
 		return 0;
 	}
 	auto state = std::make_unique<CallableState>();
 	state->callable = std::move(callable);
+	state->identity = identity;
 	state->argument_count = argument_count;
 	NativeValue native_callable = NativeValue::storage(abi_layout_size("Callable"));
 	if (native_callable.data() == nullptr) {
@@ -1021,10 +1350,12 @@ NativeHandle NativeTransport::construct_local_callable(
 	}
 	FoundryExtensionCallableCustomInfo2 info{};
 	info.callable_userdata = state.get();
-	info.token = identity_token;
+	info.token = extension_token;
 	info.call_func = &local_callable_call;
 	info.is_valid_func = &local_callable_valid;
 	info.free_func = &local_callable_free;
+	info.hash_func = &local_callable_hash;
+	info.equal_func = &local_callable_equal;
 	info.get_argument_count_func = &local_callable_argument_count;
 	services->callable_custom_create2(native_callable.data(), &info);
 	native_callable.constructed = true;
@@ -1069,7 +1400,9 @@ TransportResult NativeTransport::inspect_variant(
 	if (constructor == nullptr) {
 		return failure("missing_variant_inspector");
 	}
-	constructor(destination, lease.record().value.data());
+	constructor(
+			destination,
+			const_cast<FoundryExtensionVariantPtr>(lease.record().value.data()));
 	return success();
 }
 
@@ -2122,6 +2455,28 @@ NativeHandle NativeTransport::instantiate(
 	const FoundryExtensionBool reversed = 0;
 	const FoundryExtensionConstTypePtr arguments[] = { &postinitialize, &reversed };
 	services->object_method_bind_ptrcall(notification, object, arguments, nullptr);
+	if (services->classdb_get_class_tag != nullptr &&
+			services->object_cast_to != nullptr) {
+		ScopedStringName ref_counted_name(*services, "RefCounted");
+		void *ref_counted_tag =
+				ref_counted_name ? services->classdb_get_class_tag(ref_counted_name.get()) : nullptr;
+		if (ref_counted_tag != nullptr &&
+				services->object_cast_to(object, ref_counted_tag) != nullptr) {
+			bool ownership_consumed = false;
+			const NativeHandle ref_counted =
+					retain_ref_counted(
+							context,
+							generation,
+							object,
+							native_class,
+							true,
+							&ownership_consumed);
+			if (ref_counted == 0 && !ownership_consumed) {
+				services->object_destroy(object);
+			}
+			return ref_counted;
+		}
+	}
 	return track_object(context, generation, object, native_class, true);
 }
 
@@ -2142,6 +2497,207 @@ NativeHandle NativeTransport::singleton(
 			services->global_get_singleton(name.get()),
 			native_name,
 			false);
+}
+
+bool NativeTransport::is_object_valid(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation) {
+	HandleLease lease = handle_store.inspect(handle, context, generation);
+	return lease &&
+			lease.record().kind == HandleKind::OBJECT &&
+			services != nullptr &&
+			services->object_get_instance_from_id != nullptr &&
+			services->object_get_instance_from_id(lease.record().value.object_instance_id) != nullptr;
+}
+
+bool NativeTransport::is_object_assignable(
+		FoundryExtensionObjectPtr object,
+		const std::string &expected_type) {
+	if (object == nullptr || services == nullptr ||
+			services->classdb_get_class_tag == nullptr ||
+			services->object_cast_to == nullptr ||
+			normalize_native_type(expected_type).kind != NativeTypeKind::OBJECT) {
+		return false;
+	}
+	ScopedStringName type(*services, expected_type);
+	if (!type) {
+		return false;
+	}
+	void *tag = services->classdb_get_class_tag(type.get());
+	return tag != nullptr && services->object_cast_to(object, tag) != nullptr;
+}
+
+TransportResult NativeTransport::object_type(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation,
+		FoundryExtensionClassLibraryPtr library,
+		std::string &destination) {
+	HandleLease lease = handle_store.inspect(handle, context, generation);
+	if (!lease || lease.record().kind != HandleKind::OBJECT) {
+		return failure("invalid_object_handle");
+	}
+	const std::string expected_type = lease.record().expected_type;
+	lease = {};
+	return object_type(handle, context, generation, expected_type, library, destination);
+}
+
+bool NativeTransport::retain_handle(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation) {
+	HandleLease lease = handle_store.inspect(handle, context, generation);
+	if (!lease) {
+		return false;
+	}
+	if (lease.record().kind != HandleKind::OBJECT) {
+		lease = {};
+		return handle_store.retain(handle, context, generation) == handle;
+	}
+	if (lease.record().owned) {
+		lease = {};
+		return handle_store.retain(handle, context, generation) == handle;
+	}
+	if (services == nullptr ||
+			services->classdb_get_class_tag == nullptr ||
+			services->object_cast_to == nullptr ||
+			services->classdb_get_method_bind == nullptr ||
+			services->object_method_bind_ptrcall == nullptr ||
+			services->object_get_instance_from_id == nullptr) {
+		return false;
+	}
+	ScopedStringName ref_counted_name(*services, "RefCounted");
+	ScopedStringName reference_name(*services, "reference");
+	ScopedStringName unreference_name(*services, "unreference");
+	if (!ref_counted_name || !reference_name || !unreference_name) {
+		return false;
+	}
+	void *class_tag = services->classdb_get_class_tag(ref_counted_name.get());
+	FoundryExtensionObjectPtr object = services->object_get_instance_from_id(
+			lease.record().value.object_instance_id);
+	FoundryExtensionObjectPtr ref_counted =
+			class_tag == nullptr || object == nullptr ? nullptr : services->object_cast_to(object, class_tag);
+	constexpr FoundryExtensionInt reference_hash = 2240911060;
+	FoundryExtensionMethodBindPtr reference =
+			ref_counted == nullptr ? nullptr :
+									 services->classdb_get_method_bind(
+											 ref_counted_name.get(), reference_name.get(), reference_hash);
+	FoundryExtensionMethodBindPtr unreference =
+			ref_counted == nullptr ? nullptr :
+									 services->classdb_get_method_bind(
+											 ref_counted_name.get(), unreference_name.get(), reference_hash);
+	if (reference == nullptr || unreference == nullptr) {
+		return false;
+	}
+	FoundryExtensionBool retained = 0;
+	services->object_method_bind_ptrcall(reference, ref_counted, nullptr, &retained);
+	if (!retained) {
+		return false;
+	}
+	auto captured_services = services;
+	lease = {};
+	if (handle_store.promote_ownership(
+				handle,
+				context,
+				generation,
+				[captured_services, unreference](HandleRecord &record) {
+					FoundryExtensionObjectPtr live =
+							captured_services->object_get_instance_from_id(
+									record.value.object_instance_id);
+					if (live == nullptr) {
+						return;
+					}
+					FoundryExtensionBool destroy = 0;
+					captured_services->object_method_bind_ptrcall(
+							unreference, live, nullptr, &destroy);
+					if (destroy) {
+						captured_services->object_destroy(live);
+					}
+				})) {
+		return true;
+	}
+	FoundryExtensionBool destroy = 0;
+	services->object_method_bind_ptrcall(unreference, ref_counted, nullptr, &destroy);
+	if (destroy) {
+		services->object_destroy(ref_counted);
+	}
+	return false;
+}
+
+bool NativeTransport::release_handle(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation) noexcept {
+	std::uint64_t object_instance_id = 0;
+	{
+		HandleLease lease = handle_store.inspect(handle, context, generation);
+		if (lease && lease.record().kind == HandleKind::OBJECT) {
+			object_instance_id = lease.record().value.object_instance_id;
+		}
+	}
+	const bool released = handle_store.release(handle, context, generation);
+	const bool still_live =
+			static_cast<bool>(handle_store.inspect(handle, context, generation));
+	if (released && !still_live && object_instance_id != 0) {
+		const std::string identity_key =
+				std::to_string(context) + ":" +
+				std::to_string(generation) + ":" +
+				std::to_string(object_instance_id);
+		std::lock_guard lock(object_identity_mutex);
+		auto found = object_identity_handles.find(identity_key);
+		if (found != object_identity_handles.end() && found->second == handle) {
+			object_identity_handles.erase(found);
+		}
+	}
+	return released;
+}
+
+NativeHandle NativeTransport::track_object_variant(
+		NativeHandle variant_handle,
+		ContextHandle context,
+		std::uint64_t generation,
+		bool *created) {
+	FoundryExtensionObjectPtr object = nullptr;
+	if (!inspect_variant(
+				variant_handle,
+				context,
+				generation,
+				FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT,
+				&object)
+				 .ok ||
+			object == nullptr) {
+		return 0;
+	}
+	return track_object(context, generation, object, "Object", false, created);
+}
+
+TransportResult NativeTransport::copy_variant_to(
+		NativeHandle handle,
+		ContextHandle context,
+		std::uint64_t generation,
+		FoundryExtensionUninitializedVariantPtr destination) {
+	if (destination == nullptr || services == nullptr || services->variant_new_copy == nullptr) {
+		return failure("missing_variant_copy_output");
+	}
+	HandleLease lease = handle_store.inspect(handle, context, generation);
+	if (!lease || lease.record().kind != HandleKind::VARIANT) {
+		return failure("invalid_variant_handle");
+	}
+	services->variant_new_copy(destination, lease.record().value.data());
+	return success();
+}
+
+void NativeTransport::destroy_native_value(
+		FoundryExtensionVariantType type,
+		FoundryExtensionTypePtr value) noexcept {
+	if (services == nullptr || services->variant_get_ptr_destructor == nullptr || value == nullptr) {
+		return;
+	}
+	const FoundryExtensionPtrDestructor destructor = services->variant_get_ptr_destructor(type);
+	if (destructor != nullptr) {
+		destructor(value);
+	}
 }
 
 } // namespace foundry_java

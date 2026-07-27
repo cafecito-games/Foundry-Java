@@ -38,15 +38,28 @@ void initialize_level(void *userdata, FoundryExtensionInitializationLevel level)
 		return;
 	}
 	ContextHandle context = 0;
+	bool needs_context = false;
 	{
 		std::lock_guard lock(state->mutex);
 		if (!state->entry_active || state->shutting_down) {
 			return;
 		}
-		if (state->context == 0) {
-			state->context = jni_bridge_create_context();
-		}
 		context = state->context;
+		needs_context = context == 0;
+	}
+	if (needs_context) {
+		const ContextHandle created = jni_bridge_create_context();
+		{
+			std::lock_guard lock(state->mutex);
+			if (state->entry_active && !state->shutting_down && state->context == 0) {
+				state->context = created;
+			}
+			context = state->context;
+		}
+		if (created != 0 && created != context) {
+			(void)jni_bridge_shutdown_context(
+					created, static_cast<std::int32_t>(FOUNDRY_EXTENSION_INITIALIZATION_CORE));
+		}
 	}
 	if (context == 0 || !jni_bridge_initialize(context, static_cast<std::int32_t>(level))) {
 		FoundryExtensionInterfacePrintError print_error = nullptr;
@@ -124,22 +137,41 @@ FoundryExtensionBool initialize_extension(
 		report_entry_error(resolution.services->print_error, "Foundry Java JNI bootstrap is not ready.");
 		return 0;
 	}
-	bool entry_already_active = false;
+	bool already_active = false;
 	{
 		std::lock_guard lock(extension_state.mutex);
 		if (extension_state.entry_active) {
-			entry_already_active = true;
+			already_active = true;
 		} else {
 			extension_state.services = resolution.services;
 			extension_state.library = library;
 			extension_state.context = 0;
 			extension_state.entry_active = true;
-			extension_state.shutting_down = false;
+			extension_state.shutting_down = true;
 		}
 	}
-	if (entry_already_active) {
-		report_entry_error(resolution.services->print_error, "Foundry Java extension entry is already active.");
+	if (already_active) {
+		report_entry_error(
+				resolution.services->print_error,
+				"Foundry Java extension entry is already active.");
 		return 0;
+	}
+	if (!jni_bridge_install_native_services(resolution.services, library)) {
+		{
+			std::lock_guard lock(extension_state.mutex);
+			extension_state.services.reset();
+			extension_state.library = nullptr;
+			extension_state.entry_active = false;
+			extension_state.shutting_down = false;
+		}
+		report_entry_error(
+				resolution.services->print_error,
+				"Foundry Java could not install native bridge services.");
+		return 0;
+	}
+	{
+		std::lock_guard lock(extension_state.mutex);
+		extension_state.shutting_down = false;
 	}
 	jni_bridge_install_foundry_error_interface(resolution.services->print_error);
 	FoundryExtensionInitialization result{};

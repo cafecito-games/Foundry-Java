@@ -1,16 +1,54 @@
 package games.cafecito.foundry.java;
 
 import games.cafecito.foundry.generated.GeneratedNativeDispatch;
+import games.cafecito.foundry.runtime.FoundryBindingContext;
+import games.cafecito.foundry.runtime.FoundryBindingContextAware;
 import games.cafecito.foundry.runtime.FoundryCallError;
 import games.cafecito.foundry.runtime.FoundryCallable;
 import games.cafecito.foundry.runtime.FoundryClassDescriptor;
 import games.cafecito.foundry.runtime.FoundryEngine;
 import games.cafecito.foundry.runtime.FoundryNativeDispatch;
+import games.cafecito.foundry.runtime.FoundryObject;
 import games.cafecito.foundry.runtime.FoundrySignal;
+import games.cafecito.foundry.runtime.ObjectLease;
+import games.cafecito.foundry.runtime.ObjectOwnership;
+import games.cafecito.foundry.types.Aabb;
+import games.cafecito.foundry.types.Basis;
+import games.cafecito.foundry.types.Color;
+import games.cafecito.foundry.types.FoundryArray;
+import games.cafecito.foundry.types.FoundryDictionary;
+import games.cafecito.foundry.types.NodePath;
+import games.cafecito.foundry.types.PackedByteArray;
+import games.cafecito.foundry.types.PackedColorArray;
+import games.cafecito.foundry.types.PackedFloat32Array;
+import games.cafecito.foundry.types.PackedFloat64Array;
+import games.cafecito.foundry.types.PackedInt32Array;
+import games.cafecito.foundry.types.PackedInt64Array;
+import games.cafecito.foundry.types.PackedStringArray;
+import games.cafecito.foundry.types.PackedVector2Array;
+import games.cafecito.foundry.types.PackedVector3Array;
+import games.cafecito.foundry.types.PackedVector4Array;
+import games.cafecito.foundry.types.Plane;
+import games.cafecito.foundry.types.Projection;
+import games.cafecito.foundry.types.Quaternion;
+import games.cafecito.foundry.types.Rect2;
+import games.cafecito.foundry.types.Rect2i;
+import games.cafecito.foundry.types.Rid;
+import games.cafecito.foundry.types.StringName;
+import games.cafecito.foundry.types.Transform2D;
+import games.cafecito.foundry.types.Transform3D;
 import games.cafecito.foundry.types.Variant;
+import games.cafecito.foundry.types.VariantCodec;
 import games.cafecito.foundry.types.VariantType;
+import games.cafecito.foundry.types.Vector2;
+import games.cafecito.foundry.types.Vector2i;
+import games.cafecito.foundry.types.Vector3;
+import games.cafecito.foundry.types.Vector3i;
+import games.cafecito.foundry.types.Vector4;
+import games.cafecito.foundry.types.Vector4i;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -18,12 +56,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /** Production FoundryEngine facade over the versioned JNI transport. */
-public final class FoundryNativeEngine implements FoundryEngine {
+public final class FoundryNativeEngine implements FoundryEngine, FoundryBindingContextAware {
     private static final String CALLABLE_CALL_IDENTITY =
             "builtin_classes/Callable/methods/call#3643564216";
     private static final String SIGNAL_CONNECT_IDENTITY =
@@ -32,13 +71,19 @@ public final class FoundryNativeEngine implements FoundryEngine {
             "builtin_classes/Signal/methods/disconnect#3470848906";
     private static final String SIGNAL_EMIT_IDENTITY =
             "builtin_classes/Signal/methods/emit#3286317445";
-    private static final String REGISTRATION_UNAVAILABLE = "registration_unavailable_before_task5";
     private static final ConcurrentHashMap<Long, WeakReference<FoundryNativeEngine>> ENGINES =
             new ConcurrentHashMap<>();
+    private static final AtomicLong NEXT_LOCAL_CALLABLE_ID = new AtomicLong();
+    private static final Map<FoundryCallable, Long> LOCAL_CALLABLE_IDS =
+            Collections.synchronizedMap(new WeakHashMap<>());
 
     private final long contextHandle;
     private final Function<String, FoundryNativeDispatch> dispatchLookup;
     private final NativeGateway gateway;
+    private final ThreadLocal<FoundrySignal> allowedClosedSignal = new ThreadLocal<>();
+    private final ThreadLocal<FoundryCallable> allowedClosedCallable = new ThreadLocal<>();
+    private volatile WeakReference<FoundryBindingContext> bindingContext =
+            new WeakReference<>(null);
 
     public FoundryNativeEngine(long contextHandle) {
         this(contextHandle, GeneratedNativeDispatch::require, new JniNativeGateway());
@@ -54,20 +99,52 @@ public final class FoundryNativeEngine implements FoundryEngine {
         this.contextHandle = contextHandle;
         this.dispatchLookup = Objects.requireNonNull(dispatchLookup, "dispatchLookup");
         this.gateway = Objects.requireNonNull(gateway, "gateway");
-        ENGINES.put(contextHandle, new WeakReference<>(this));
+        ENGINES.compute(
+                contextHandle,
+                (ignored, existingReference) -> {
+                    FoundryNativeEngine existing =
+                            existingReference == null ? null : existingReference.get();
+                    FoundryBindingContext existingContext =
+                            existing == null ? null : existing.bindingContext.get();
+                    if (existing != null
+                            && existing != this
+                            && existingContext != null
+                            && existingContext.isAlive()) {
+                        throw new IllegalStateException(
+                                "Foundry context "
+                                        + contextHandle
+                                        + " already has a live native engine.");
+                    }
+                    return new WeakReference<>(this);
+                });
+    }
+
+    @Override
+    public synchronized void attachBindingContext(FoundryBindingContext context) {
+        FoundryBindingContext checked = Objects.requireNonNull(context, "context");
+        requireContext(checked.contextHandle());
+        FoundryBindingContext existing = bindingContext.get();
+        if (existing == checked) {
+            return;
+        }
+        if (existing != null && existing.isAlive()) {
+            throw new IllegalStateException(
+                    "Foundry context " + contextHandle + " already has a live binding context.");
+        }
+        bindingContext = new WeakReference<>(checked);
     }
 
     @Override
     public void registerExtensionClass(
             long requestedContextHandle, FoundryClassDescriptor descriptor) {
         requireContext(requestedContextHandle);
-        throw registrationUnavailable();
+        gateway.registerExtensionClass(contextHandle, descriptor);
     }
 
     @Override
     public void unregisterExtensionClass(long requestedContextHandle, String foundryName) {
         requireContext(requestedContextHandle);
-        throw registrationUnavailable();
+        gateway.unregisterExtensionClass(contextHandle, foundryName);
     }
 
     @Override
@@ -76,6 +153,15 @@ public final class FoundryNativeEngine implements FoundryEngine {
             long objectHandle,
             String methodIdentity,
             List<Variant> arguments) {
+        return call(requestedContextHandle, objectHandle, methodIdentity, arguments, null);
+    }
+
+    private CallResult call(
+            long requestedContextHandle,
+            long objectHandle,
+            String methodIdentity,
+            List<Variant> arguments,
+            FoundrySignal allowedClosedSignal) {
         requireContext(requestedContextHandle);
         String identity = requireText(methodIdentity, "methodIdentity");
         List<Variant> checkedArguments =
@@ -99,14 +185,28 @@ public final class FoundryNativeEngine implements FoundryEngine {
                             + ": "
                             + dispatch.identity());
         }
-        validateInvocation(dispatch, objectHandle, checkedArguments);
-        return Objects.requireNonNull(
-                gateway.call(
-                        contextHandle,
-                        objectHandle,
-                        dispatch,
-                        checkedArguments.toArray(Variant[]::new)),
-                "native call result");
+        validateInvocation(dispatch, objectHandle, checkedArguments, allowedClosedSignal);
+        FoundrySignal previousAllowedSignal = this.allowedClosedSignal.get();
+        if (allowedClosedSignal == null) {
+            this.allowedClosedSignal.remove();
+        } else {
+            this.allowedClosedSignal.set(allowedClosedSignal);
+        }
+        try {
+            return Objects.requireNonNull(
+                    gateway.call(
+                            contextHandle,
+                            objectHandle,
+                            dispatch,
+                            checkedArguments.toArray(Variant[]::new)),
+                    "native call result");
+        } finally {
+            if (previousAllowedSignal == null) {
+                this.allowedClosedSignal.remove();
+            } else {
+                this.allowedClosedSignal.set(previousAllowedSignal);
+            }
+        }
     }
 
     @Override
@@ -169,6 +269,10 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 contextHandle, callbackHandle, Objects.requireNonNull(failure, "failure"));
     }
 
+    static FoundryCallable nativeCallableFromBridge(long contextHandle, long bridgeHandle) {
+        return nativeCallableFromBridge(contextHandle, bridgeHandle, -1);
+    }
+
     static FoundryCallable nativeCallableFromBridge(
             long contextHandle, long bridgeHandle, int arity) {
         FoundryNativeEngine engine = requireEngine(contextHandle);
@@ -214,9 +318,47 @@ public final class FoundryNativeEngine implements FoundryEngine {
         return signal[0];
     }
 
+    static Rid nativeRidFromBridge(long contextHandle, long bridgeHandle) {
+        FoundryNativeEngine engine = requireEngine(contextHandle);
+        return Rid.nativeBacked(
+                contextHandle,
+                bridgeHandle,
+                (requestedContext, requestedHandle) ->
+                        engine.release(requestedContext, requestedHandle));
+    }
+
+    static games.cafecito.foundry.runtime.FoundryObject nativeObjectFromBridge(
+            long contextHandle, long objectHandle) {
+        FoundryNativeEngine engine = requireEngine(contextHandle);
+        FoundryBindingContext context = engine.bindingContext.get();
+        if (context == null || !context.isAlive()) {
+            throw new IllegalStateException("native_object_binding_context_unavailable");
+        }
+        return context.bind(
+                objectHandle,
+                ObjectOwnership.BORROWED,
+                FoundryObject.class,
+                NativeDecodedObject::new);
+    }
+
+    private static final class NativeDecodedObject extends FoundryObject {
+        private NativeDecodedObject(FoundryBindingContext context, ObjectLease lease) {
+            super(context, lease);
+        }
+    }
+
     private Variant callValue(
             long requestedContext, String identity, List<Variant> arguments, String phase) {
-        CallResult result = call(requestedContext, 0, identity, arguments);
+        return callValue(requestedContext, identity, arguments, phase, null);
+    }
+
+    private Variant callValue(
+            long requestedContext,
+            String identity,
+            List<Variant> arguments,
+            String phase,
+            FoundrySignal allowedClosedSignal) {
+        CallResult result = call(requestedContext, 0, identity, arguments, allowedClosedSignal);
         if (result.error() != FoundryCallError.OK) {
             throw new IllegalStateException(
                     phase
@@ -232,7 +374,10 @@ public final class FoundryNativeEngine implements FoundryEngine {
     }
 
     private void validateInvocation(
-            FoundryNativeDispatch dispatch, long objectHandle, List<Variant> arguments) {
+            FoundryNativeDispatch dispatch,
+            long objectHandle,
+            List<Variant> arguments,
+            FoundrySignal allowedClosedSignal) {
         int receiverCount = receiverBearing(dispatch.kind()) ? 1 : 0;
         validateObjectHandle(dispatch, objectHandle);
         if (arguments.size() < receiverCount) {
@@ -268,7 +413,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
                     "argument " + index);
         }
         for (Variant argument : arguments) {
-            validateBridgeValue(argument, "dispatch");
+            validateBridgeValue(argument, "dispatch", allowedClosedSignal);
         }
     }
 
@@ -305,9 +450,38 @@ public final class FoundryNativeEngine implements FoundryEngine {
     }
 
     private void validateBridgeValue(Variant value, String phase) {
-        if (value.type() == VariantType.CALLABLE) {
+        validateBridgeValue(value, phase, null);
+    }
+
+    private void validateBridgeValue(
+            Variant value, String phase, FoundrySignal allowedClosedSignal) {
+        Set<Object> visiting = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        validateBridgeValue(value, phase, allowedClosedSignal, visiting, visited);
+    }
+
+    private void validateBridgeValue(
+            Variant value,
+            String phase,
+            FoundrySignal allowedClosedSignal,
+            Set<Object> visiting,
+            Set<Object> visited) {
+        if (value.type() == VariantType.RID) {
+            Rid rid = value.asRid();
+            if (rid.isClosed()) {
+                throw new IllegalArgumentException(
+                        "closed RID values are unsupported during " + phase + ".");
+            }
+            if (!rid.isNativeBacked() && rid.id() != 0) {
+                throw new IllegalArgumentException(
+                        "nonzero local RID values are unsupported during " + phase + ".");
+            }
+            if (rid.isNativeBacked() && rid.nativeContextHandle() != contextHandle) {
+                throw new IllegalArgumentException("RID context mismatch during " + phase + ".");
+            }
+        } else if (value.type() == VariantType.CALLABLE) {
             FoundryCallable callable = value.asCallable();
-            if (callable.isClosed()) {
+            if (callable.isClosed() && callable != allowedClosedCallable.get()) {
                 throw new IllegalArgumentException(
                         "closed CALLABLE values are unsupported during " + phase + ".");
             }
@@ -317,6 +491,10 @@ public final class FoundryNativeEngine implements FoundryEngine {
             }
         } else if (value.type() == VariantType.SIGNAL) {
             FoundrySignal signal = value.asSignal();
+            if (signal.isClosed() && signal != allowedClosedSignal) {
+                throw new IllegalArgumentException(
+                        "closed SIGNAL values are unsupported during " + phase + ".");
+            }
             if (signal.isLocal()) {
                 throw new IllegalArgumentException(
                         "Local SIGNAL values are unsupported during " + phase + ".");
@@ -324,7 +502,52 @@ public final class FoundryNativeEngine implements FoundryEngine {
             if (signal.nativeContextHandle() != contextHandle) {
                 throw new IllegalArgumentException("SIGNAL context mismatch during " + phase + ".");
             }
+        } else if (value.type() == VariantType.OBJECT) {
+            if (value.asObject().context().contextHandle() != contextHandle) {
+                throw new IllegalArgumentException("OBJECT context mismatch during " + phase + ".");
+            }
+        } else if (value.type() == VariantType.ARRAY) {
+            Object identity = value.value();
+            beginCollectionValidation(identity, phase, visiting, visited);
+            if (!visited.contains(identity)) {
+                for (Variant element : ((FoundryArray<?>) identity).variantSnapshot()) {
+                    validateBridgeValue(element, phase, allowedClosedSignal, visiting, visited);
+                }
+                finishCollectionValidation(identity, visiting, visited);
+            }
+        } else if (value.type() == VariantType.DICTIONARY) {
+            Object identity = value.value();
+            beginCollectionValidation(identity, phase, visiting, visited);
+            if (!visited.contains(identity)) {
+                FoundryDictionary.VariantSnapshot snapshot =
+                        ((FoundryDictionary<?, ?>) identity).variantSnapshot();
+                Variant[] keys = snapshot.keys();
+                Variant[] values = snapshot.values();
+                for (int index = 0; index < keys.length; index++) {
+                    validateBridgeValue(keys[index], phase, allowedClosedSignal, visiting, visited);
+                    validateBridgeValue(
+                            values[index], phase, allowedClosedSignal, visiting, visited);
+                }
+                finishCollectionValidation(identity, visiting, visited);
+            }
         }
+    }
+
+    private static void beginCollectionValidation(
+            Object identity, String phase, Set<Object> visiting, Set<Object> visited) {
+        if (visited.contains(identity)) {
+            return;
+        }
+        if (!visiting.add(identity)) {
+            throw new IllegalArgumentException(
+                    "cyclic Variant collection is unsupported during " + phase + ".");
+        }
+    }
+
+    private static void finishCollectionValidation(
+            Object identity, Set<Object> visiting, Set<Object> visited) {
+        visiting.remove(identity);
+        visited.add(identity);
     }
 
     private static boolean matchesNativeType(VariantType actual, String nativeType) {
@@ -441,19 +664,17 @@ public final class FoundryNativeEngine implements FoundryEngine {
         return engine;
     }
 
-    private static UnsupportedOperationException registrationUnavailable() {
-        return new UnsupportedOperationException(REGISTRATION_UNAVAILABLE);
-    }
-
     private final class SignalBackend implements FoundrySignal.NativeBackend {
         private final FoundrySignal[] signal;
         private final long signalHandle;
         private final Object connectionLock = new Object();
         private final AtomicLong nextConnection = new AtomicLong();
-        private final Map<Long, FoundryCallable> connections = new LinkedHashMap<>();
+        private final Map<Long, ConnectedCallable> connections = new LinkedHashMap<>();
         private final IdentityHashMap<FoundryCallable, Long> connectionsByCallable =
                 new IdentityHashMap<>();
         private final Set<FoundryCallable> pendingConnections =
+                Collections.newSetFromMap(new IdentityHashMap<>());
+        private final Set<FoundryCallable> pendingCallableCleanup =
                 Collections.newSetFromMap(new IdentityHashMap<>());
         private boolean signalReleased;
 
@@ -477,14 +698,26 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 }
             }
             boolean connected = false;
+            FoundryCallable transportCallable = callable;
+            boolean ownsTransportCallable = false;
             try {
+                if (callable.isNativeBacked()) {
+                    FoundryNativeEngine.this.retain(
+                            callable.nativeContextHandle(), callable.nativeBridgeHandle());
+                    transportCallable =
+                            nativeCallableFromBridge(
+                                    callable.nativeContextHandle(),
+                                    callable.nativeBridgeHandle(),
+                                    callable.arity());
+                    ownsTransportCallable = true;
+                }
                 long error =
                         callValue(
                                         requestedContext,
                                         SIGNAL_CONNECT_IDENTITY,
                                         List.of(
                                                 Variant.ofSignal(signal[0]),
-                                                Variant.ofCallable(callable)),
+                                                Variant.ofCallable(transportCallable)),
                                         "native_signal_connect")
                                 .asLong();
                 if (error != 0) {
@@ -494,11 +727,26 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 long connection = nextConnection.incrementAndGet();
                 synchronized (connectionLock) {
                     pendingConnections.remove(callable);
-                    connections.put(connection, callable);
+                    connections.put(
+                            connection,
+                            new ConnectedCallable(
+                                    callable, transportCallable, ownsTransportCallable));
                     connectionsByCallable.put(callable, connection);
                 }
                 connected = true;
                 return connection;
+            } catch (RuntimeException | Error connectFailure) {
+                if (ownsTransportCallable) {
+                    try {
+                        transportCallable.close();
+                    } catch (RuntimeException | Error cleanupFailure) {
+                        synchronized (connectionLock) {
+                            pendingCallableCleanup.add(transportCallable);
+                        }
+                        connectFailure.addSuppressed(cleanupFailure);
+                    }
+                }
+                throw connectFailure;
             } finally {
                 if (!connected) {
                     synchronized (connectionLock) {
@@ -512,22 +760,41 @@ public final class FoundryNativeEngine implements FoundryEngine {
         public void disconnect(
                 long requestedContext, long requestedSignalHandle, long connectionHandle) {
             requireSignal(requestedSignalHandle);
-            FoundryCallable callable;
+            ConnectedCallable connection;
             synchronized (connectionLock) {
-                callable = connections.get(connectionHandle);
-                if (callable == null) {
+                connection = connections.get(connectionHandle);
+                if (connection == null) {
                     return;
                 }
             }
-            callValue(
-                    requestedContext,
-                    SIGNAL_DISCONNECT_IDENTITY,
-                    List.of(Variant.ofSignal(signal[0]), Variant.ofCallable(callable)),
-                    "native_signal_disconnect");
+            if (!connection.nativeDisconnected) {
+                FoundryCallable previousAllowedCallable = allowedClosedCallable.get();
+                allowedClosedCallable.set(connection.transportCallable);
+                try {
+                    callValue(
+                            requestedContext,
+                            SIGNAL_DISCONNECT_IDENTITY,
+                            List.of(
+                                    Variant.ofSignal(signal[0]),
+                                    Variant.ofCallable(connection.transportCallable)),
+                            "native_signal_disconnect",
+                            signal[0]);
+                    connection.nativeDisconnected = true;
+                } finally {
+                    if (previousAllowedCallable == null) {
+                        allowedClosedCallable.remove();
+                    } else {
+                        allowedClosedCallable.set(previousAllowedCallable);
+                    }
+                }
+            }
+            if (connection.ownsTransportCallable) {
+                connection.transportCallable.close();
+            }
             synchronized (connectionLock) {
-                if (connections.get(connectionHandle) == callable) {
+                if (connections.get(connectionHandle) == connection) {
                     connections.remove(connectionHandle);
-                    connectionsByCallable.remove(callable);
+                    connectionsByCallable.remove(connection.originalCallable);
                 }
             }
         }
@@ -547,6 +814,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
         public void release(long requestedContext, long requestedSignalHandle) {
             requireSignal(requestedSignalHandle);
             List<Long> activeConnections;
+            List<FoundryCallable> pendingCleanup;
             synchronized (connectionLock) {
                 if (signalReleased) {
                     connections.clear();
@@ -555,14 +823,28 @@ public final class FoundryNativeEngine implements FoundryEngine {
                     return;
                 }
                 activeConnections = List.copyOf(connections.keySet());
+                pendingCleanup = List.copyOf(pendingCallableCleanup);
             }
             Throwable failure = null;
+            for (FoundryCallable callable : pendingCleanup) {
+                try {
+                    callable.close();
+                    synchronized (connectionLock) {
+                        pendingCallableCleanup.remove(callable);
+                    }
+                } catch (RuntimeException | Error cleanupFailure) {
+                    failure = combineFailures(failure, cleanupFailure);
+                }
+            }
             for (Long connection : activeConnections) {
                 try {
                     disconnect(requestedContext, requestedSignalHandle, connection);
                 } catch (RuntimeException | Error disconnectFailure) {
                     failure = combineFailures(failure, disconnectFailure);
                 }
+            }
+            if (failure != null) {
+                rethrowUnchecked(failure);
             }
             try {
                 FoundryNativeEngine.this.release(requestedContext, requestedSignalHandle);
@@ -571,18 +853,32 @@ public final class FoundryNativeEngine implements FoundryEngine {
                     connections.clear();
                     connectionsByCallable.clear();
                     pendingConnections.clear();
+                    pendingCallableCleanup.clear();
                 }
             } catch (RuntimeException | Error releaseFailure) {
-                failure = combineFailures(failure, releaseFailure);
-            }
-            if (failure != null) {
-                rethrowUnchecked(failure);
+                rethrowUnchecked(releaseFailure);
             }
         }
 
         private void requireSignal(long requestedSignalHandle) {
             if (requestedSignalHandle != signalHandle) {
                 throw new IllegalArgumentException("Native Signal handle mismatch.");
+            }
+        }
+
+        private final class ConnectedCallable {
+            private final FoundryCallable originalCallable;
+            private final FoundryCallable transportCallable;
+            private final boolean ownsTransportCallable;
+            private boolean nativeDisconnected;
+
+            private ConnectedCallable(
+                    FoundryCallable originalCallable,
+                    FoundryCallable transportCallable,
+                    boolean ownsTransportCallable) {
+                this.originalCallable = originalCallable;
+                this.transportCallable = transportCallable;
+                this.ownsTransportCallable = ownsTransportCallable;
             }
         }
     }
@@ -600,6 +896,706 @@ public final class FoundryNativeEngine implements FoundryEngine {
             throw runtimeFailure;
         }
         throw (Error) failure;
+    }
+
+    private static NativeVariantSnapshot nativeSnapshotV1(long contextHandle, Variant variant) {
+        FoundryNativeEngine engine = requireEngine(contextHandle);
+        Variant frozen =
+                engine.freezeBridgeValue(
+                        Objects.requireNonNull(variant, "variant"),
+                        "native snapshot",
+                        engine.allowedClosedSignal.get(),
+                        Collections.newSetFromMap(new IdentityHashMap<>()),
+                        new IdentityHashMap<>());
+        return nativeSnapshotUncheckedV1(frozen);
+    }
+
+    private Variant freezeBridgeValue(
+            Variant value,
+            String phase,
+            FoundrySignal allowedClosedSignal,
+            Set<Object> visiting,
+            IdentityHashMap<Object, Variant> frozenCollections) {
+        if (value.type() != VariantType.ARRAY && value.type() != VariantType.DICTIONARY) {
+            validateBridgeValue(
+                    value,
+                    phase,
+                    allowedClosedSignal,
+                    Collections.newSetFromMap(new IdentityHashMap<>()),
+                    Collections.newSetFromMap(new IdentityHashMap<>()));
+            return value;
+        }
+        Object identity = value.value();
+        Variant frozen = frozenCollections.get(identity);
+        if (frozen != null) {
+            return frozen;
+        }
+        if (!visiting.add(identity)) {
+            throw new IllegalArgumentException(
+                    "cyclic Variant collection is unsupported during " + phase + ".");
+        }
+        try {
+            if (value.type() == VariantType.ARRAY) {
+                FoundryArray<Variant> copy = FoundryArray.untyped();
+                for (Variant element : ((FoundryArray<?>) identity).variantSnapshot()) {
+                    copy.addVariant(
+                            freezeBridgeValue(
+                                    element,
+                                    phase,
+                                    allowedClosedSignal,
+                                    visiting,
+                                    frozenCollections));
+                }
+                frozen = Variant.of(copy);
+            } else {
+                FoundryDictionary<Variant, Variant> copy =
+                        new FoundryDictionary<>(VariantCodec.VARIANT, VariantCodec.VARIANT);
+                FoundryDictionary.VariantSnapshot snapshot =
+                        ((FoundryDictionary<?, ?>) identity).variantSnapshot();
+                Variant[] keys = snapshot.keys();
+                Variant[] values = snapshot.values();
+                for (int index = 0; index < keys.length; index++) {
+                    copy.putVariants(
+                            freezeBridgeValue(
+                                    keys[index],
+                                    phase,
+                                    allowedClosedSignal,
+                                    visiting,
+                                    frozenCollections),
+                            freezeBridgeValue(
+                                    values[index],
+                                    phase,
+                                    allowedClosedSignal,
+                                    visiting,
+                                    frozenCollections));
+                }
+                frozen = Variant.of(copy);
+            }
+            frozenCollections.put(identity, frozen);
+            return frozen;
+        } finally {
+            visiting.remove(identity);
+        }
+    }
+
+    private static NativeVariantSnapshot nativeSnapshotUncheckedV1(Variant variant) {
+        Variant value = Objects.requireNonNull(variant, "variant");
+        return switch (value.type()) {
+            case NIL -> NativeVariantSnapshot.empty(value.type());
+            case BOOLEAN ->
+                    NativeVariantSnapshot.integers(
+                            value.type(), new long[] {value.asBoolean() ? 1 : 0});
+            case INTEGER ->
+                    NativeVariantSnapshot.integers(value.type(), new long[] {value.asLong()});
+            case FLOAT ->
+                    NativeVariantSnapshot.reals(value.type(), new double[] {value.asDouble()});
+            case STRING -> NativeVariantSnapshot.text(value.type(), value.asString());
+            case VECTOR2 -> NativeVariantSnapshot.reals(value.type(), vector2(value.asVector2()));
+            case VECTOR2I ->
+                    NativeVariantSnapshot.integers(value.type(), vector2i(value.asVector2i()));
+            case RECT2 -> {
+                Rect2 rect = value.asRect2();
+                yield NativeVariantSnapshot.reals(
+                        value.type(), concat(vector2(rect.position()), vector2(rect.size())));
+            }
+            case RECT2I -> {
+                Rect2i rect = value.asRect2i();
+                yield NativeVariantSnapshot.integers(
+                        value.type(), concat(vector2i(rect.position()), vector2i(rect.size())));
+            }
+            case VECTOR3 -> NativeVariantSnapshot.reals(value.type(), vector3(value.asVector3()));
+            case VECTOR3I ->
+                    NativeVariantSnapshot.integers(value.type(), vector3i(value.asVector3i()));
+            case TRANSFORM2D -> {
+                Transform2D transform = value.asTransform2D();
+                yield NativeVariantSnapshot.reals(
+                        value.type(),
+                        concat(
+                                vector2(transform.x()),
+                                vector2(transform.y()),
+                                vector2(transform.origin())));
+            }
+            case VECTOR4 -> NativeVariantSnapshot.reals(value.type(), vector4(value.asVector4()));
+            case VECTOR4I ->
+                    NativeVariantSnapshot.integers(value.type(), vector4i(value.asVector4i()));
+            case PLANE -> {
+                Plane plane = value.asPlane();
+                yield NativeVariantSnapshot.reals(
+                        value.type(), concat(vector3(plane.normal()), new double[] {plane.d()}));
+            }
+            case QUATERNION ->
+                    NativeVariantSnapshot.reals(value.type(), quaternion(value.asQuaternion()));
+            case AABB -> {
+                Aabb aabb = value.asAabb();
+                yield NativeVariantSnapshot.reals(
+                        value.type(), concat(vector3(aabb.position()), vector3(aabb.size())));
+            }
+            case BASIS -> {
+                Basis basis = value.asBasis();
+                yield NativeVariantSnapshot.reals(
+                        value.type(),
+                        concat(vector3(basis.x()), vector3(basis.y()), vector3(basis.z())));
+            }
+            case TRANSFORM3D -> {
+                Transform3D transform = value.asTransform3D();
+                Basis basis = transform.basis();
+                yield NativeVariantSnapshot.reals(
+                        value.type(),
+                        concat(
+                                vector3(basis.x()),
+                                vector3(basis.y()),
+                                vector3(basis.z()),
+                                vector3(transform.origin())));
+            }
+            case PROJECTION -> {
+                Projection projection = value.asProjection();
+                yield NativeVariantSnapshot.reals(
+                        value.type(),
+                        concat(
+                                vector4(projection.x()),
+                                vector4(projection.y()),
+                                vector4(projection.z()),
+                                vector4(projection.w())));
+            }
+            case COLOR -> {
+                Color color = value.asColor();
+                yield NativeVariantSnapshot.reals(
+                        value.type(),
+                        new double[] {color.red(), color.green(), color.blue(), color.alpha()});
+            }
+            case STRING_NAME ->
+                    NativeVariantSnapshot.text(value.type(), value.asStringName().value());
+            case NODE_PATH -> NativeVariantSnapshot.text(value.type(), value.asNodePath().value());
+            case RID -> {
+                Rid rid = value.asRid();
+                yield rid.isNativeBacked()
+                        ? NativeVariantSnapshot.nativeIdentity(
+                                value.type(),
+                                rid.nativeContextHandle(),
+                                rid.nativeBridgeHandle(),
+                                -1)
+                        : NativeVariantSnapshot.integers(value.type(), new long[] {rid.id()});
+            }
+            case OBJECT ->
+                    NativeVariantSnapshot.integers(
+                            value.type(), new long[] {value.asObject().objectHandle()});
+            case CALLABLE -> {
+                FoundryCallable callable = value.asCallable();
+                yield callable.isNativeBacked()
+                        ? NativeVariantSnapshot.nativeIdentity(
+                                value.type(),
+                                callable.nativeContextHandle(),
+                                callable.nativeBridgeHandle(),
+                                callable.arity())
+                        : NativeVariantSnapshot.callback(
+                                value.type(),
+                                callable,
+                                localCallableId(callable),
+                                callable.arity());
+            }
+            case SIGNAL -> {
+                FoundrySignal signal = value.asSignal();
+                yield NativeVariantSnapshot.nativeIdentity(
+                        value.type(),
+                        signal.nativeContextHandle(),
+                        signal.nativeBridgeHandle(),
+                        -1);
+            }
+            case DICTIONARY -> {
+                FoundryDictionary.VariantSnapshot snapshot =
+                        ((FoundryDictionary<?, ?>) value.value()).variantSnapshot();
+                yield NativeVariantSnapshot.collection(
+                        value.type(), snapshot.keys(), snapshot.values());
+            }
+            case ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            ((FoundryArray<?>) value.value()).variantSnapshot());
+            case PACKED_BYTE_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedByteArray) value.value()).toArray()));
+            case PACKED_INT32_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedInt32Array) value.value()).toArray()));
+            case PACKED_INT64_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedInt64Array) value.value()).toArray()));
+            case PACKED_FLOAT32_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedFloat32Array) value.value()).toArray()));
+            case PACKED_FLOAT64_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedFloat64Array) value.value()).toArray()));
+            case PACKED_STRING_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedStringArray) value.value()).toArray()));
+            case PACKED_VECTOR2_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedVector2Array) value.value()).toArray()));
+            case PACKED_VECTOR3_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedVector3Array) value.value()).toArray()));
+            case PACKED_COLOR_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedColorArray) value.value()).toArray()));
+            case PACKED_VECTOR4_ARRAY ->
+                    NativeVariantSnapshot.collection(
+                            value.type(),
+                            new Variant[0],
+                            variants(((PackedVector4Array) value.value()).toArray()));
+        };
+    }
+
+    private static Variant invokeLocalCallableV1(
+            long contextHandle, FoundryCallable callable, Variant[] arguments) {
+        Variant result =
+                Objects.requireNonNull(callable, "callable")
+                        .call(List.of(Objects.requireNonNull(arguments, "arguments")));
+        requireEngine(contextHandle)
+                .validateBridgeValue(
+                        Objects.requireNonNull(result, "callable result"), "callback return");
+        return result;
+    }
+
+    private static String[] nativeDispatchArgumentTypesV1(FoundryNativeDispatch dispatch) {
+        return Objects.requireNonNull(dispatch, "dispatch")
+                .argumentNativeTypes()
+                .toArray(String[]::new);
+    }
+
+    private static long localCallableId(FoundryCallable callable) {
+        synchronized (LOCAL_CALLABLE_IDS) {
+            return LOCAL_CALLABLE_IDS.computeIfAbsent(
+                    callable,
+                    ignored -> {
+                        long identity = NEXT_LOCAL_CALLABLE_ID.incrementAndGet();
+                        if (identity == 0) {
+                            throw new IllegalStateException(
+                                    "Local Callable identity space exhausted.");
+                        }
+                        return identity;
+                    });
+        }
+    }
+
+    private static VariantType variantTypeFromWireCode(int wireCode) {
+        VariantType[] types = VariantType.values();
+        if (wireCode < 0 || wireCode >= types.length) {
+            throw new IllegalArgumentException("invalid_native_variant_type:" + wireCode);
+        }
+        return types[wireCode];
+    }
+
+    private static Variant nativeVariantFromSnapshotV1(
+            long contextHandle, long bridgeHandle, NativeVariantSnapshot snapshot) {
+        NativeVariantSnapshot value = Objects.requireNonNull(snapshot, "snapshot");
+        VariantType type = variantTypeFromWireCode(value.type());
+        return switch (type) {
+            case NIL -> Variant.nil();
+            case BOOLEAN -> Variant.of(value.integers()[0] != 0);
+            case INTEGER -> Variant.of(value.integers()[0]);
+            case FLOAT -> Variant.of(value.reals()[0]);
+            case STRING -> Variant.of(value.text());
+            case VECTOR2 -> Variant.of(new Vector2(value.reals()[0], value.reals()[1]));
+            case VECTOR2I ->
+                    Variant.of(new Vector2i((int) value.integers()[0], (int) value.integers()[1]));
+            case RECT2 ->
+                    Variant.of(new Rect2(vector2(value.reals(), 0), vector2(value.reals(), 2)));
+            case RECT2I ->
+                    Variant.of(
+                            new Rect2i(
+                                    vector2i(value.integers(), 0), vector2i(value.integers(), 2)));
+            case VECTOR3 -> Variant.of(vector3(value.reals(), 0));
+            case VECTOR3I -> Variant.of(vector3i(value.integers(), 0));
+            case TRANSFORM2D ->
+                    Variant.of(
+                            new Transform2D(
+                                    vector2(value.reals(), 0),
+                                    vector2(value.reals(), 2),
+                                    vector2(value.reals(), 4)));
+            case VECTOR4 -> Variant.of(vector4(value.reals(), 0));
+            case VECTOR4I -> Variant.of(vector4i(value.integers(), 0));
+            case PLANE -> Variant.of(new Plane(vector3(value.reals(), 0), value.reals()[3]));
+            case QUATERNION ->
+                    Variant.of(
+                            new Quaternion(
+                                    value.reals()[0],
+                                    value.reals()[1],
+                                    value.reals()[2],
+                                    value.reals()[3]));
+            case AABB -> Variant.of(new Aabb(vector3(value.reals(), 0), vector3(value.reals(), 3)));
+            case BASIS ->
+                    Variant.of(
+                            new Basis(
+                                    vector3(value.reals(), 0),
+                                    vector3(value.reals(), 3),
+                                    vector3(value.reals(), 6)));
+            case TRANSFORM3D ->
+                    Variant.of(
+                            new Transform3D(
+                                    new Basis(
+                                            vector3(value.reals(), 0),
+                                            vector3(value.reals(), 3),
+                                            vector3(value.reals(), 6)),
+                                    vector3(value.reals(), 9)));
+            case PROJECTION ->
+                    Variant.of(
+                            new Projection(
+                                    vector4(value.reals(), 0),
+                                    vector4(value.reals(), 4),
+                                    vector4(value.reals(), 8),
+                                    vector4(value.reals(), 12)));
+            case COLOR ->
+                    Variant.of(
+                            new Color(
+                                    value.reals()[0],
+                                    value.reals()[1],
+                                    value.reals()[2],
+                                    value.reals()[3]));
+            case STRING_NAME -> Variant.of(new StringName(value.text()));
+            case NODE_PATH -> Variant.of(new NodePath(value.text()));
+            case RID -> Variant.of(nativeRidFromBridge(contextHandle, bridgeHandle));
+            case OBJECT -> Variant.ofObject(nativeObjectFromBridge(contextHandle, bridgeHandle));
+            case CALLABLE ->
+                    Variant.ofCallable(nativeCallableFromBridge(contextHandle, bridgeHandle));
+            case SIGNAL -> Variant.ofSignal(nativeSignalFromBridge(contextHandle, bridgeHandle));
+            case DICTIONARY -> {
+                Variant[] keys = value.keys();
+                Variant[] values = value.values();
+                if (keys.length != values.length) {
+                    throw new IllegalArgumentException("invalid_native_dictionary_snapshot");
+                }
+                FoundryDictionary<Variant, Variant> dictionary =
+                        new FoundryDictionary<>(VariantCodec.VARIANT, VariantCodec.VARIANT);
+                for (int index = 0; index < keys.length; index++) {
+                    dictionary.putVariants(keys[index], values[index]);
+                }
+                yield Variant.of(dictionary);
+            }
+            case ARRAY -> {
+                FoundryArray<Variant> array = FoundryArray.untyped();
+                for (Variant element : value.values()) {
+                    array.addVariant(element);
+                }
+                yield Variant.of(array);
+            }
+            case PACKED_BYTE_ARRAY -> Variant.of(new PackedByteArray(byteArray(value.values())));
+            case PACKED_INT32_ARRAY -> Variant.of(new PackedInt32Array(intArray(value.values())));
+            case PACKED_INT64_ARRAY -> Variant.of(new PackedInt64Array(longArray(value.values())));
+            case PACKED_FLOAT32_ARRAY ->
+                    Variant.of(new PackedFloat32Array(floatArray(value.values())));
+            case PACKED_FLOAT64_ARRAY ->
+                    Variant.of(new PackedFloat64Array(doubleArray(value.values())));
+            case PACKED_STRING_ARRAY ->
+                    Variant.of(new PackedStringArray(stringArray(value.values())));
+            case PACKED_VECTOR2_ARRAY ->
+                    Variant.of(new PackedVector2Array(vector2Array(value.values())));
+            case PACKED_VECTOR3_ARRAY ->
+                    Variant.of(new PackedVector3Array(vector3Array(value.values())));
+            case PACKED_COLOR_ARRAY -> Variant.of(new PackedColorArray(colorArray(value.values())));
+            case PACKED_VECTOR4_ARRAY ->
+                    Variant.of(new PackedVector4Array(vector4Array(value.values())));
+        };
+    }
+
+    private static double[] vector2(Vector2 value) {
+        return new double[] {value.x(), value.y()};
+    }
+
+    private static long[] vector2i(Vector2i value) {
+        return new long[] {value.x(), value.y()};
+    }
+
+    private static double[] vector3(Vector3 value) {
+        return new double[] {value.x(), value.y(), value.z()};
+    }
+
+    private static long[] vector3i(Vector3i value) {
+        return new long[] {value.x(), value.y(), value.z()};
+    }
+
+    private static double[] vector4(Vector4 value) {
+        return new double[] {value.x(), value.y(), value.z(), value.w()};
+    }
+
+    private static long[] vector4i(Vector4i value) {
+        return new long[] {value.x(), value.y(), value.z(), value.w()};
+    }
+
+    private static double[] quaternion(Quaternion value) {
+        return new double[] {value.x(), value.y(), value.z(), value.w()};
+    }
+
+    private static Vector2 vector2(double[] values, int offset) {
+        return new Vector2(values[offset], values[offset + 1]);
+    }
+
+    private static Vector2i vector2i(long[] values, int offset) {
+        return new Vector2i((int) values[offset], (int) values[offset + 1]);
+    }
+
+    private static Vector3 vector3(double[] values, int offset) {
+        return new Vector3(values[offset], values[offset + 1], values[offset + 2]);
+    }
+
+    private static Vector3i vector3i(long[] values, int offset) {
+        return new Vector3i(
+                (int) values[offset], (int) values[offset + 1], (int) values[offset + 2]);
+    }
+
+    private static Vector4 vector4(double[] values, int offset) {
+        return new Vector4(
+                values[offset], values[offset + 1], values[offset + 2], values[offset + 3]);
+    }
+
+    private static Vector4i vector4i(long[] values, int offset) {
+        return new Vector4i(
+                (int) values[offset],
+                (int) values[offset + 1],
+                (int) values[offset + 2],
+                (int) values[offset + 3]);
+    }
+
+    private static double[] concat(double[]... arrays) {
+        int length = Arrays.stream(arrays).mapToInt(array -> array.length).sum();
+        double[] result = new double[length];
+        int offset = 0;
+        for (double[] array : arrays) {
+            System.arraycopy(array, 0, result, offset, array.length);
+            offset += array.length;
+        }
+        return result;
+    }
+
+    private static long[] concat(long[]... arrays) {
+        int length = Arrays.stream(arrays).mapToInt(array -> array.length).sum();
+        long[] result = new long[length];
+        int offset = 0;
+        for (long[] array : arrays) {
+            System.arraycopy(array, 0, result, offset, array.length);
+            offset += array.length;
+        }
+        return result;
+    }
+
+    private static Variant[] variants(byte[] values) {
+        Variant[] result = new Variant[values.length];
+        for (int index = 0; index < values.length; index++)
+            result[index] = Variant.of(values[index]);
+        return result;
+    }
+
+    private static Variant[] variants(int[] values) {
+        return Arrays.stream(values).mapToObj(Variant::of).toArray(Variant[]::new);
+    }
+
+    private static Variant[] variants(long[] values) {
+        return Arrays.stream(values).mapToObj(Variant::of).toArray(Variant[]::new);
+    }
+
+    private static Variant[] variants(float[] values) {
+        Variant[] result = new Variant[values.length];
+        for (int index = 0; index < values.length; index++)
+            result[index] = Variant.of(values[index]);
+        return result;
+    }
+
+    private static Variant[] variants(double[] values) {
+        return Arrays.stream(values).mapToObj(Variant::of).toArray(Variant[]::new);
+    }
+
+    private static Variant[] variants(Object[] values) {
+        return Arrays.stream(values).map(Variant::of).toArray(Variant[]::new);
+    }
+
+    private static byte[] byteArray(Variant[] values) {
+        byte[] result = new byte[values.length];
+        for (int index = 0; index < values.length; index++)
+            result[index] = (byte) values[index].asLong();
+        return result;
+    }
+
+    private static int[] intArray(Variant[] values) {
+        return Arrays.stream(values).mapToInt(Variant::asInt).toArray();
+    }
+
+    private static long[] longArray(Variant[] values) {
+        return Arrays.stream(values).mapToLong(Variant::asLong).toArray();
+    }
+
+    private static float[] floatArray(Variant[] values) {
+        float[] result = new float[values.length];
+        for (int index = 0; index < values.length; index++) result[index] = values[index].asFloat();
+        return result;
+    }
+
+    private static double[] doubleArray(Variant[] values) {
+        return Arrays.stream(values).mapToDouble(Variant::asDouble).toArray();
+    }
+
+    private static String[] stringArray(Variant[] values) {
+        return Arrays.stream(values).map(Variant::asString).toArray(String[]::new);
+    }
+
+    private static Vector2[] vector2Array(Variant[] values) {
+        return Arrays.stream(values).map(Variant::asVector2).toArray(Vector2[]::new);
+    }
+
+    private static Vector3[] vector3Array(Variant[] values) {
+        return Arrays.stream(values).map(Variant::asVector3).toArray(Vector3[]::new);
+    }
+
+    private static Color[] colorArray(Variant[] values) {
+        return Arrays.stream(values).map(Variant::asColor).toArray(Color[]::new);
+    }
+
+    private static Vector4[] vector4Array(Variant[] values) {
+        return Arrays.stream(values).map(Variant::asVector4).toArray(Vector4[]::new);
+    }
+
+    private record NativeVariantSnapshot(
+            int type,
+            long[] integers,
+            double[] reals,
+            String text,
+            Variant[] keys,
+            Variant[] values,
+            long nativeContext,
+            long nativeHandle,
+            FoundryCallable callback,
+            int callableArity) {
+        private NativeVariantSnapshot {
+            integers = integers.clone();
+            reals = reals.clone();
+            keys = keys.clone();
+            values = values.clone();
+        }
+
+        static NativeVariantSnapshot empty(VariantType type) {
+            return new NativeVariantSnapshot(
+                    type.ordinal(),
+                    new long[0],
+                    new double[0],
+                    "",
+                    new Variant[0],
+                    new Variant[0],
+                    0,
+                    0,
+                    null,
+                    -1);
+        }
+
+        static NativeVariantSnapshot integers(VariantType type, long[] values) {
+            NativeVariantSnapshot empty = empty(type);
+            return new NativeVariantSnapshot(
+                    empty.type,
+                    values,
+                    empty.reals,
+                    empty.text,
+                    empty.keys,
+                    empty.values,
+                    0,
+                    0,
+                    null,
+                    -1);
+        }
+
+        static NativeVariantSnapshot reals(VariantType type, double[] values) {
+            NativeVariantSnapshot empty = empty(type);
+            return new NativeVariantSnapshot(
+                    empty.type,
+                    empty.integers,
+                    values,
+                    empty.text,
+                    empty.keys,
+                    empty.values,
+                    0,
+                    0,
+                    null,
+                    -1);
+        }
+
+        static NativeVariantSnapshot text(VariantType type, String value) {
+            NativeVariantSnapshot empty = empty(type);
+            return new NativeVariantSnapshot(
+                    empty.type,
+                    empty.integers,
+                    empty.reals,
+                    value,
+                    empty.keys,
+                    empty.values,
+                    0,
+                    0,
+                    null,
+                    -1);
+        }
+
+        static NativeVariantSnapshot collection(
+                VariantType type, Variant[] keys, Variant[] values) {
+            NativeVariantSnapshot empty = empty(type);
+            return new NativeVariantSnapshot(
+                    empty.type,
+                    empty.integers,
+                    empty.reals,
+                    empty.text,
+                    keys,
+                    values,
+                    0,
+                    0,
+                    null,
+                    -1);
+        }
+
+        static NativeVariantSnapshot nativeIdentity(
+                VariantType type, long context, long handle, int arity) {
+            NativeVariantSnapshot empty = empty(type);
+            return new NativeVariantSnapshot(
+                    empty.type,
+                    empty.integers,
+                    empty.reals,
+                    empty.text,
+                    empty.keys,
+                    empty.values,
+                    context,
+                    handle,
+                    null,
+                    arity);
+        }
+
+        static NativeVariantSnapshot callback(
+                VariantType type, FoundryCallable callback, long identity, int arity) {
+            NativeVariantSnapshot empty = empty(type);
+            return new NativeVariantSnapshot(
+                    empty.type,
+                    new long[] {identity},
+                    empty.reals,
+                    empty.text,
+                    empty.keys,
+                    empty.values,
+                    0,
+                    0,
+                    callback,
+                    arity);
+        }
     }
 
     interface NativeGateway {
