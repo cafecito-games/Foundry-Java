@@ -20,6 +20,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 /** Debug-variant contract tests for the Android production-startup fixture. */
@@ -277,6 +279,49 @@ class FoundryJavaTestRegistryTest {
         assertTrue(
                 instrumentation.contains(
                         "new JSONObject().put(\"schema_version\", 1).put(\"run_index\", runIndex)"));
+    }
+
+    @Test
+    void lifecycleCaptureRetainsAssignedEvidenceWhenValidationFails() throws Exception {
+        Class<?> captureType = requireFixture("FoundryJavaTestHost$LifecycleCapture");
+        var constructor = captureType.getDeclaredConstructor(Object.class);
+        constructor.setAccessible(true);
+        Object capture = constructor.newInstance("fallback");
+        Method captureAndValidate =
+                requireFixtureMethod(
+                        captureType, "captureAndValidate", Supplier.class, Consumer.class);
+        Method evidence = requireFixtureMethod(captureType, "evidence");
+        String partial = "{\"schema_version\":1}";
+        Supplier<String> source = () -> partial;
+        Consumer<String> validation =
+                value -> {
+                    assertEquals(partial, value);
+                    throw new IllegalStateException("partial lifecycle");
+                };
+
+        assertInvocationFailure(
+                IllegalStateException.class,
+                () -> captureAndValidate.invoke(capture, source, validation));
+
+        assertEquals(partial, evidence.invoke(capture));
+
+        Object failedCapture = constructor.newInstance("fallback");
+        Supplier<String> invalid =
+                () -> {
+                    throw new IllegalStateException("invalid native JSON");
+                };
+        assertInvocationFailure(
+                IllegalStateException.class,
+                () -> captureAndValidate.invoke(failedCapture, invalid, validation));
+        assertEquals("fallback", evidence.invoke(failedCapture));
+
+        String instrumentation =
+                fixtureSource(
+                        "src/androidTest/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaInstrumentation.java");
+        assertTrue(instrumentation.contains("LifecycleCapture<JSONObject> lifecycle"));
+        assertTrue(instrumentation.contains("lifecycle.captureAndValidate("));
+        assertFalse(instrumentation.contains("lifecycle = FoundryJavaTestHost.runLifecycle"));
     }
 
     @Test

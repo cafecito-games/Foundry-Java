@@ -1,5 +1,8 @@
 package games.cafecito.foundry.java;
 
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -18,10 +21,17 @@ public final class FoundryJavaTestHost {
     }
 
     public static JSONObject runLifecycle(int runIndex) {
+        return finalizeLifecycle(captureLifecycle(runIndex), runIndex);
+    }
+
+    static JSONObject captureLifecycle(int runIndex) {
         if (runIndex <= 0) {
             throw new IllegalArgumentException("foundry_run_index must be positive.");
         }
-        JSONObject evidence = parse("lifecycle", invokeLifecycle(runIndex));
+        return parse("lifecycle", invokeLifecycle(runIndex));
+    }
+
+    static JSONObject finalizeLifecycle(JSONObject evidence, int runIndex) {
         requireInt(evidence, "schema_version", 1);
         requireInt(evidence, "run_index", runIndex);
         replaceContextHandle(evidence, requireObservedCoreContextHandle());
@@ -119,6 +129,25 @@ public final class FoundryJavaTestHost {
     private static native String nativePreEntryEvidenceV1();
 
     private static native String nativeRunLifecycleV1(int runIndex);
+
+    static final class LifecycleCapture<T> {
+        private T evidence;
+
+        LifecycleCapture(T fallback) {
+            evidence = Objects.requireNonNull(fallback, "fallback");
+        }
+
+        T captureAndValidate(Supplier<? extends T> capture, Consumer<? super T> validation) {
+            T captured = Objects.requireNonNull(capture.get(), "captured evidence");
+            evidence = captured;
+            validation.accept(captured);
+            return captured;
+        }
+
+        T evidence() {
+            return evidence;
+        }
+    }
 
     private static final class NativeLibrary {
         private static final boolean LOADED = load();

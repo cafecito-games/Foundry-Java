@@ -58,14 +58,15 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
         Context targetContext = getTargetContext();
         Bundle result = new Bundle();
         Activity activity = null;
-        JSONObject lifecycle = failureLifecycle(runIndex);
+        FoundryJavaTestHost.LifecycleCapture<JSONObject> lifecycle =
+                new FoundryJavaTestHost.LifecycleCapture<>(failureLifecycle(runIndex));
         int pidBeforeLifecycle = Process.myPid();
         int pidAfterLifecycle = pidBeforeLifecycle;
         Throwable failure = null;
         File evidenceFile = null;
         try {
             runIndex = parseRunIndex(arguments);
-            lifecycle = failureLifecycle(runIndex);
+            lifecycle = new FoundryJavaTestHost.LifecycleCapture<>(failureLifecycle(runIndex));
             require(
                     TARGET_PACKAGE.equals(targetContext.getPackageName()),
                     "unexpected target package " + targetContext.getPackageName());
@@ -88,9 +89,12 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
             validateContextHandleReplacementContract();
 
             pidBeforeLifecycle = Process.myPid();
-            lifecycle = FoundryJavaTestHost.runLifecycle(runIndex);
+            int lifecycleRunIndex = runIndex;
+            lifecycle.captureAndValidate(
+                    () -> FoundryJavaTestHost.captureLifecycle(lifecycleRunIndex),
+                    captured -> FoundryJavaTestHost.finalizeLifecycle(captured, lifecycleRunIndex));
             pidAfterLifecycle = Process.myPid();
-            validateLifecycle(lifecycle, runIndex);
+            validateLifecycle(lifecycle.evidence(), runIndex);
             require(
                     pidBeforeLifecycle == pidAfterLifecycle,
                     "native lifecycle changed the process PID");
@@ -102,7 +106,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
                             PROVIDER_AUTHORITY,
                             pidBeforeLifecycle,
                             pidAfterLifecycle,
-                            lifecycle,
+                            lifecycle.evidence(),
                             null);
             validateReport(report);
             evidenceFile = FoundryJavaStartupEvidence.writeAtomically(targetContext, report);
@@ -117,7 +121,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
                                 PROVIDER_AUTHORITY,
                                 pidBeforeLifecycle,
                                 pidAfterLifecycle,
-                                lifecycle,
+                                lifecycle.evidence(),
                                 caught);
                 evidenceFile = FoundryJavaStartupEvidence.writeAtomically(targetContext, report);
             } catch (Throwable evidenceFailure) {
@@ -172,6 +176,17 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
     private static void validateFailureReportContract(int runIndex) throws JSONException {
         JSONObject partialLifecycle =
                 new JSONObject().put("schema_version", 1).put("run_index", runIndex);
+        FoundryJavaTestHost.LifecycleCapture<JSONObject> lifecycle =
+                new FoundryJavaTestHost.LifecycleCapture<>(failureLifecycle(runIndex));
+        Throwable failure = null;
+        try {
+            lifecycle.captureAndValidate(
+                    () -> partialLifecycle,
+                    captured -> FoundryJavaTestHost.finalizeLifecycle(captured, runIndex));
+        } catch (Throwable expected) {
+            failure = expected;
+        }
+        require(failure != null, "partial lifecycle validation unexpectedly passed");
         int pid = Process.myPid();
         JSONObject report =
                 FoundryJavaStartupEvidence.buildReport(
@@ -180,8 +195,8 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
                         PROVIDER_AUTHORITY,
                         pid,
                         pid,
-                        partialLifecycle,
-                        new IllegalStateException("partial lifecycle contract probe"));
+                        lifecycle.evidence(),
+                        failure);
         require("fail".equals(report.getString("result")), "partial lifecycle report was not fail");
         JSONObject rawLifecycle = report.getJSONObject("native_lifecycle");
         require(rawLifecycle.length() == 2, "partial lifecycle evidence was not preserved");
