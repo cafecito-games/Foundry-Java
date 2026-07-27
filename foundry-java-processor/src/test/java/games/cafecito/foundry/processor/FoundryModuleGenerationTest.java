@@ -17,8 +17,7 @@ import org.junit.jupiter.api.Test;
 class FoundryModuleGenerationTest {
     @Test
     void emitsOneGoldenRegistryDescriptorAndNarrowKeepFile() throws IOException {
-        ProcessorCompilation.Result result =
-                ProcessorCompilation.compile(FoundryTrampolineGenerationTest.extensionSources());
+        ProcessorCompilation.Result result = ProcessorCompilation.compile(enumExtensionSources());
 
         assertTrue(result.successful(), () -> result.errorMessages().toString());
         String registry =
@@ -69,7 +68,16 @@ class FoundryModuleGenerationTest {
                                 + "TW90aW9u|bW90aW9uXw|U3BlZWQ|c3BlZWRf\n"),
                 descriptor);
         assertEquals(
-                List.of("constant", "method", "override", "property", "signal"),
+                List.of(
+                        "constant",
+                        "method",
+                        "method",
+                        "override",
+                        "override",
+                        "property",
+                        "property",
+                        "signal",
+                        "signal"),
                 descriptor
                         .lines()
                         .filter(
@@ -144,8 +152,58 @@ class FoundryModuleGenerationTest {
     }
 
     @Test
+    void serializesEnumsAsLongAcrossEveryTransportPosition() throws IOException {
+        ProcessorCompilation.Result result = ProcessorCompilation.compile(enumExtensionSources());
+
+        assertTrue(result.successful(), () -> result.errorMessages().toString());
+        String descriptor =
+                new String(
+                        result.classOutput()
+                                .get("META-INF/foundry-java/modules/demo-module.descriptor"),
+                        StandardCharsets.UTF_8);
+        assertTrue(
+                descriptor.contains(
+                        "method=demo.SpinningCube|convert_mode|convertMode|long(long,long)\n"),
+                descriptor);
+        assertTrue(
+                descriptor.contains(
+                        "override=demo.SpinningCube|_engine_mode|onEngineMode|long(long)\n"),
+                descriptor);
+        assertTrue(
+                descriptor.contains(
+                        "property=demo.SpinningCube|movement_mode|movementMode|long|d1|"
+                                + "bW92ZW1lbnRNb2Rl|bW92ZW1lbnRNb2Rl|-1||||\n"),
+                descriptor);
+        assertTrue(
+                descriptor.contains(
+                        "signal=demo.SpinningCube|mode_changed|ModeChanged|void(long,long)\n"),
+                descriptor);
+        assertTrue(
+                descriptor.contains(
+                        "constant=demo.SpinningCube|min_value|MIN_VALUE|long|d1|"
+                                + "TW92ZW1lbnRNb2Rl|-9223372036854775808|1\n"),
+                descriptor);
+        assertFalse(descriptor.contains("demo.EngineMode("), descriptor);
+        assertFalse(descriptor.contains("demo.UserMode("), descriptor);
+
+        String registry =
+                result.generatedSources()
+                        .get(
+                                "games/cafecito/foundry/generated/demomodule/"
+                                        + "DemoModuleRegistry.java");
+        for (String signature :
+                List.of(
+                        "\"long(long,long)\"",
+                        "\"long(long)\"",
+                        "\"long\"",
+                        "\"void(long,long)\"")) {
+            assertTrue(registry.contains(signature), registry);
+        }
+    }
+
+    @Test
     void sourceOrderCannotChangeGeneratedOutputs() throws IOException {
-        Map<String, String> forward = FoundryTrampolineGenerationTest.extensionSources();
+        Map<String, String> forward = enumExtensionSources();
         Map<String, String> reverse = new LinkedHashMap<>();
         forward.entrySet().stream()
                 .sorted(Map.Entry.<String, String>comparingByKey().reversed())
@@ -190,5 +248,80 @@ class FoundryModuleGenerationTest {
 
     private static String javaLiteral(String value) {
         return "\"" + value.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"") + "\"";
+    }
+
+    private static Map<String, String> enumExtensionSources() {
+        Map<String, String> sources =
+                new LinkedHashMap<>(FoundryTrampolineGenerationTest.extensionSources());
+        sources.put(
+                "demo.EngineMode",
+                """
+                package demo;
+                import games.cafecito.foundry.annotations.GeneratedByFoundry;
+                @GeneratedByFoundry
+                public enum EngineMode {
+                    IDLE(-7L),
+                    ACTIVE(Long.MAX_VALUE);
+                    private final long value;
+                    EngineMode(long value) { this.value = value; }
+                    public long value() { return value; }
+                    public static EngineMode fromValue(long value) {
+                        for (EngineMode candidate : values()) {
+                            if (candidate.value == value) {
+                                return candidate;
+                            }
+                        }
+                        throw new IllegalArgumentException("Unknown EngineMode value " + value + ".");
+                    }
+                }
+                """);
+        sources.put(
+                "demo.UserMode",
+                """
+                package demo;
+                import games.cafecito.foundry.annotations.FoundryEnumValue;
+                public enum UserMode {
+                    @FoundryEnumValue(value = Long.MIN_VALUE)
+                    IDLE,
+                    @FoundryEnumValue(value = Long.MAX_VALUE)
+                    ACTIVE
+                }
+                """);
+        sources.computeIfPresent(
+                "demo.EngineNode",
+                (name, source) ->
+                        source.replace(
+                                "    @FoundryVirtual(\"_process\")\n"
+                                        + "    protected void onProcess(double delta) {}\n",
+                                "    @FoundryVirtual(\"_engine_mode\")\n"
+                                        + "    protected EngineMode onEngineMode(EngineMode mode) { return mode; }\n"
+                                        + "    @FoundryVirtual(\"_process\")\n"
+                                        + "    protected void onProcess(double delta) {}\n"));
+        sources.computeIfPresent(
+                "demo.SpinningCube",
+                (name, source) ->
+                        source.replace(
+                                "    @FoundryMethod public void reset() { speed = 0.0; }\n"
+                                        + "    @FoundryOverride public void onProcess(double delta) { speed += delta; }\n",
+                                "    @FoundryProperty(\n"
+                                        + "            name = \"movement_mode\",\n"
+                                        + "            getter = \"movementMode\",\n"
+                                        + "            setter = \"movementMode\")\n"
+                                        + "    private UserMode movementMode = UserMode.IDLE;\n"
+                                        + "    public UserMode movementMode() { return movementMode; }\n"
+                                        + "    public void movementMode(UserMode value) { movementMode = value; }\n"
+                                        + "    @FoundryMethod(name = \"convert_mode\")\n"
+                                        + "    public UserMode convertMode(EngineMode engineMode, UserMode userMode) {\n"
+                                        + "        return userMode;\n"
+                                        + "    }\n"
+                                        + "    @FoundryMethod public void reset() { speed = 0.0; }\n"
+                                        + "    @FoundryOverride\n"
+                                        + "    public EngineMode onEngineMode(EngineMode mode) { return mode; }\n"
+                                        + "    @FoundryOverride public void onProcess(double delta) { speed += delta; }\n"
+                                        + "    @FoundrySignal(name = \"mode_changed\")\n"
+                                        + "    public interface ModeChanged {\n"
+                                        + "        void emitted(EngineMode engineMode, UserMode userMode);\n"
+                                        + "    }\n"));
+        return sources;
     }
 }

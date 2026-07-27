@@ -122,6 +122,21 @@ Sorted `class`, `method`, `override`, `property`, and `signal` entries follow th
 registry implements `FoundryModuleProvider`, returns a matching immutable
 `FoundryModuleDescriptor`, and invokes generated trampolines through typed calls.
 
+Member signatures are transport signatures. Java enum declarations remain enum-typed, but enum
+method and override returns and parameters, property types, and signal parameters are serialized as
+primitive `long`; signal returns remain `void`. For example, Java
+`MovementMode convert(EngineMode, MovementMode)` is recorded as `long(long,long)`, and an
+enum-bearing signal is recorded as `void(long)`. Integral `@FoundryConstant` entries retain their
+declared type.
+
+User-authored callback enums require a unique explicit signed `long` on every constant through
+`@FoundryEnumValue`. Generator-owned engine enums use their generated `value()` and
+`fromValue(long)` methods. Ordinals, names, runtime reflection, and descriptor-side class lookup are
+not conversion fallbacks. Primitive enum transport cannot represent null/NIL: null, a wrong boxed
+transport type, an unknown signed value, or a null/unmapped outbound enum fails deterministically
+at the generated trampoline boundary. See [Java extension authoring](java-authoring.md#enum-callbacks)
+for the declaration contract.
+
 The plugin validates the complete graph before writing outputs. All modules must agree on
 `api_sha256`, `generator_version`, `runtime_contract_version`, and `bridge_contract_version`.
 Module and registry identities must be unique. Format 1, unknown or reordered headers, malformed

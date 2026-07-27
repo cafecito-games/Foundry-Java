@@ -118,6 +118,39 @@ below `games.cafecito.foundry.api`, generated value types below
 or incorrectly placed declarations stop javac with a diagnostic at the offending annotation,
 member, or parameter.
 
+## Enum callbacks
+
+Every constant in a user-authored enum used by an exported method, virtual override, property, or
+signal must declare one explicit signed 64-bit transport value:
+
+```java
+public enum MovementMode {
+    @FoundryEnumValue(value = -7L)
+    IDLE,
+
+    @FoundryEnumValue(value = Long.MAX_VALUE)
+    ACTIVE
+}
+```
+
+The values must be unique within the enum, and all constants must be annotated. The processor does
+not infer values from an ordinal or name. `@FoundryEnumValue` belongs only on enum constants and is
+retained in class files so enum contracts supplied by a dependency JAR remain available to the
+consumer processor. The enum and its enclosing types must be accessible to the generated sibling
+trampoline. Generator-owned engine enums are exempt from `@FoundryEnumValue`; their explicit
+`value()` and `fromValue(long)` contract supplies the same numeric mapping.
+
+Authored and generated Java APIs remain enum-typed. Generated trampolines convert user enums through
+their explicit mappings and engine enums through `value()`/`fromValue(long)` without reflection.
+The module descriptor records every enum method or override return and parameter, property type,
+and signal parameter as primitive `long`; signal returns remain `void`. `@FoundryConstant` fields
+retain their declared integral type and are not changed by enum callback transport.
+
+Enum transport is non-null. A Variant integer reaches a trampoline as a boxed `Long`; null/NIL, a
+different boxed type, and an unknown signed value fail deterministically before invoking a method
+or mutating a property. Returning null or an unmapped enum constant also fails deterministically
+before the result reaches native transport.
+
 ## Initialization order
 
 `@FoundryInitialization` defaults to `SCENE` and may select `CORE`, `SERVERS`, `SCENE`, or `EDITOR`.
@@ -143,7 +176,9 @@ The descriptor uses format 2. Its required ordered headers are `format`, `module
 `api_sha256`, `generator_version`, `runtime_contract_version`, and `bridge_contract_version`.
 Class and member entries follow in stable order. The generated registry implements
 `FoundryModuleProvider`, exposes one typed `PROVIDER`, and returns an immutable
-`FoundryModuleDescriptor` carrying the same provenance and declarations.
+`FoundryModuleDescriptor` carrying the same provenance and declarations. Member signatures describe
+Foundry transport types rather than changing the corresponding Java declaration; in particular,
+enum positions are written as `long`.
 
 The application plugin validates all descriptor provenance before it generates a sorted registry
 index and `FoundryGeneratedBootstrap`. Registration uses direct provider, constructor, method,
