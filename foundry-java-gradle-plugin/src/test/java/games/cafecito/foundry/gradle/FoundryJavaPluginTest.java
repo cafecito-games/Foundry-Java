@@ -439,7 +439,10 @@ class FoundryJavaPluginTest {
                         .contains("return FoundryGeneratedBootstrap.bootstrap();"));
         assertTrue(
                 Files.readString(variantStartupManifest)
-                        .contains("android:authorities=\"${foundryJavaStartupAuthority}\""));
+                        .contains(
+                                "android:authorities=\"games.cafecito.test.custom."
+                                        + "foundry-java-startup\""));
+        assertFalse(Files.readString(variantStartupManifest).contains("${"));
     }
 
     @Test
@@ -616,14 +619,14 @@ class FoundryJavaPluginTest {
     }
 
     @Test
-    void startupAuthorityCollisionFailsWithVariantAndValues() throws IOException {
+    void zeroModuleVariantIgnoresReservedPlaceholderValues() throws IOException {
         Path binding =
-                bindingAar(
-                        temporaryDirectory.resolve("authority-collision-binding.aar"),
-                        "demo",
-                        "example.DemoRegistry",
+                bindingAarWithoutDescriptor(
+                        temporaryDirectory.resolve("zero-module-placeholder-binding.aar"),
                         List.of("x86_64"));
-        Path project = androidProject("authority-collision", binding, List.of("x86_64"));
+        Path project =
+                androidProject(
+                        "zero-module-reserved-placeholders", binding, List.of("x86_64"));
         Files.writeString(
                 project.resolve("build.gradle"),
                 Files.readString(project.resolve("build.gradle"))
@@ -632,18 +635,101 @@ class FoundryJavaPluginTest {
                                 """
                                         applicationId 'games.cafecito.test.custom'
                                         manifestPlaceholders = [
+                                            foundryJavaStartupProvider: 'example.UnrelatedProvider',
                                             foundryJavaStartupAuthority: 'shared.authority'
                                         ]
                                 """));
 
-        BuildResult failure = runAndFail(project, "generateDebugFoundryJavaRegistry");
+        BuildResult result = run(project, "assembleDebug");
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug").getOutcome());
+        assertFalse(
+                mergedManifest(project, "debug")
+                        .contains("FoundryGeneratedStartupProvider"));
+    }
+
+    @Test
+    void variantPlaceholderCallbacksCannotRedirectModuleBearingStartup() throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("placeholder-order-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project = androidProject("placeholder-order", binding, List.of("x86_64"));
+        writeBootstrapStubs(project);
+        Files.writeString(
+                project.resolve("build.gradle"),
+                Files.readString(project.resolve("build.gradle"))
+                        .replace(
+                                "    id 'games.cafecito.foundry.java'\n",
+                                "")
+                        .replace(
+                                "android {\n",
+                                """
+                                androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                                    variant.manifestPlaceholders.put(
+                                        'foundryJavaStartupAuthority',
+                                        'before.foundry-java-startup')
+                                }
+                                apply plugin: 'games.cafecito.foundry.java'
+                                androidComponents.onVariants(androidComponents.selector().all()) { variant ->
+                                    variant.manifestPlaceholders.put(
+                                        'foundryJavaStartupProvider',
+                                        'example.AfterProvider')
+                                    variant.manifestPlaceholders.put(
+                                        'foundryJavaStartupAuthority',
+                                        'after.foundry-java-startup')
+                                }
+                                android {
+                                """));
+
+        BuildResult result = run(project, "assembleDebug");
+
+        assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug").getOutcome());
+        String mergedManifest = mergedManifest(project, "debug");
+        assertTrue(
+                mergedManifest.contains(
+                        "android:name=\"games.cafecito.foundry.generated."
+                                + "FoundryGeneratedStartupProvider\""));
+        assertTrue(
+                mergedManifest.contains(
+                        "android:authorities=\"games.cafecito.test.custom."
+                                + "foundry-java-startup\""));
+        assertFalse(mergedManifest.contains("example.AfterProvider"));
+        assertFalse(mergedManifest.contains("after.foundry-java-startup"));
+    }
+
+    @Test
+    void mergedManifestAuthorityCollisionFailsWithVariantProviderAndAuthority()
+            throws IOException {
+        Path binding =
+                bindingAar(
+                        temporaryDirectory.resolve("authority-collision-binding.aar"),
+                        "demo",
+                        "example.DemoRegistry",
+                        List.of("x86_64"));
+        Path project = androidProject("authority-collision", binding, List.of("x86_64"));
+        Files.writeString(
+                project.resolve("src/main/AndroidManifest.xml"),
+                """
+                <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application>
+                        <provider
+                            android:name="example.ConflictingProvider"
+                            android:authorities="${applicationId}.foundry-java-startup"
+                            android:exported="false" />
+                    </application>
+                </manifest>
+                """);
+
+        BuildResult failure = runAndFail(project, "assembleDebug");
 
         assertTrue(failure.getOutput().contains("Foundry-Java variant debug"));
-        assertTrue(failure.getOutput().contains("foundryJavaStartupAuthority"));
+        assertTrue(failure.getOutput().contains("example.ConflictingProvider"));
         assertTrue(
                 failure.getOutput()
                         .contains("games.cafecito.test.custom.foundry-java-startup"));
-        assertTrue(failure.getOutput().contains("shared.authority"));
     }
 
     @Test

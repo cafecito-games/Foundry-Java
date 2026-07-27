@@ -1,16 +1,13 @@
 package games.cafecito.foundry.gradle;
 
+import com.android.build.api.artifact.SingleArtifact;
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension;
 import com.android.build.api.variant.ApplicationVariant;
-import com.android.build.api.dsl.ApplicationExtension;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 import org.gradle.api.Action;
-import org.gradle.api.GradleException;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
-import org.gradle.api.provider.Provider;
 import org.gradle.api.tasks.TaskProvider;
 
 /** Lazy public-Variant-API integration loaded only after the Android application plugin. */
@@ -24,88 +21,13 @@ final class FoundryAndroidApplicationIntegration {
         extension.getRequestedAbis().convention(ANDROID_ABIS);
         ApplicationAndroidComponentsExtension androidComponents =
                 project.getExtensions().getByType(ApplicationAndroidComponentsExtension.class);
-        ApplicationExtension androidDsl =
-                project.getExtensions().getByType(ApplicationExtension.class);
         androidComponents.onVariants(
                 androidComponents.selector().all(),
                 (Action<ApplicationVariant>)
                         variant -> {
                             selectRequestedBridgeAbis(extension, variant);
-                            setManifestPlaceholder(
-                                    androidDsl,
-                                    variant,
-                                    "foundryJavaStartupProvider",
-                                    project.provider(
-                                            () ->
-                                                    "games.cafecito.foundry.generated."
-                                                            + "FoundryGeneratedStartupProvider"));
-                            setManifestPlaceholder(
-                                    androidDsl,
-                                    variant,
-                                    "foundryJavaStartupAuthority",
-                                    variant.getApplicationId()
-                                            .map(id -> id + ".foundry-java-startup"));
                             registerVariantTask(project, modules, extension, variant);
                         });
-    }
-
-    private static void setManifestPlaceholder(
-            ApplicationExtension androidDsl,
-            ApplicationVariant variant,
-            String key,
-            Provider<String> expected) {
-        checkConfiguredPlaceholder(
-                variant,
-                key,
-                expected.get(),
-                "defaultConfig",
-                androidDsl.getDefaultConfig().getManifestPlaceholders());
-        if (variant.getBuildType() != null) {
-            checkConfiguredPlaceholder(
-                    variant,
-                    key,
-                    expected.get(),
-                    "build type " + variant.getBuildType(),
-                    androidDsl
-                            .getBuildTypes()
-                            .getByName(variant.getBuildType())
-                            .getManifestPlaceholders());
-        }
-        for (kotlin.Pair<String, String> flavor : variant.getProductFlavors()) {
-            checkConfiguredPlaceholder(
-                    variant,
-                    key,
-                    expected.get(),
-                    "product flavor " + flavor.getSecond(),
-                    androidDsl
-                            .getProductFlavors()
-                            .getByName(flavor.getSecond())
-                            .getManifestPlaceholders());
-        }
-        variant.getManifestPlaceholders().put(key, expected);
-    }
-
-    private static void checkConfiguredPlaceholder(
-            ApplicationVariant variant,
-            String key,
-            String expected,
-            String source,
-            Map<String, Object> configured) {
-        Object existing = configured.get(key);
-        if (existing != null && !existing.toString().equals(expected)) {
-            throw new GradleException(
-                    "Foundry-Java variant "
-                            + variant.getName()
-                            + " requires manifest placeholder "
-                            + key
-                            + "="
-                            + expected
-                            + " but "
-                            + source
-                            + " already sets "
-                            + existing
-                            + "; this would create an incompatible startup provider or authority.");
-        }
     }
 
     private static void selectRequestedBridgeAbis(
@@ -156,6 +78,17 @@ final class FoundryAndroidApplicationIntegration {
                                     task.getPayloadArtifacts()
                                             .from(modules, variant.getRuntimeConfiguration());
                                     task.getRequestedAbis().set(extension.getRequestedAbis());
+                                    task.getStartupProviderClass()
+                                            .set(
+                                                    "games.cafecito.foundry.generated."
+                                                            + "FoundryGeneratedStartupProvider");
+                                    task.getStartupAuthority()
+                                            .set(
+                                                    variant.getApplicationId()
+                                                            .map(
+                                                                    id ->
+                                                                            id
+                                                                                    + ".foundry-java-startup"));
                                 });
         variant.getSources()
                 .getAssets()
@@ -166,6 +99,29 @@ final class FoundryAndroidApplicationIntegration {
         variant.getSources()
                 .getManifests()
                 .addGeneratedManifestFile(registry, RegistryIndexTask::getManifestOutputFile);
+        TaskProvider<VerifyStartupManifestTask> verify =
+                project.getTasks()
+                        .register(
+                                "verify" + variantName + "FoundryJavaStartupManifest",
+                                VerifyStartupManifestTask.class,
+                                task -> {
+                                    task.getVariantName().set(variant.getName());
+                                    task.getExpectedProviderClass()
+                                            .set(registry.flatMap(RegistryIndexTask::getStartupProviderClass));
+                                    task.getExpectedAuthority()
+                                            .set(registry.flatMap(RegistryIndexTask::getStartupAuthority));
+                                    task.getRegistryAssetsDirectory()
+                                            .set(
+                                                    registry.flatMap(
+                                                            RegistryIndexTask
+                                                                    ::getAssetsOutputDirectory));
+                                });
+        variant.getArtifacts()
+                .use(verify)
+                .wiredWithFiles(
+                        VerifyStartupManifestTask::getInputManifest,
+                        VerifyStartupManifestTask::getOutputManifest)
+                .toTransform(SingleArtifact.MERGED_MANIFEST.INSTANCE);
     }
 
     private static String capitalize(String value) {

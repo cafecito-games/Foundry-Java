@@ -37,6 +37,10 @@ public final class FoundryJavaPlugin implements Plugin<Project> {
                                     task.getModuleArtifacts().from(modules);
                                     task.getPayloadArtifacts().from(modules);
                                     task.getRequestedAbis().set(extension.getRequestedAbis());
+                                    task.getStartupProviderClass()
+                                            .convention("${foundryJavaStartupProvider}");
+                                    task.getStartupAuthority()
+                                            .convention("${foundryJavaStartupAuthority}");
                                     task.getAssetsOutputDirectory()
                                             .set(
                                                     project.getLayout()

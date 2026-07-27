@@ -18,6 +18,7 @@ import org.gradle.api.GradleException;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.DirectoryProperty;
 import org.gradle.api.file.RegularFileProperty;
+import org.gradle.api.provider.Property;
 import org.gradle.api.provider.SetProperty;
 import org.gradle.api.tasks.Classpath;
 import org.gradle.api.tasks.Input;
@@ -41,6 +42,12 @@ public abstract class RegistryIndexTask extends DefaultTask {
 
     @Input
     public abstract SetProperty<String> getRequestedAbis();
+
+    @Input
+    public abstract Property<String> getStartupProviderClass();
+
+    @Input
+    public abstract Property<String> getStartupAuthority();
 
     @OutputDirectory
     public abstract DirectoryProperty getAssetsOutputDirectory();
@@ -113,7 +120,11 @@ public abstract class RegistryIndexTask extends DefaultTask {
                         "games/cafecito/foundry/generated/FoundryGeneratedStartupProvider.java");
         Files.writeString(startupProvider, startupProvider(), StandardCharsets.UTF_8);
         Files.createDirectories(manifest.getParent());
-        Files.writeString(manifest, startupManifest(), StandardCharsets.UTF_8);
+        Files.writeString(
+                manifest,
+                startupManifest(
+                        getStartupProviderClass().get(), getStartupAuthority().get()),
+                StandardCharsets.UTF_8);
     }
 
     private List<FoundryDescriptor> readModules() throws IOException {
@@ -398,18 +409,27 @@ public abstract class RegistryIndexTask extends DefaultTask {
                 """;
     }
 
-    private static String startupManifest() {
+    private static String startupManifest(String providerClass, String authority) {
         return """
                 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
                     <application>
                         <provider
-                            android:name="${foundryJavaStartupProvider}"
-                            android:authorities="${foundryJavaStartupAuthority}"
+                            android:name="%s"
+                            android:authorities="%s"
                             android:exported="false"
                             android:initOrder="100" />
                     </application>
                 </manifest>
-                """;
+                """
+                .formatted(xmlAttribute(providerClass), xmlAttribute(authority));
+    }
+
+    private static String xmlAttribute(String value) {
+        return value.replace("&", "&amp;")
+                .replace("\"", "&quot;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("'", "&apos;");
     }
 
     private static void replaceDirectory(Path directory) throws IOException {
