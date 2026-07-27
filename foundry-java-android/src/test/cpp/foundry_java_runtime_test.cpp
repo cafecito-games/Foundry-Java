@@ -1,4 +1,6 @@
 #include "foundry_java_runtime.h"
+#include "foundry_java_abi_layout.h"
+#include "foundry_java_interface.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -23,6 +25,7 @@ int jni_shutdown_count = 0;
 bool jni_shutdown_context_result = true;
 bool jni_shutdown_result = true;
 FoundryExtensionInterfacePrintError installed_print_error = nullptr;
+std::string missing_interface_name;
 
 void fake_print_error(const char *, const char *, const char *, std::int32_t, FoundryExtensionBool) {
 }
@@ -44,6 +47,9 @@ void fake_string_name_from_utf8(FoundryExtensionUninitializedStringNamePtr, cons
 
 FoundryExtensionPtrDestructor fake_variant_destructor(FoundryExtensionVariantType) {
 	return nullptr;
+}
+
+void fake_untyped_interface() {
 }
 
 template <typename Function>
@@ -70,7 +76,7 @@ FoundryExtensionInterfaceFunctionPtr complete_get_proc_address(const char *name)
 	if (std::strcmp(name, "variant_get_ptr_destructor") == 0) {
 		return erase_function_type(&fake_variant_destructor);
 	}
-	return nullptr;
+	return erase_function_type(&fake_untyped_interface);
 }
 
 FoundryExtensionInterfaceFunctionPtr incomplete_get_proc_address(const char *name) {
@@ -401,6 +407,36 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 	expect(jni_shutdown_count == 3, "successful retry must release JNI state");
 }
 
+void test_generated_abi_layout_is_complete() {
+	expect(foundry_java::kFloat32AbiLayout.size() == 40, "float_32 layout must contain 40 rows");
+	expect(foundry_java::kFloat64AbiLayout.size() == 40, "float_64 layout must contain 40 rows");
+	expect(foundry_java::kActiveAbiLayout.front().name == "Nil", "Nil must be the first layout row");
+	expect(foundry_java::kActiveAbiLayout.front().size == 0, "Nil layout size must be zero");
+	for (std::size_t index = 1; index < foundry_java::kActiveAbiLayout.size(); index++) {
+		expect(foundry_java::kActiveAbiLayout[index].size > 0, "non-Nil layout sizes must be positive");
+		expect(
+				foundry_java::kFloat32AbiLayout[index].name == foundry_java::kFloat64AbiLayout[index].name,
+				"float layouts must use identical name order");
+	}
+	expect(foundry_java::abi_layout_size("String") == sizeof(void *), "String size must match pointer width");
+	expect(foundry_java::abi_layout_size("StringName") == sizeof(void *), "StringName size must match pointer width");
+	expect(foundry_java::abi_layout_size("Object") == sizeof(void *), "Object size must match pointer width");
+	expect(foundry_java::abi_layout_size("Variant") == 24, "Variant size must remain 24 bytes");
+}
+
+void test_bridge_services_resolve_all_or_nothing() {
+	const auto complete = foundry_java::resolve_bridge_services(complete_get_proc_address);
+	expect(complete.services != nullptr, "complete interface table must resolve");
+	expect(complete.missing_name.empty(), "complete interface table must not report a missing name");
+	expect(complete.services->print_error == &fake_print_error, "resolved services must preserve exact pointers");
+
+	const auto incomplete = foundry_java::resolve_bridge_services(incomplete_get_proc_address);
+	expect(incomplete.services == nullptr, "incomplete interface table must not publish services");
+	expect(
+			incomplete.missing_name == "variant_get_ptr_destructor",
+			"resolution must report the first exact missing interface name");
+}
+
 } // namespace
 
 namespace foundry_java {
@@ -450,6 +486,8 @@ int main() {
 	test_shutdown_waits_for_active_callback_lease();
 	test_shutdown_all_waits_for_concurrent_context_teardown();
 	test_extension_entry_validates_and_orders_lifecycle();
+	test_generated_abi_layout_is_complete();
+	test_bridge_services_resolve_all_or_nothing();
 	std::cout << "Foundry Java native runtime tests passed\n";
 	return 0;
 }

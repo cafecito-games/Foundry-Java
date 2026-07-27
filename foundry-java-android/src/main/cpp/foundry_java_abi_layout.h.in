@@ -1,0 +1,46 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <string_view>
+
+namespace foundry_java {
+
+struct AbiLayoutRow {
+	std::string_view name;
+	std::size_t size;
+};
+
+inline constexpr std::array<AbiLayoutRow, 40> kFloat32AbiLayout = { {
+@FOUNDRY_JAVA_FLOAT_32_ROWS@} };
+
+inline constexpr std::array<AbiLayoutRow, 40> kFloat64AbiLayout = { {
+@FOUNDRY_JAVA_FLOAT_64_ROWS@} };
+
+inline constexpr const std::array<AbiLayoutRow, 40> &kActiveAbiLayout =
+		sizeof(void *) == 4 ? kFloat32AbiLayout : kFloat64AbiLayout;
+
+constexpr std::size_t abi_layout_size(std::string_view name) {
+	for (const AbiLayoutRow &row : kActiveAbiLayout) {
+		if (row.name == name) {
+			return row.size;
+		}
+	}
+	return 0;
+}
+
+constexpr std::size_t abi_layout_max_size() {
+	std::size_t result = 0;
+	for (const AbiLayoutRow &row : kActiveAbiLayout) {
+		if (row.size > result) {
+			result = row.size;
+		}
+	}
+	return result;
+}
+
+static_assert(kFloat32AbiLayout.front().name == "Nil" && kFloat32AbiLayout.front().size == 0);
+static_assert(kFloat64AbiLayout.front().name == "Nil" && kFloat64AbiLayout.front().size == 0);
+static_assert(abi_layout_size("Variant") == 24);
+
+} // namespace foundry_java

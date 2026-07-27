@@ -1,32 +1,18 @@
 #include "foundry_java_runtime.h"
+#include "foundry_java_interface.h"
 
 #include <cstdint>
-#include <cstring>
+#include <memory>
 #include <mutex>
+#include <string>
 
 namespace foundry_java {
 
 namespace {
 
-struct InterfaceTable {
-	FoundryExtensionInterfacePrintError print_error = nullptr;
-	FoundryExtensionInterfaceClassdbRegisterExtensionClass5 register_class = nullptr;
-	FoundryExtensionInterfaceClassdbUnregisterExtensionClass unregister_class = nullptr;
-	FoundryExtensionInterfaceStringNameNewWithUtf8Chars string_name_from_utf8 = nullptr;
-	FoundryExtensionInterfaceVariantGetPtrDestructor variant_destructor = nullptr;
-
-	explicit operator bool() const {
-		return print_error != nullptr &&
-				register_class != nullptr &&
-				unregister_class != nullptr &&
-				string_name_from_utf8 != nullptr &&
-				variant_destructor != nullptr;
-	}
-};
-
 struct ExtensionState {
 	std::mutex mutex;
-	InterfaceTable interface;
+	std::shared_ptr<const BridgeServices> services;
 	FoundryExtensionClassLibraryPtr library = nullptr;
 	ContextHandle context = 0;
 	bool entry_active = false;
@@ -35,41 +21,9 @@ struct ExtensionState {
 
 ExtensionState extension_state;
 
-template <typename Function>
-Function load_interface(FoundryExtensionInterfaceGetProcAddress get_proc_address, const char *name) {
-	FoundryExtensionInterfaceFunctionPtr raw = get_proc_address(name);
-	Function function = nullptr;
-	static_assert(sizeof(function) == sizeof(raw));
-	std::memcpy(&function, &raw, sizeof(function));
-	return function;
-}
-
-InterfaceTable resolve_interfaces(FoundryExtensionInterfaceGetProcAddress get_proc_address) {
-	InterfaceTable interface;
-	interface.print_error =
-			load_interface<FoundryExtensionInterfacePrintError>(get_proc_address, "print_error");
-	interface.register_class =
-			load_interface<FoundryExtensionInterfaceClassdbRegisterExtensionClass5>(
-					get_proc_address,
-					"classdb_register_extension_class5");
-	interface.unregister_class =
-			load_interface<FoundryExtensionInterfaceClassdbUnregisterExtensionClass>(
-					get_proc_address,
-					"classdb_unregister_extension_class");
-	interface.string_name_from_utf8 =
-			load_interface<FoundryExtensionInterfaceStringNameNewWithUtf8Chars>(
-					get_proc_address,
-					"string_name_new_with_utf8_chars");
-	interface.variant_destructor =
-			load_interface<FoundryExtensionInterfaceVariantGetPtrDestructor>(
-					get_proc_address,
-					"variant_get_ptr_destructor");
-	return interface;
-}
-
-void report_entry_error(const InterfaceTable &interface, const char *message) {
-	if (interface.print_error != nullptr) {
-		interface.print_error(
+void report_entry_error(FoundryExtensionInterfacePrintError print_error, const char *message) {
+	if (print_error != nullptr) {
+		print_error(
 				message,
 				"foundry_java_library_init",
 				"foundry_java_entry.cpp",
@@ -95,12 +49,14 @@ void initialize_level(void *userdata, FoundryExtensionInitializationLevel level)
 		context = state->context;
 	}
 	if (context == 0 || !jni_bridge_initialize(context, static_cast<std::int32_t>(level))) {
-		InterfaceTable interface;
+		FoundryExtensionInterfacePrintError print_error = nullptr;
 		{
 			std::lock_guard lock(state->mutex);
-			interface = state->interface;
+			if (state->services != nullptr) {
+				print_error = state->services->print_error;
+			}
 		}
-		report_entry_error(interface, "Foundry Java initialization callback failed.");
+		report_entry_error(print_error, "Foundry Java initialization callback failed.");
 	}
 }
 
@@ -142,7 +98,7 @@ void deinitialize_level(void *userdata, FoundryExtensionInitializationLevel leve
 	}
 	std::lock_guard lock(state->mutex);
 	state->context = 0;
-	state->interface = {};
+	state->services.reset();
 	state->library = nullptr;
 	state->entry_active = false;
 	state->shutting_down = false;
@@ -157,13 +113,15 @@ FoundryExtensionBool initialize_extension(
 	if (get_proc_address == nullptr || library == nullptr || initialization == nullptr) {
 		return 0;
 	}
-	const InterfaceTable interface = resolve_interfaces(get_proc_address);
-	if (!interface) {
-		report_entry_error(interface, "Foundry Java could not resolve the required interface table.");
+	const BridgeResolution resolution = resolve_bridge_services(get_proc_address);
+	if (resolution.services == nullptr) {
+		const std::string message =
+				"Foundry Java could not resolve required interface: " + resolution.missing_name;
+		report_entry_error(resolution.print_error, message.c_str());
 		return 0;
 	}
 	if (!jni_bridge_is_ready()) {
-		report_entry_error(interface, "Foundry Java JNI bootstrap is not ready.");
+		report_entry_error(resolution.services->print_error, "Foundry Java JNI bootstrap is not ready.");
 		return 0;
 	}
 	bool entry_already_active = false;
@@ -172,7 +130,7 @@ FoundryExtensionBool initialize_extension(
 		if (extension_state.entry_active) {
 			entry_already_active = true;
 		} else {
-			extension_state.interface = interface;
+			extension_state.services = resolution.services;
 			extension_state.library = library;
 			extension_state.context = 0;
 			extension_state.entry_active = true;
@@ -180,10 +138,10 @@ FoundryExtensionBool initialize_extension(
 		}
 	}
 	if (entry_already_active) {
-		report_entry_error(interface, "Foundry Java extension entry is already active.");
+		report_entry_error(resolution.services->print_error, "Foundry Java extension entry is already active.");
 		return 0;
 	}
-	jni_bridge_install_foundry_error_interface(interface.print_error);
+	jni_bridge_install_foundry_error_interface(resolution.services->print_error);
 	FoundryExtensionInitialization result{};
 	result.minimum_initialization_level = FOUNDRY_EXTENSION_INITIALIZATION_CORE;
 	result.userdata = &extension_state;

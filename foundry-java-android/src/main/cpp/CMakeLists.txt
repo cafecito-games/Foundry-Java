@@ -46,14 +46,35 @@ configure_file(
     "${FOUNDRY_JAVA_GENERATED_INCLUDE}/foundry_java_contract.h"
     @ONLY
 )
+set(FOUNDRY_JAVA_ABI_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateFoundryJavaAbiLayout.cmake")
+set(FOUNDRY_JAVA_ABI_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/foundry_java_abi_layout.h.in")
+set(FOUNDRY_JAVA_API_JSON "${FOUNDRY_JAVA_PUBLIC_API}/extension_api.json")
+set(FOUNDRY_JAVA_ABI_OUTPUT "${FOUNDRY_JAVA_GENERATED_INCLUDE}/foundry_java_abi_layout.h")
+set(FOUNDRY_JAVA_BRIDGE_PRECISION "float")
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${FOUNDRY_JAVA_ABI_GENERATOR}"
+        "${FOUNDRY_JAVA_ABI_TEMPLATE}"
+        "${FOUNDRY_JAVA_API_JSON}"
+        "${FOUNDRY_JAVA_PROVENANCE}"
+)
+include("${FOUNDRY_JAVA_ABI_GENERATOR}")
 
-add_library(foundry_java_runtime STATIC foundry_java_handles.cpp)
+add_library(
+    foundry_java_runtime
+    STATIC
+        foundry_java_handles.cpp
+        foundry_java_interface.cpp
+)
 target_compile_features(foundry_java_runtime PUBLIC cxx_std_17)
 target_include_directories(
     foundry_java_runtime
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${FOUNDRY_JAVA_PUBLIC_API}"
+        "${FOUNDRY_JAVA_GENERATED_INCLUDE}"
 )
 target_compile_options(foundry_java_runtime PRIVATE -Wall -Wextra -Werror)
 set_target_properties(foundry_java_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)

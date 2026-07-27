@@ -74,6 +74,21 @@ afterEvaluate {
 }
 
 val nativeTestScript = rootProject.layout.projectDirectory.file("gradle/run-native-tests.sh")
+val nativeAbiLayoutScript = rootProject.layout.projectDirectory.file("gradle/verify-native-abi-layout.sh")
+
+val nativeAbiLayoutTest =
+    tasks.register<Exec>("nativeAbiLayoutTest") {
+        group = "verification"
+        description = "Verifies deterministic native-only ABI layout generation."
+        inputs.files(
+            fileTree("src/main/cpp/cmake"),
+            file("src/main/cpp/foundry_java_abi_layout.h.in"),
+            rootProject.file("api/current/extension_api.json"),
+            rootProject.file("api/current/provenance.json"),
+        )
+        inputs.file(nativeAbiLayoutScript)
+        commandLine("bash", nativeAbiLayoutScript.asFile.absolutePath, projectDir.absolutePath)
+    }
 
 val nativeHostTest =
     tasks.register<Exec>("nativeHostTest") {
@@ -104,5 +119,5 @@ val nativeSanitizerTest =
     }
 
 tasks.named("check") {
-    dependsOn(nativeHostTest, nativeSanitizerTest)
+    dependsOn(nativeAbiLayoutTest, nativeHostTest, nativeSanitizerTest)
 }
