@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import games.cafecito.foundry.runtime.FoundryCallError;
+import games.cafecito.foundry.generated.GeneratedNativeDispatch;
 import games.cafecito.foundry.runtime.FoundryCallable;
 import games.cafecito.foundry.runtime.FoundryClassDescriptor;
 import games.cafecito.foundry.runtime.FoundryEngine;
@@ -14,7 +14,6 @@ import games.cafecito.foundry.runtime.FoundrySignal;
 import games.cafecito.foundry.types.FoundryDictionary;
 import games.cafecito.foundry.types.Variant;
 import games.cafecito.foundry.types.VariantCodec;
-import games.cafecito.foundry.generated.GeneratedNativeDispatch;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
@@ -42,33 +41,13 @@ class FoundryNativeEngineTest {
                                 FoundryNativeDispatch.class,
                                 Variant[].class),
                         signature("nativeDecodeVariantV1", Variant.class, long.class, long.class),
-                        signature(
-                                "nativeEncodeVariantV1",
-                                long.class,
-                                long.class,
-                                Variant.class),
-                        signature(
-                                "nativeIsObjectValidV1",
-                                boolean.class,
-                                long.class,
-                                long.class),
-                        signature(
-                                "nativeObjectTypeV1",
-                                String.class,
-                                long.class,
-                                long.class),
-                        signature(
-                                "nativeInstantiateV1",
-                                long.class,
-                                long.class,
-                                String.class),
+                        signature("nativeEncodeVariantV1", long.class, long.class, Variant.class),
+                        signature("nativeIsObjectValidV1", boolean.class, long.class, long.class),
+                        signature("nativeObjectTypeV1", String.class, long.class, long.class),
+                        signature("nativeInstantiateV1", long.class, long.class, String.class),
                         signature("nativeRetainV1", void.class, long.class, long.class),
                         signature("nativeReleaseV1", void.class, long.class, long.class),
-                        signature(
-                                "nativeSingletonV1",
-                                long.class,
-                                long.class,
-                                String.class),
+                        signature("nativeSingletonV1", long.class, long.class, String.class),
                         signature(
                                 "nativeReportCallbackExceptionV1",
                                 void.class,
@@ -122,8 +101,7 @@ class FoundryNativeEngineTest {
                         gateway);
 
         assertThrows(
-                IllegalArgumentException.class,
-                () -> unknown.call(11, 0, "missing", List.of()));
+                IllegalArgumentException.class, () -> unknown.call(11, 0, "missing", List.of()));
         assertEquals(0, gateway.calls);
 
         FoundryNativeEngine engine =
@@ -221,8 +199,7 @@ class FoundryNativeEngineTest {
         assertTrue(local.getMessage().contains("SIGNAL"));
         assertTrue(local.getMessage().contains("encode"));
 
-        FoundrySignal foreign =
-                FoundrySignal.nativeBacked(12, 77, new NoOpSignalBackend());
+        FoundrySignal foreign = FoundrySignal.nativeBacked(12, 77, new NoOpSignalBackend());
         IllegalArgumentException context =
                 assertThrows(
                         IllegalArgumentException.class,
@@ -268,7 +245,8 @@ class FoundryNativeEngineTest {
         Map<String, FoundryNativeDispatch> dispatches =
                 Map.of(
                         "builtin_classes/Callable/methods/call#3643564216",
-                        builtinMethod("Callable", "call", 3643564216L, List.of(), 0, true, "Variant"),
+                        builtinMethod(
+                                "Callable", "call", 3643564216L, List.of(), 0, true, "Variant"),
                         "builtin_classes/Signal/methods/connect#979702392",
                         builtinMethod(
                                 "Signal",
@@ -328,13 +306,7 @@ class FoundryNativeEngineTest {
                         "int");
         FoundryNativeDispatch disconnect =
                 builtinMethod(
-                        "Signal",
-                        "disconnect",
-                        3470848906L,
-                        List.of("Callable"),
-                        1,
-                        false,
-                        "Nil");
+                        "Signal", "disconnect", 3470848906L, List.of("Callable"), 1, false, "Nil");
         Map<String, FoundryNativeDispatch> dispatches =
                 Map.of(connect.identity(), connect, disconnect.identity(), disconnect);
         new FoundryNativeEngine(11, dispatches::get, gateway);
@@ -428,8 +400,7 @@ class FoundryNativeEngineTest {
         gateway.callFailures.add(new IllegalStateException("disconnect failed"));
         gateway.releaseFailures.add(new IllegalStateException("release failed"));
 
-        IllegalStateException failure =
-                assertThrows(IllegalStateException.class, signal::close);
+        IllegalStateException failure = assertThrows(IllegalStateException.class, signal::close);
 
         assertEquals("disconnect failed", failure.getMessage());
         assertEquals(1, failure.getSuppressed().length);
@@ -445,8 +416,7 @@ class FoundryNativeEngineTest {
                                         identity.equals(
                                                 "builtin_classes/Signal/methods/disconnect#3470848906"))
                         .count());
-        assertEquals(
-                1, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
+        assertEquals(1, gateway.releasedHandles.stream().filter(handle -> handle == 82L).count());
         first.close();
         second.close();
     }
@@ -526,7 +496,7 @@ class FoundryNativeEngineTest {
         return new FoundryNativeDispatch(
                 "utility_functions/demo#1",
                 FoundryNativeDispatch.Kind.UTILITY_FUNCTION,
-                "UtilityFunctions",
+                "",
                 "demo",
                 1,
                 -1,
@@ -540,7 +510,7 @@ class FoundryNativeEngineTest {
                 "",
                 -1,
                 vararg,
-                true);
+                false);
     }
 
     private static FoundryNativeDispatch builtinMethod(
@@ -579,8 +549,7 @@ class FoundryNativeEngineTest {
                 new java.util.ArrayDeque<>();
         private final java.util.ArrayDeque<RuntimeException> releaseFailures =
                 new java.util.ArrayDeque<>();
-        private final java.util.ArrayList<String> dispatchIdentities =
-                new java.util.ArrayList<>();
+        private final java.util.ArrayList<String> dispatchIdentities = new java.util.ArrayList<>();
         private final java.util.ArrayList<Long> releasedHandles = new java.util.ArrayList<>();
         private int calls;
         private int encodes;
@@ -660,8 +629,7 @@ class FoundryNativeEngineTest {
         }
 
         @Override
-        public void registerExtensionClass(
-                long contextHandle, FoundryClassDescriptor descriptor) {
+        public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {
             registrations++;
         }
 
@@ -673,14 +641,12 @@ class FoundryNativeEngineTest {
 
     private static final class NoOpSignalBackend implements FoundrySignal.NativeBackend {
         @Override
-        public long connect(
-                long contextHandle, long signalHandle, FoundryCallable callable) {
+        public long connect(long contextHandle, long signalHandle, FoundryCallable callable) {
             return 1;
         }
 
         @Override
-        public void disconnect(
-                long contextHandle, long signalHandle, long connectionHandle) {}
+        public void disconnect(long contextHandle, long signalHandle, long connectionHandle) {}
 
         @Override
         public void emit(long contextHandle, long signalHandle, List<Variant> arguments) {}

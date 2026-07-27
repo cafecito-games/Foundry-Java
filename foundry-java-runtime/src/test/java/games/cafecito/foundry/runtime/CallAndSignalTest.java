@@ -121,8 +121,7 @@ class CallAndSignalTest {
 
     @Test
     void callableBackendsDistinguishLocalAndNativeValues() {
-        FoundryCallable local =
-                FoundryCallable.fixed(0, ignored -> Variant.of("local"));
+        FoundryCallable local = FoundryCallable.fixed(0, ignored -> Variant.of("local"));
         List<String> events = new ArrayList<>();
         FoundryCallable nativeValue =
                 FoundryCallable.nativeBacked(
@@ -158,9 +157,7 @@ class CallAndSignalTest {
         assertEquals(11, nativeValue.nativeContextHandle());
         assertEquals(41, nativeValue.nativeBridgeHandle());
         assertEquals(2, nativeValue.arity());
-        assertEquals(
-                Variant.of("native"),
-                nativeValue.call(List.of(Variant.nil(), Variant.nil())));
+        assertEquals(Variant.of("native"), nativeValue.call(List.of(Variant.nil(), Variant.nil())));
         nativeValue.close();
         nativeValue.close();
         assertEquals(List.of("invoke:11:41:2", "release:11:41"), events);
@@ -188,8 +185,7 @@ class CallAndSignalTest {
                                 events.add("invoke:start");
                                 invocationStarted.countDown();
                                 try {
-                                    assertTrue(
-                                            allowInvocationToFinish.await(5, TimeUnit.SECONDS));
+                                    assertTrue(allowInvocationToFinish.await(5, TimeUnit.SECONDS));
                                 } catch (InterruptedException failure) {
                                     Thread.currentThread().interrupt();
                                     throw new AssertionError(failure);
@@ -219,6 +215,44 @@ class CallAndSignalTest {
     }
 
     @Test
+    void nativeCallableRetriesReleaseAfterBackendFailure() {
+        List<String> events = new ArrayList<>();
+        FoundryCallable callable =
+                FoundryCallable.nativeBacked(
+                        11,
+                        41,
+                        0,
+                        new FoundryCallable.NativeBackend() {
+                            private int releaseAttempts;
+
+                            @Override
+                            public Variant invoke(
+                                    long contextHandle,
+                                    long bridgeHandle,
+                                    List<Variant> arguments) {
+                                return Variant.nil();
+                            }
+
+                            @Override
+                            public void release(long contextHandle, long bridgeHandle) {
+                                events.add("release:" + ++releaseAttempts);
+                                if (releaseAttempts == 1) {
+                                    throw new IllegalStateException("injected release failure");
+                                }
+                            }
+                        });
+
+        IllegalStateException failure = assertThrows(IllegalStateException.class, callable::close);
+        assertEquals("injected release failure", failure.getMessage());
+        assertTrue(callable.isClosed());
+
+        callable.close();
+        callable.close();
+
+        assertEquals(List.of("release:1", "release:2"), events);
+    }
+
+    @Test
     void signalBackendsKeepLocalBehaviorAndPreserveNativeIdentity() {
         FoundrySignal local = new FoundrySignal();
         List<String> events = new ArrayList<>();
@@ -238,9 +272,7 @@ class CallAndSignalTest {
 
                             @Override
                             public void disconnect(
-                                    long contextHandle,
-                                    long signalHandle,
-                                    long connectionHandle) {
+                                    long contextHandle, long signalHandle, long connectionHandle) {
                                 events.add(
                                         "disconnect:"
                                                 + contextHandle
@@ -286,11 +318,7 @@ class CallAndSignalTest {
         nativeValue.close();
         nativeValue.close();
         assertEquals(
-                List.of(
-                        "connect:12:99",
-                        "emit:12:99:1",
-                        "disconnect:12:99:71",
-                        "release:12:99"),
+                List.of("connect:12:99", "emit:12:99:1", "disconnect:12:99:71", "release:12:99"),
                 events);
         assertThrows(IllegalStateException.class, nativeValue::emit);
     }
@@ -315,9 +343,7 @@ class CallAndSignalTest {
 
                             @Override
                             public void disconnect(
-                                    long contextHandle,
-                                    long signalHandle,
-                                    long connectionHandle) {}
+                                    long contextHandle, long signalHandle, long connectionHandle) {}
 
                             @Override
                             public void emit(

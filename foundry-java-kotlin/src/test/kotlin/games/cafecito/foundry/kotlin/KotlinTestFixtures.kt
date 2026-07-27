@@ -1,6 +1,7 @@
 package games.cafecito.foundry.kotlin
 
 import games.cafecito.foundry.runtime.FoundryBindingContext
+import games.cafecito.foundry.runtime.FoundryClassDescriptor
 import games.cafecito.foundry.runtime.FoundryEngine
 import games.cafecito.foundry.runtime.FoundryObject
 import games.cafecito.foundry.runtime.ObjectLease
@@ -11,6 +12,16 @@ internal class TestEngine : FoundryEngine {
     var valid = true
     var callResult = FoundryEngine.CallResult.success(Variant.nil())
     var recordedArguments = emptyList<Variant>()
+
+    override fun registerExtensionClass(
+        contextHandle: Long,
+        descriptor: FoundryClassDescriptor,
+    ) = Unit
+
+    override fun unregisterExtensionClass(
+        contextHandle: Long,
+        foundryName: String,
+    ) = Unit
 
     override fun call(
         contextHandle: Long,

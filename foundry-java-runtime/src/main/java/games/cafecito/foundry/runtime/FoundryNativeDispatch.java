@@ -27,7 +27,8 @@ public record FoundryNativeDispatch(
     public FoundryNativeDispatch {
         identity = requireText(identity, "identity");
         kind = Objects.requireNonNull(kind, "kind");
-        ownerNativeType = requireKindText(ownerNativeType, "ownerNativeType", kind, Kind.UTILITY_FUNCTION);
+        ownerNativeType =
+                requireKindText(ownerNativeType, "ownerNativeType", kind, Kind.UTILITY_FUNCTION);
         nativeName = requireKindText(nativeName, "nativeName", kind, Kind.BUILTIN_CONSTRUCTOR);
         argumentNativeTypes =
                 List.copyOf(Objects.requireNonNull(argumentNativeTypes, "argumentNativeTypes"));
@@ -52,16 +53,10 @@ public record FoundryNativeDispatch(
 
         boolean getterPresent =
                 requireAccessorBundle(
-                        getterIdentity,
-                        getterNativeName,
-                        getterCompatibilityHash,
-                        "getter");
+                        getterIdentity, getterNativeName, getterCompatibilityHash, "getter");
         boolean setterPresent =
                 requireAccessorBundle(
-                        setterIdentity,
-                        setterNativeName,
-                        setterCompatibilityHash,
-                        "setter");
+                        setterIdentity, setterNativeName, setterCompatibilityHash, "setter");
         if (kind == Kind.CLASS_PROPERTY) {
             if (!getterPresent && !setterPresent) {
                 throw new IllegalArgumentException(
@@ -77,9 +72,15 @@ public record FoundryNativeDispatch(
         }
 
         if (kind == Kind.BUILTIN_CONSTRUCTOR) {
-            if (constructorIndex < 0 || compatibilityHash != -1 || staticCall) {
+            if (constructorIndex < 0
+                    || compatibilityHash != -1
+                    || vararg
+                    || staticCall
+                    || minimumArgumentCount != argumentNativeTypes.size()
+                    || !returnNativeType.equals(ownerNativeType)) {
                 throw new IllegalArgumentException(
-                        "BUILTIN_CONSTRUCTOR requires only a nonnegative constructor index.");
+                        "BUILTIN_CONSTRUCTOR requires exact formal arity, its owner return type, "
+                                + "and only a nonnegative constructor index.");
             }
         } else if (constructorIndex != -1) {
             throw new IllegalArgumentException(kind + " cannot declare a constructor index.");
@@ -105,6 +106,28 @@ public record FoundryNativeDispatch(
                         || staticCall)) {
             throw new IllegalArgumentException(kind + " cannot declare callable arguments.");
         }
+        if (kind == Kind.CLASS_PROPERTY
+                && (argumentNativeTypes.size() != 1
+                        || minimumArgumentCount != 0
+                        || !returnNativeType.equals(argumentNativeTypes.get(0)))) {
+            throw new IllegalArgumentException(
+                    "CLASS_PROPERTY requires one property type and zero required arguments.");
+        }
+        if (kind == Kind.CLASS_SIGNAL && !returnNativeType.equals("Signal")) {
+            throw new IllegalArgumentException("CLASS_SIGNAL must return Signal.");
+        }
+        if (kind == Kind.BUILTIN_OPERATOR
+                && (argumentNativeTypes.size() > 1
+                        || minimumArgumentCount != argumentNativeTypes.size()
+                        || vararg
+                        || staticCall)) {
+            throw new IllegalArgumentException(
+                    "BUILTIN_OPERATOR requires exact unary or binary formal arity.");
+        }
+        if (kind == Kind.UTILITY_FUNCTION && staticCall) {
+            throw new IllegalArgumentException(
+                    "UTILITY_FUNCTION cannot declare a built-in static receiver.");
+        }
     }
 
     private static String requireText(String value, String name) {
@@ -116,27 +139,29 @@ public record FoundryNativeDispatch(
     }
 
     private static String requireKindText(
-            String value, String name, Kind actualKind, Kind blankAllowedKind) {
+            String value, String name, Kind actualKind, Kind blankRequiredKind) {
         String checked = Objects.requireNonNull(value, name);
-        if (checked.isBlank() && actualKind != blankAllowedKind) {
-            throw new IllegalArgumentException(
-                    name + " must not be blank for " + actualKind + ".");
+        if (actualKind == blankRequiredKind) {
+            if (!checked.isEmpty()) {
+                throw new IllegalArgumentException(
+                        name + " must use the empty sentinel for " + actualKind + ".");
+            }
+        } else if (checked.isBlank()) {
+            throw new IllegalArgumentException(name + " must not be blank for " + actualKind + ".");
         }
         return checked;
     }
 
     private static void requireHash(long value, String name) {
         if (value < -1 || value > MAX_COMPATIBILITY_HASH) {
-            throw new IllegalArgumentException(
-                    name + " must be -1 or an unsigned 32-bit value.");
+            throw new IllegalArgumentException(name + " must be -1 or an unsigned 32-bit value.");
         }
     }
 
     private static boolean requireAccessorBundle(
             String identity, String nativeName, long compatibilityHash, String name) {
         boolean absent = identity.isEmpty() && nativeName.isEmpty() && compatibilityHash == -1;
-        boolean generated =
-                !identity.isBlank() && !nativeName.isBlank() && compatibilityHash >= 0;
+        boolean generated = !identity.isBlank() && !nativeName.isBlank() && compatibilityHash >= 0;
         boolean nameOnlyFallback =
                 identity.isEmpty() && !nativeName.isBlank() && compatibilityHash == -1;
         if (!absent && !generated && !nameOnlyFallback) {

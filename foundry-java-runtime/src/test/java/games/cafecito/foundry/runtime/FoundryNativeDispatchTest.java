@@ -159,6 +159,80 @@ class FoundryNativeDispatchTest {
     }
 
     @Test
+    void requiresKindSpecificSentinelsAndCallableShapes() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        bareDispatch(
+                                FoundryNativeDispatch.Kind.BUILTIN_CONSTRUCTOR,
+                                "AABB",
+                                "AABB",
+                                -1,
+                                0,
+                                List.of(),
+                                0,
+                                "AABB",
+                                false,
+                                false));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        bareDispatch(
+                                FoundryNativeDispatch.Kind.UTILITY_FUNCTION,
+                                "UtilityFunctions",
+                                "abs",
+                                1,
+                                -1,
+                                List.of("Variant"),
+                                1,
+                                "Variant",
+                                false,
+                                false));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        bareDispatch(
+                                FoundryNativeDispatch.Kind.BUILTIN_CONSTRUCTOR,
+                                "AABB",
+                                "",
+                                -1,
+                                0,
+                                List.of("Vector3", "Vector3"),
+                                1,
+                                "AABB",
+                                true,
+                                false));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        bareDispatch(
+                                FoundryNativeDispatch.Kind.BUILTIN_OPERATOR,
+                                "Vector3",
+                                "+",
+                                -1,
+                                -1,
+                                List.of("Vector3"),
+                                0,
+                                "Vector3",
+                                false,
+                                false));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        bareDispatch(
+                                FoundryNativeDispatch.Kind.UTILITY_FUNCTION,
+                                "",
+                                "abs",
+                                1,
+                                -1,
+                                List.of("Variant"),
+                                1,
+                                "Variant",
+                                false,
+                                true));
+    }
+
+    @Test
     void realGeneratedCatalogInitializesAcrossEverySentinelShape() {
         FoundryNativeDispatch constructor =
                 GeneratedNativeDispatch.require("builtin_classes/AABB/constructors/#0");
@@ -202,5 +276,36 @@ class FoundryNativeDispatchTest {
                 -1,
                 vararg,
                 false);
+    }
+
+    private static FoundryNativeDispatch bareDispatch(
+            FoundryNativeDispatch.Kind kind,
+            String ownerNativeType,
+            String nativeName,
+            long compatibilityHash,
+            int constructorIndex,
+            List<String> argumentNativeTypes,
+            int minimumArgumentCount,
+            String returnNativeType,
+            boolean vararg,
+            boolean staticCall) {
+        return new FoundryNativeDispatch(
+                "test/dispatch",
+                kind,
+                ownerNativeType,
+                nativeName,
+                compatibilityHash,
+                constructorIndex,
+                argumentNativeTypes,
+                minimumArgumentCount,
+                returnNativeType,
+                "",
+                "",
+                -1,
+                "",
+                "",
+                -1,
+                vararg,
+                staticCall);
     }
 }

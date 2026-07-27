@@ -15,6 +15,7 @@ public final class FoundryCallable implements AutoCloseable {
     private final NativeIdentity nativeIdentity;
     private int activeInvocations;
     private boolean closed;
+    private boolean nativeReleaseInProgress;
     private boolean nativeReleased;
 
     private FoundryCallable(
@@ -49,9 +50,7 @@ public final class FoundryCallable implements AutoCloseable {
                 arity,
                 null,
                 new NativeIdentity(
-                        contextHandle,
-                        bridgeHandle,
-                        Objects.requireNonNull(backend, "backend")));
+                        contextHandle, bridgeHandle, Objects.requireNonNull(backend, "backend")));
     }
 
     public static <T, R> FoundryCallable unary(
@@ -112,8 +111,7 @@ public final class FoundryCallable implements AutoCloseable {
             }
             NativeIdentity identity = requireNativeIdentity();
             return Objects.requireNonNull(
-                    identity
-                            .backend()
+                    identity.backend()
                             .invoke(identity.contextHandle(), identity.bridgeHandle(), checked),
                     "native callable result");
         } finally {
@@ -123,35 +121,52 @@ public final class FoundryCallable implements AutoCloseable {
 
     @Override
     public void close() {
-        NativeIdentity release = null;
+        NativeIdentity release;
         synchronized (this) {
-            if (closed) {
-                return;
+            if (!closed) {
+                closed = true;
             }
-            closed = true;
-            if (activeInvocations == 0 && nativeIdentity != null) {
-                nativeReleased = true;
-                release = nativeIdentity;
-            }
+            release = reserveNativeRelease();
         }
-        release(release);
+        releaseNative(release);
     }
 
     private void finishInvocation() {
-        NativeIdentity release = null;
+        NativeIdentity release;
         synchronized (this) {
             activeInvocations--;
-            if (closed && activeInvocations == 0 && nativeIdentity != null && !nativeReleased) {
-                nativeReleased = true;
-                release = nativeIdentity;
-            }
+            release = reserveNativeRelease();
         }
-        release(release);
+        releaseNative(release);
     }
 
-    private static void release(NativeIdentity identity) {
-        if (identity != null) {
+    private NativeIdentity reserveNativeRelease() {
+        if (closed
+                && activeInvocations == 0
+                && nativeIdentity != null
+                && !nativeReleaseInProgress
+                && !nativeReleased) {
+            nativeReleaseInProgress = true;
+            return nativeIdentity;
+        }
+        return null;
+    }
+
+    private void releaseNative(NativeIdentity identity) {
+        if (identity == null) {
+            return;
+        }
+        try {
             identity.backend().release(identity.contextHandle(), identity.bridgeHandle());
+        } catch (RuntimeException | Error failure) {
+            synchronized (this) {
+                nativeReleaseInProgress = false;
+            }
+            throw failure;
+        }
+        synchronized (this) {
+            nativeReleaseInProgress = false;
+            nativeReleased = true;
         }
     }
 
@@ -169,8 +184,7 @@ public final class FoundryCallable implements AutoCloseable {
         void release(long contextHandle, long bridgeHandle);
     }
 
-    private record NativeIdentity(
-            long contextHandle, long bridgeHandle, NativeBackend backend) {
+    private record NativeIdentity(long contextHandle, long bridgeHandle, NativeBackend backend) {
         private NativeIdentity {
             if (contextHandle == 0) {
                 throw new IllegalArgumentException("Foundry context handle must be nonzero.");
