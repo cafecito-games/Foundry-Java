@@ -270,6 +270,40 @@ class NativeBridgeContractTest {
     }
 
     @Test
+    void jniVarargPtrcallsPreserveFullVariantStorageAndPrevalidateArity() throws IOException {
+        String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
+        int callStart = jni.indexOf("FoundryNativeEngine_nativeCallV1(");
+        int callEnd = jni.indexOf("FoundryNativeEngine_nativeIsObjectValidV1(", callStart + 1);
+        assertTrue(callStart >= 0);
+        assertTrue(callEnd > callStart);
+        String nativeCall = jni.substring(callStart, callEnd);
+        String normalized = nativeCall.replaceAll("\\s+", " ");
+
+        int formalCount = nativeCall.indexOf("const std::size_t formal_count");
+        int validation = nativeCall.indexOf("validate_dispatch(", formalCount);
+        int rawVariantVararg = nativeCall.indexOf("const bool raw_variant_vararg", validation);
+        int typedCount = nativeCall.indexOf("const std::size_t typed_count", rawVariantVararg);
+        int preparation =
+                nativeCall.indexOf("prepare_native_arguments_for_dispatch(dispatch, call)");
+        int execution = nativeCall.indexOf("transport.execute(dispatch, call)");
+
+        assertTrue(formalCount >= 0);
+        assertTrue(validation > formalCount);
+        assertTrue(rawVariantVararg > validation);
+        assertTrue(typedCount > rawVariantVararg);
+        assertTrue(preparation > typedCount);
+        assertTrue(execution > preparation);
+        assertTrue(
+                normalized.contains(
+                        "dispatch.vararg && (dispatch.kind == DispatchKind::BUILTIN_METHOD || "
+                                + "dispatch.kind == DispatchKind::UTILITY_FUNCTION)"));
+        assertTrue(normalized.contains("raw_variant_vararg ? 0 : std::min("));
+        assertEquals(
+                1,
+                occurrences(nativeCall, "prepare_native_arguments_for_dispatch(dispatch, call)"));
+    }
+
+    @Test
     void jniBoundaryDoesNotDiscoverGeneratedClassesOrUseReflection() throws IOException {
         String jni = read("foundry-java-android/src/main/cpp/foundry_java_jni.cpp");
         String nativeEngine =

@@ -149,6 +149,10 @@ struct DispatchCall {
 	FoundryExtensionVariantOperator variant_operator = FOUNDRY_EXTENSION_VARIANT_OP_MAX;
 };
 
+void prepare_native_arguments_for_dispatch(
+		const NativeDispatch &dispatch,
+		DispatchCall &call);
+
 struct CollectionEntry {
 	NativeValue key;
 	NativeValue value;

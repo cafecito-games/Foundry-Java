@@ -2191,7 +2191,27 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1(
 
 		const std::size_t formal_count =
 				static_cast<std::size_t>(java_argument_count) - receiver_count;
+		const DispatchValidation argument_validation = validate_dispatch(
+				dispatch,
+				formal_count,
+				has_builtin_receiver ? std::string_view(dispatch.owner_native_type) : std::string_view{});
+		if (!argument_validation.valid) {
+			destroy_native_values();
+			release_arguments();
+			return call_result(
+					environment,
+					nullptr,
+					FOUNDRY_EXTENSION_CALL_ERROR_INVALID_ARGUMENT,
+					static_cast<std::int32_t>(formal_count),
+					argument_validation.phase);
+		}
+		const bool raw_variant_vararg =
+				dispatch.vararg &&
+				(dispatch.kind == DispatchKind::BUILTIN_METHOD ||
+						dispatch.kind == DispatchKind::UTILITY_FUNCTION);
 		const std::size_t typed_count =
+				raw_variant_vararg ?
+				0 :
 				std::min(formal_count, dispatch.argument_native_types.size());
 		for (std::size_t index = 0; index < typed_count; index++) {
 			const std::string &type_name = dispatch.argument_native_types[index];
@@ -2299,6 +2319,7 @@ Java_games_cafecito_foundry_java_FoundryNativeEngine_nativeCallV1(
 				call.native_arguments.push_back(native_values.back().data());
 			}
 		}
+		prepare_native_arguments_for_dispatch(dispatch, call);
 
 		DispatchFamily family = dispatch_family(dispatch);
 		if (family == DispatchFamily::CLASS_PTRCALL &&

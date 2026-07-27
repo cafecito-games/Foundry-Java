@@ -206,6 +206,21 @@ DispatchFamily dispatch_family(const NativeDispatch &dispatch) {
 	return DispatchFamily::INVALID;
 }
 
+void prepare_native_arguments_for_dispatch(
+		const NativeDispatch &dispatch,
+		DispatchCall &call) {
+	if (!dispatch.vararg ||
+			(dispatch.kind != DispatchKind::BUILTIN_METHOD &&
+					dispatch.kind != DispatchKind::UTILITY_FUNCTION)) {
+		return;
+	}
+	// Foundry's vararg ptrcall adapters decode every argument, including declared
+	// prefixes, as full Variant storage rather than the fixed native ABI type.
+	call.native_arguments.assign(
+			call.variant_arguments.begin(),
+			call.variant_arguments.end());
+}
+
 DispatchValidation validate_value_backend(
 		FoundryExtensionVariantType type,
 		ValueBackend backend) {

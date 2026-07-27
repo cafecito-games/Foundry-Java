@@ -59,6 +59,10 @@ int member_get_count = 0;
 int member_set_count = 0;
 int constant_count = 0;
 int utility_count = 0;
+std::vector<std::uint64_t> builtin_method_argument_values;
+std::vector<std::uint64_t> utility_argument_values;
+std::vector<FoundryExtensionConstTypePtr> builtin_method_argument_pointers;
+std::vector<FoundryExtensionConstTypePtr> utility_argument_pointers;
 int named_get_count = 0;
 int named_set_count = 0;
 int keyed_get_count = 0;
@@ -685,10 +689,17 @@ void fake_dispatch_method_ptrcall(
 
 void fake_builtin_method(
 		FoundryExtensionTypePtr,
-		const FoundryExtensionConstTypePtr *,
+		const FoundryExtensionConstTypePtr *arguments,
 		FoundryExtensionTypePtr,
-		int32_t) {
+		int32_t argument_count) {
 	builtin_method_count++;
+	builtin_method_argument_values.clear();
+	builtin_method_argument_pointers.clear();
+	for (int32_t index = 0; index < argument_count; index++) {
+		builtin_method_argument_pointers.push_back(arguments[index]);
+		builtin_method_argument_values.push_back(
+				*static_cast<const std::uint64_t *>(arguments[index]));
+	}
 }
 
 FoundryExtensionPtrBuiltInMethod fake_get_builtin_method(
@@ -753,9 +764,16 @@ void fake_variant_constant(
 
 void fake_utility(
 		FoundryExtensionTypePtr,
-		const FoundryExtensionConstTypePtr *,
-		int32_t) {
+		const FoundryExtensionConstTypePtr *arguments,
+		int32_t argument_count) {
 	utility_count++;
+	utility_argument_values.clear();
+	utility_argument_pointers.clear();
+	for (int32_t index = 0; index < argument_count; index++) {
+		utility_argument_pointers.push_back(arguments[index]);
+		utility_argument_values.push_back(
+				*static_cast<const std::uint64_t *>(arguments[index]));
+	}
 }
 
 FoundryExtensionPtrUtilityFunction fake_get_utility(
@@ -2687,6 +2705,134 @@ void test_category_specific_conversion_and_executable_dispatch() {
 	expect(native_object_destroy_count == 1, "borrowed singleton release must not destroy");
 }
 
+void test_vararg_native_arguments_reach_ptrcall_families() {
+	auto services = std::make_shared<foundry_java::BridgeServices>();
+	services->variant_new_nil = &fake_variant_new_nil;
+	services->variant_get_ptr_destructor = &fake_all_variant_destructors;
+	services->string_name_new_with_utf8_chars_and_len = &fake_string_name_from_utf8_and_len;
+	services->variant_get_ptr_builtin_method = &fake_get_builtin_method;
+	services->variant_get_ptr_utility_function = &fake_get_utility;
+	foundry_java::NativeTransport transport(services);
+
+	std::uint64_t first = 11;
+	std::uint64_t second = 22;
+	std::uint64_t third = 33;
+	std::uint64_t wrongly_unboxed_prefix = 999;
+	std::max_align_t receiver[4]{};
+	std::max_align_t result[4]{};
+	foundry_java::DispatchCall call;
+	call.variant_arguments = { &first, &second, &third };
+	call.native_arguments = { &wrongly_unboxed_prefix };
+	call.variant_result = result;
+	call.native_result = result;
+
+	foundry_java::NativeDispatch dispatch;
+	dispatch.identity = "utility_functions/print";
+	dispatch.kind = foundry_java::DispatchKind::UTILITY_FUNCTION;
+	dispatch.native_name = "print";
+	dispatch.argument_native_types = { "Variant" };
+	dispatch.minimum_argument_count = 1;
+	dispatch.return_native_type = "void";
+	dispatch.vararg = true;
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(
+			call.native_arguments == call.variant_arguments,
+			"print-style varargs must replace the typed prefix with raw Variant pointers");
+	expect(transport.execute(dispatch, call).ok, "print-style vararg utility must execute");
+	expect(
+			utility_argument_values == std::vector<std::uint64_t>{ 11, 22, 33 },
+			"print-style vararg utility must receive every Variant in order");
+	expect(
+			utility_argument_pointers == call.native_arguments,
+			"print-style ptrcall must preserve every Variant pointer identity");
+	expect(
+			!foundry_java::validate_dispatch(dispatch, 0, {}).valid,
+			"print-style vararg utility must still enforce its declared minimum");
+
+	dispatch.identity = "builtin_classes/Callable/methods/call";
+	dispatch.kind = foundry_java::DispatchKind::BUILTIN_METHOD;
+	dispatch.owner_native_type = "Callable";
+	dispatch.native_name = "call";
+	dispatch.argument_native_types.clear();
+	dispatch.minimum_argument_count = 0;
+	dispatch.return_native_type = "Variant";
+	call.receiver_native = receiver;
+	call.receiver_native_type = "Callable";
+	call.native_arguments.clear();
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(transport.execute(dispatch, call).ok, "Callable.call varargs must execute");
+	expect(
+			builtin_method_argument_values == std::vector<std::uint64_t>{ 11, 22, 33 },
+			"Callable.call must receive every Variant in order");
+	expect(
+			builtin_method_argument_pointers == call.native_arguments,
+			"Callable.call must preserve every Variant pointer identity");
+	call.variant_arguments.clear();
+	call.native_arguments.clear();
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(transport.execute(dispatch, call).ok, "Callable.call must accept zero varargs");
+	expect(
+			builtin_method_argument_pointers.empty(),
+			"zero-argument Callable.call must pass an empty ptrcall argument vector");
+
+	dispatch.identity = "builtin_classes/Callable/methods/rpc_id";
+	dispatch.native_name = "rpc_id";
+	dispatch.argument_native_types = { "int" };
+	dispatch.minimum_argument_count = 1;
+	call.variant_arguments = { &first, &second };
+	call.native_arguments = { &wrongly_unboxed_prefix };
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(
+			call.native_arguments == call.variant_arguments,
+			"Callable.rpc_id declared int prefix must remain raw Variant storage");
+	expect(transport.execute(dispatch, call).ok, "Callable.rpc_id fixed-prefix varargs must execute");
+	expect(
+			builtin_method_argument_pointers == call.native_arguments &&
+					builtin_method_argument_values == std::vector<std::uint64_t>{ 11, 22 },
+			"Callable.rpc_id must preserve its fixed prefix and trailing Variant pointers");
+
+	dispatch.identity = "builtin_classes/Signal/methods/emit";
+	dispatch.owner_native_type = "Signal";
+	dispatch.native_name = "emit";
+	dispatch.argument_native_types.clear();
+	dispatch.minimum_argument_count = 0;
+	dispatch.return_native_type = "void";
+	call.receiver_native_type = "Signal";
+	call.variant_arguments = { &first, &second, &third };
+	call.native_arguments.clear();
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(transport.execute(dispatch, call).ok, "Signal.emit varargs must execute");
+	expect(
+			builtin_method_argument_values == std::vector<std::uint64_t>{ 11, 22, 33 },
+			"Signal.emit must receive every Variant in order");
+	expect(
+			builtin_method_argument_pointers == call.native_arguments,
+			"Signal.emit must preserve every Variant pointer identity");
+	call.variant_arguments.clear();
+	call.native_arguments.clear();
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(transport.execute(dispatch, call).ok, "Signal.emit must accept zero varargs");
+	expect(
+			builtin_method_argument_pointers.empty(),
+			"zero-argument Signal.emit must pass an empty ptrcall argument vector");
+
+	dispatch.kind = foundry_java::DispatchKind::UTILITY_FUNCTION;
+	dispatch.owner_native_type.clear();
+	dispatch.native_name = "fixed";
+	dispatch.argument_native_types = { "int" };
+	dispatch.minimum_argument_count = 1;
+	dispatch.vararg = false;
+	call.variant_arguments = { &first, &second };
+	call.native_arguments = { &wrongly_unboxed_prefix };
+	foundry_java::prepare_native_arguments_for_dispatch(dispatch, call);
+	expect(
+			call.native_arguments == std::vector<FoundryExtensionConstTypePtr>{ &wrongly_unboxed_prefix },
+			"non-vararg dispatch must retain its typed native arguments");
+	expect(
+			!foundry_java::validate_dispatch(dispatch, call.variant_arguments.size(), {}).valid,
+			"surplus non-vararg JNI arguments must reject before ptrcall");
+}
+
 } // namespace
 
 namespace foundry_java {
@@ -2756,6 +2902,7 @@ int main() {
 	test_ref_counted_instantiation_initializes_and_unreferences();
 	test_all_variant_categories_copy_and_destroy_through_public_abi();
 	test_category_specific_conversion_and_executable_dispatch();
+	test_vararg_native_arguments_reach_ptrcall_families();
 	std::cout << "Foundry Java native runtime tests passed\n";
 	return 0;
 }
