@@ -5,6 +5,7 @@ project(foundry_java_bridge LANGUAGES CXX)
 find_package(Threads REQUIRED)
 
 option(FOUNDRY_JAVA_BUILD_TESTS "Build Foundry Java native unit tests." OFF)
+option(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST "Build the Android instrumentation test host." OFF)
 option(FOUNDRY_JAVA_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers." OFF)
 
 set(FOUNDRY_JAVA_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../..")
@@ -97,6 +98,26 @@ if(ANDROID)
             "-Wl,--no-undefined"
             "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/foundry_java_exports.map"
     )
+
+    if(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+        add_library(
+            foundry_java_test_host
+            SHARED
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_fake_extension_host.cpp"
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_fake_extension_host.h"
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_test_host_jni.cpp"
+        )
+        target_link_libraries(foundry_java_test_host PRIVATE foundry_java Threads::Threads)
+        target_include_directories(
+            foundry_java_test_host
+            PRIVATE
+                "${FOUNDRY_JAVA_PUBLIC_API}"
+                "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp"
+        )
+        target_compile_features(foundry_java_test_host PRIVATE cxx_std_17)
+        target_compile_options(foundry_java_test_host PRIVATE -Wall -Wextra -Werror -fvisibility=hidden)
+        target_link_options(foundry_java_test_host PRIVATE "-Wl,--no-undefined")
+    endif()
 endif()
 
 if(FOUNDRY_JAVA_BUILD_TESTS)
