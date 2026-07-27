@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -23,6 +24,15 @@ extern "C" FoundryExtensionBool foundry_java_library_init(
     FoundryExtensionInterfaceGetProcAddress p_get_proc_address,
     FoundryExtensionClassLibraryPtr p_library,
     FoundryExtensionInitialization *r_initialization);
+
+#ifdef FOUNDRY_JAVA_FAKE_HOST_CONTRACT_TEST
+extern "C" FoundryExtensionBool
+foundry_java_library_init(FoundryExtensionInterfaceGetProcAddress,
+                          FoundryExtensionClassLibraryPtr,
+                          FoundryExtensionInitialization *) {
+  return 0;
+}
+#endif
 
 namespace foundry_java_test_host {
 namespace {
@@ -45,8 +55,19 @@ struct VariantValue {
   FakeObject *object = nullptr;
 };
 
-struct FakeCallable {
+struct FakeCallableState {
   FoundryExtensionCallableCustomInfo2 info{};
+
+  ~FakeCallableState() {
+    if (info.free_func != nullptr) {
+      info.free_func(info.callable_userdata);
+    }
+  }
+};
+
+struct FakeCallable {
+  std::shared_ptr<FakeCallableState> state =
+      std::make_shared<FakeCallableState>();
 };
 
 struct PropertySnapshot {
@@ -122,6 +143,7 @@ struct FakeHostState {
   std::unordered_map<std::string, std::uint64_t> unregistration_counts;
   std::vector<std::string> registration_order;
   std::vector<std::string> unregistration_order;
+  std::vector<std::string> errors;
   std::map<std::string, std::uintptr_t> class_tags;
   GDObjectInstanceID next_object_id = 1;
 };
@@ -213,6 +235,7 @@ void reset_capture() {
   host_state.unregistration_counts.clear();
   host_state.registration_order.clear();
   host_state.unregistration_order.clear();
+  host_state.errors.clear();
   host_state.class_tags.clear();
   host_state.next_object_id = 1;
 }
@@ -236,6 +259,16 @@ std::vector<std::string> registration_order_snapshot() {
 std::vector<std::string> unregistration_order_snapshot() {
   std::lock_guard lock(host_state.mutex);
   return host_state.unregistration_order;
+}
+
+std::vector<std::string> error_snapshot() {
+  std::lock_guard lock(host_state.mutex);
+  return host_state.errors;
+}
+
+bool registered_classes_empty() {
+  std::lock_guard lock(host_state.mutex);
+  return host_state.classes.empty();
 }
 
 std::uint64_t registration_count(const std::string &name) {
@@ -279,8 +312,11 @@ void *fake_mem_realloc2(void *memory, std::size_t bytes, FoundryExtensionBool) {
 
 void fake_mem_free2(void *memory, FoundryExtensionBool) { std::free(memory); }
 
-void fake_print_error(const char *, const char *, const char *, std::int32_t,
-                      FoundryExtensionBool) {}
+void fake_print_error(const char *description, const char *, const char *,
+                      std::int32_t, FoundryExtensionBool) {
+  std::lock_guard lock(host_state.mutex);
+  host_state.errors.emplace_back(description == nullptr ? "" : description);
+}
 
 std::uint64_t fake_get_native_struct_size(FoundryExtensionConstStringNamePtr) {
   return 0;
@@ -515,9 +551,6 @@ void destroy_callable(FoundryExtensionTypePtr storage) {
   if (callable == nullptr) {
     return;
   }
-  if (callable->info.free_func != nullptr) {
-    callable->info.free_func(callable->info.callable_userdata);
-  }
   write_pointer_slot<FakeCallable>(storage, nullptr);
   delete callable;
   live_callable_values.fetch_sub(1, std::memory_order_relaxed);
@@ -526,8 +559,12 @@ void destroy_callable(FoundryExtensionTypePtr storage) {
 FoundryExtensionPtrConstructor
 fake_variant_get_ptr_constructor(FoundryExtensionVariantType type,
                                  std::int32_t constructor) {
-  if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING ||
-      type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME) {
+  if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING) {
+    return constructor == 0                       ? &text_default_constructor
+           : constructor == 1 || constructor == 2 ? &text_copy_constructor
+                                                  : nullptr;
+  }
+  if (type == FOUNDRY_EXTENSION_VARIANT_TYPE_STRING_NAME) {
     return constructor == 0   ? &text_default_constructor
            : constructor == 1 ? &text_copy_constructor
                               : nullptr;
@@ -860,7 +897,7 @@ void fake_callable_custom_create2(
     FoundryExtensionCallableCustomInfo2 *info) {
   auto *callable = new FakeCallable();
   if (info != nullptr) {
-    callable->info = *info;
+    callable->state->info = *info;
   }
   live_callable_values.fetch_add(1, std::memory_order_relaxed);
   write_pointer_slot(destination, callable);
@@ -869,9 +906,9 @@ void fake_callable_custom_create2(
 void *fake_callable_custom_get_userdata(FoundryExtensionConstTypePtr callable,
                                         void *token) {
   const FakeCallable *value = read_pointer_slot<FakeCallable>(callable);
-  return value == nullptr || value->info.token != token
+  return value == nullptr || value->state->info.token != token
              ? nullptr
-             : value->info.callable_userdata;
+             : value->state->info.callable_userdata;
 }
 
 FoundryExtensionObjectPtr
@@ -1321,6 +1358,19 @@ bool fail_closed_probe() {
          rejected.deinitialize == nullptr;
 }
 
+bool inactive_entry_probe() {
+  const std::size_t error_count_before = error_snapshot().size();
+  FoundryExtensionInitialization rejected{};
+  const bool entry_rejected =
+      foundry_java_library_init(&get_proc_address_full, &host_state,
+                                &rejected) == 0 &&
+      rejected.userdata == nullptr && rejected.initialize == nullptr &&
+      rejected.deinitialize == nullptr;
+  const std::vector<std::string> errors = error_snapshot();
+  return entry_rejected && errors.size() > error_count_before &&
+         errors.back() == "Foundry Java JNI bootstrap is not ready.";
+}
+
 template <std::size_t Size> struct RawStorage {
   alignas(std::max_align_t) std::array<std::byte, Size> bytes{};
   void *data() { return bytes.data(); }
@@ -1375,8 +1425,9 @@ std::int64_t read_int_variant(const RawVariant &storage) {
 }
 
 bool is_nil_variant(const RawVariant &storage) {
-  return fake_variant_get_type(storage.data()) ==
-         FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
+  return variant_value(storage.data()) != nullptr &&
+         fake_variant_get_type(storage.data()) ==
+             FOUNDRY_EXTENSION_VARIANT_TYPE_NIL;
 }
 
 void destroy_if_variant(RawVariant &storage) {
@@ -1596,17 +1647,13 @@ std::string pre_entry_evidence_v1() {
   json << "{\"schema_version\":1,\"bridge_ready\":"
        << json_bool(fail_closed && clean)
        << ",\"entry_active\":false,\"live_contexts\":0,"
-          "\"registered_classes\":[]}";
+          "\"registered_classes\":0}";
   return json.str();
 }
 
 std::string run_lifecycle_v1(int run_index) {
   reset_capture();
-  const std::vector<std::string> events = {
-      "foundry_extension_entry", "core_initialize",    "scene_initialize",
-      "callback_dispatch",       "scene_deinitialize", "core_deinitialize",
-      "context_invalidate",
-  };
+  std::vector<std::string> events;
   const bool fail_closed = fail_closed_probe();
   FoundryExtensionInitialization initialization{};
   const bool raw_entry_accepted =
@@ -1621,46 +1668,83 @@ std::string run_lifecycle_v1(int run_index) {
                               initialization.deinitialize != nullptr &&
                               initialization.minimum_initialization_level ==
                                   FOUNDRY_EXTENSION_INITIALIZATION_CORE;
+  if (entry_accepted) {
+    events.emplace_back("foundry_extension_entry");
+  }
 
-  const std::vector<std::string> initialize_attempts = {"CORE", "CORE", "SCENE",
-                                                        "SCENE"};
+  std::vector<std::string> initialize_attempts;
   if (raw_entry_accepted) {
+    initialize_attempts.emplace_back("CORE");
     initialization.initialize(initialization.userdata,
                               FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+    initialize_attempts.emplace_back("CORE");
     initialization.initialize(initialization.userdata,
                               FOUNDRY_EXTENSION_INITIALIZATION_CORE);
-    initialization.initialize(initialization.userdata,
-                              FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
-    initialization.initialize(initialization.userdata,
-                              FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
   }
-
   const ClassSnapshot core = class_snapshot(CORE_CLASS);
-  const ClassSnapshot scene = class_snapshot(SCENE_CLASS);
-  CallbackEvidence callback_evidence;
-  std::thread callback_thread([&callback_evidence, core] {
-    callback_evidence = exercise_callbacks(core);
-  });
-  callback_thread.join();
-  const bool scene_contract =
-      scene.name == SCENE_CLASS && scene.parent == "Node";
-  if (!scene_contract || registration_count(CORE_CLASS) != 1 ||
-      registration_count(SCENE_CLASS) != 1) {
-    callback_evidence.callback_result = 0;
-    callback_evidence.all_contract_checks = false;
+  const std::vector<std::string> core_registration_order =
+      registration_order_snapshot();
+  const bool core_initialized =
+      entry_accepted && core.name == CORE_CLASS &&
+      registration_count(CORE_CLASS) == 1 &&
+      core_registration_order == std::vector<std::string>{CORE_CLASS};
+  if (core_initialized) {
+    events.emplace_back("core_initialize");
   }
 
+  if (raw_entry_accepted) {
+    initialize_attempts.emplace_back("SCENE");
+    initialization.initialize(initialization.userdata,
+                              FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
+    initialize_attempts.emplace_back("SCENE");
+    initialization.initialize(initialization.userdata,
+                              FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
+  }
+  const ClassSnapshot scene = class_snapshot(SCENE_CLASS);
   const std::vector<std::string> registration_order =
       registration_order_snapshot();
-  const std::vector<std::string> deinitialize_attempts = {"SCENE", "SCENE",
-                                                          "CORE", "CORE"};
+  const bool scene_initialized =
+      core_initialized && scene.name == SCENE_CLASS && scene.parent == "Node" &&
+      registration_count(SCENE_CLASS) == 1 &&
+      registration_order == std::vector<std::string>{CORE_CLASS, SCENE_CLASS};
+  if (scene_initialized) {
+    events.emplace_back("scene_initialize");
+  }
+
+  CallbackEvidence callback_evidence;
+  if (core_initialized && scene_initialized) {
+    std::thread callback_thread([&callback_evidence, core] {
+      callback_evidence = exercise_callbacks(core);
+    });
+    callback_thread.join();
+  }
+  if (callback_evidence.all_contract_checks) {
+    events.emplace_back("callback_dispatch");
+  }
+
+  std::vector<std::string> deinitialize_attempts;
   if (raw_entry_accepted) {
+    deinitialize_attempts.emplace_back("SCENE");
     initialization.deinitialize(initialization.userdata,
                                 FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
+    deinitialize_attempts.emplace_back("SCENE");
     initialization.deinitialize(initialization.userdata,
                                 FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
+  }
+  const std::vector<std::string> scene_unregistration_order =
+      unregistration_order_snapshot();
+  const bool scene_deinitialized =
+      scene_initialized && unregistration_count(SCENE_CLASS) == 1 &&
+      scene_unregistration_order == std::vector<std::string>{SCENE_CLASS};
+  if (scene_deinitialized) {
+    events.emplace_back("scene_deinitialize");
+  }
+
+  if (raw_entry_accepted) {
+    deinitialize_attempts.emplace_back("CORE");
     initialization.deinitialize(initialization.userdata,
                                 FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+    deinitialize_attempts.emplace_back("CORE");
     initialization.deinitialize(initialization.userdata,
                                 FOUNDRY_EXTENSION_INITIALIZATION_CORE);
   }
@@ -1672,9 +1756,25 @@ std::string run_lifecycle_v1(int run_index) {
       live_text_values.load(std::memory_order_relaxed) +
       live_variant_values.load(std::memory_order_relaxed) +
       live_callable_values.load(std::memory_order_relaxed);
-  const bool entry_active_after_teardown = false;
-  const std::uint64_t context_handle =
-      entry_accepted && registration_count(CORE_CLASS) == 1 ? 1 : 0;
+  const bool core_deinitialized =
+      core_initialized && unregistration_count(CORE_CLASS) == 1 &&
+      unregistration_order == std::vector<std::string>{SCENE_CLASS, CORE_CLASS};
+  if (core_deinitialized) {
+    events.emplace_back("core_deinitialize");
+  }
+  const bool terminal_state_observed =
+      raw_entry_accepted && scene_deinitialized && core_deinitialized &&
+      registered_classes_empty() && live_instances == 0 && live_handles == 0 &&
+      inactive_entry_probe();
+  if (terminal_state_observed) {
+    events.emplace_back("context_invalidate");
+  }
+  const bool entry_active_after_teardown =
+      raw_entry_accepted && !terminal_state_observed;
+  // The public FoundryExtension registration ABI does not expose the Java
+  // FoundryBindingContext handle. Android-side evidence replaces this explicit
+  // placeholder with context.contextHandle() observed by CoreAccess.construct.
+  const std::uint64_t context_handle = 0;
 
   std::ostringstream json;
   json << "{\"schema_version\":1,\"run_index\":" << run_index
@@ -1705,4 +1805,88 @@ std::string run_lifecycle_v1(int run_index) {
   return json.str();
 }
 
+#ifdef FOUNDRY_JAVA_FAKE_HOST_CONTRACT_TEST
+int run_fake_host_contract_tests() {
+  const std::string pre_entry = pre_entry_evidence_v1();
+  if (pre_entry.find("\"registered_classes\":0") == std::string::npos) {
+    return 1;
+  }
+  {
+    RawStringName source;
+    fake_string_name_new_with_utf8_chars_and_len(source.data(), "round_trip",
+                                                 10);
+    RawString destination;
+    const FoundryExtensionPtrConstructor constructor =
+        fake_variant_get_ptr_constructor(FOUNDRY_EXTENSION_VARIANT_TYPE_STRING,
+                                         2);
+    if (constructor == nullptr) {
+      return 2;
+    }
+    const FoundryExtensionConstTypePtr arguments[] = {source.data()};
+    constructor(destination.data(), arguments);
+    if (text_value(destination.data()) != "round_trip") {
+      return 3;
+    }
+  }
+  if (live_text_values.load(std::memory_order_relaxed) != 0) {
+    return 4;
+  }
+  RawStorage<32> original_callable;
+  RawStorage<32> copied_callable;
+  int callable_free_count = 0;
+  FoundryExtensionCallableCustomInfo2 callable_info{};
+  callable_info.callable_userdata = &callable_free_count;
+  callable_info.token = &callable_free_count;
+  callable_info.free_func = [](void *userdata) {
+    (*static_cast<int *>(userdata))++;
+  };
+  fake_callable_custom_create2(original_callable.data(), &callable_info);
+  const FoundryExtensionPtrConstructor copy_constructor =
+      fake_variant_get_ptr_constructor(FOUNDRY_EXTENSION_VARIANT_TYPE_CALLABLE,
+                                       1);
+  if (copy_constructor == nullptr) {
+    destroy_callable(original_callable.data());
+    return 5;
+  }
+  const FoundryExtensionConstTypePtr callable_arguments[] = {
+      original_callable.data()};
+  copy_constructor(copied_callable.data(), callable_arguments);
+  destroy_callable(original_callable.data());
+  const int free_count_after_first_destroy = callable_free_count;
+  destroy_callable(copied_callable.data());
+  if (free_count_after_first_destroy != 0 || callable_free_count != 1) {
+    return 6;
+  }
+  if (live_callable_values.load(std::memory_order_relaxed) != 0) {
+    return 7;
+  }
+  {
+    RawVariant unconstructed;
+    if (is_nil_variant(unconstructed)) {
+      return 8;
+    }
+    RawVariant constructed_nil;
+    fake_variant_new_nil(constructed_nil.data());
+    if (!is_nil_variant(constructed_nil)) {
+      return 9;
+    }
+  }
+  if (live_variant_values.load(std::memory_order_relaxed) != 0) {
+    return 10;
+  }
+  const std::string rejected_lifecycle = run_lifecycle_v1(1);
+  if (rejected_lifecycle.find("\"events\":[]") == std::string::npos) {
+    return 11;
+  }
+  return rejected_lifecycle.find("\"entry_active_after_teardown\":false") !=
+                 std::string::npos
+             ? 0
+             : 12;
+}
+#endif
+
 } // namespace foundry_java_test_host
+
+#ifdef FOUNDRY_JAVA_FAKE_HOST_CONTRACT_TEST
+int main() { return foundry_java_test_host::run_fake_host_contract_tests(); }
+#endif

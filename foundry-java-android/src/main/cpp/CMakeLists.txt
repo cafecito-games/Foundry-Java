@@ -137,13 +137,28 @@ if(FOUNDRY_JAVA_BUILD_TESTS)
     target_link_libraries(foundry_java_runtime_test PRIVATE foundry_java_runtime Threads::Threads)
     target_compile_features(foundry_java_runtime_test PRIVATE cxx_std_17)
     target_compile_options(foundry_java_runtime_test PRIVATE -Wall -Wextra -Werror)
+    add_executable(
+        foundry_java_fake_extension_host_test
+        "${FOUNDRY_JAVA_ROOT}/foundry-java-android/src/androidTest/cpp/foundry_java_fake_extension_host.cpp"
+    )
+    target_link_libraries(foundry_java_fake_extension_host_test PRIVATE Threads::Threads)
+    target_include_directories(foundry_java_fake_extension_host_test PRIVATE "${FOUNDRY_JAVA_PUBLIC_API}")
+    target_compile_definitions(
+        foundry_java_fake_extension_host_test
+        PRIVATE FOUNDRY_JAVA_FAKE_HOST_CONTRACT_TEST
+    )
+    target_compile_features(foundry_java_fake_extension_host_test PRIVATE cxx_std_17)
+    target_compile_options(foundry_java_fake_extension_host_test PRIVATE -Wall -Wextra -Werror)
     if(FOUNDRY_JAVA_ENABLE_SANITIZERS)
         target_compile_options(foundry_java_runtime PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_compile_options(foundry_java_registration_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_compile_options(foundry_java_runtime_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_compile_options(foundry_java_fake_extension_host_test PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
         target_link_options(foundry_java_registration_test PRIVATE -fsanitize=address,undefined)
         target_link_options(foundry_java_runtime_test PRIVATE -fsanitize=address,undefined)
+        target_link_options(foundry_java_fake_extension_host_test PRIVATE -fsanitize=address,undefined)
     endif()
     add_test(NAME foundry_java_registration_test COMMAND foundry_java_registration_test)
     add_test(NAME foundry_java_runtime_test COMMAND foundry_java_runtime_test)
+    add_test(NAME foundry_java_fake_extension_host_test COMMAND foundry_java_fake_extension_host_test)
 endif()
