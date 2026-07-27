@@ -505,6 +505,7 @@ class NativeBridgeContractTest {
         assertEquals(DEBUG_STARTUP_FIXTURE_FILES, fileInventory("foundry-java-android/src/debug"));
 
         String cmake = read("foundry-java-android/src/main/cpp/CMakeLists.txt");
+        String normalizedCmake = cmake.replaceAll("\\s+", " ");
         String androidBuild = read("foundry-java-android/build.gradle.kts");
         String fixtureSources =
                 readTree("foundry-java-android/src/androidTest")
@@ -513,7 +514,7 @@ class NativeBridgeContractTest {
         assertTrue(cmake.contains("option(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST"));
         assertTrue(cmake.contains("foundry_java_fake_extension_host.cpp"));
         assertTrue(cmake.contains("foundry_java_test_host_jni.cpp"));
-        assertTrue(cmake.contains("add_library(foundry_java_test_host SHARED"));
+        assertTrue(normalizedCmake.contains("add_library( foundry_java_test_host SHARED"));
         assertTrue(androidBuild.contains("-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=ON"));
         assertTrue(fixtureSources.contains("System.loadLibrary(\"foundry_java_test_host\")"));
         assertFalse(fixtureSources.contains("FoundryJavaInitializer.initialize("));
