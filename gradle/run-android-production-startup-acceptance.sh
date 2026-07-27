@@ -147,15 +147,19 @@ if [[ "$run_1_pid" == "$run_2_pid" ]]; then
 fi
 
 jq -n \
+  --arg serial "$serial" \
   --arg target_package "$target_package" \
   --argjson run_1_pid "$run_1_pid" \
   --argjson run_2_pid "$run_2_pid" \
   '{
     schema_version: 1,
     result: "pass",
+    api_level: 36,
+    serial: $serial,
     target_package: $target_package,
     run_count: 2,
-    distinct_pids: ($run_1_pid != $run_2_pid),
+    force_stop_observed: true,
+    distinct_pids: true,
     pids: [$run_1_pid, $run_2_pid],
     runs: [
       {

@@ -467,7 +467,10 @@ class RepositoryContractTest {
             assertTrue(script.contains(event), event);
         }
         assertTrue(script.contains("summary.json"));
-        assertTrue(script.contains("distinct_pids"));
+        assertTrue(script.contains("api_level: 36"));
+        assertTrue(script.contains("serial: $serial"));
+        assertTrue(script.contains("force_stop_observed: true"));
+        assertTrue(script.contains("distinct_pids: true"));
         assertTrue(script.contains("jq"));
     }
 
@@ -481,12 +484,41 @@ class RepositoryContractTest {
         assertTrue(workflow.contains("name: foundry-java-check-evidence"));
         assertTrue(workflow.contains("name: foundry-java-api36-production-startup-evidence"));
         assertEquals(2, occurrences(workflow, "if: always()"));
+        int buildStepStart = workflow.indexOf("- name: Build, test, and inspect the native bridge");
+        assertTrue(buildStepStart >= 0);
+        int buildStepEnd = workflow.indexOf("\n      - ", buildStepStart + 1);
+        assertTrue(buildStepEnd > buildStepStart);
+        String buildStep = workflow.substring(buildStepStart, buildStepEnd);
+        assertTrue(buildStep.contains("shell: bash"));
+        assertTrue(buildStep.contains("run: |\n          set -euo pipefail"));
+        assertTrue(
+                buildStep.contains(
+                        ":foundry-java-android:nativeSanitizerTest 2>&1 |\n"
+                                + "            tee \"${RUNNER_TEMP}/foundry-java-check.log\""));
+        assertTrue(
+                buildStep.contains(
+                        "foundry-java-android-release.aar 2>&1 |\n"
+                                + "            tee \"${RUNNER_TEMP}/"
+                                + "foundry-java-native-verifier.log\""));
+        assertTrue(workflow.contains("${{ runner.temp }}/foundry-java-check.log"));
+        assertTrue(workflow.contains("${{ runner.temp }}/foundry-java-native-verifier.log"));
         assertTrue(workflow.contains("foundry-java-android/build/native-host"));
         assertTrue(workflow.contains("foundry-java-android/build/native-host-sanitized"));
         assertTrue(workflow.contains("foundry-java-android/build/outputs/aar"));
         assertTrue(workflow.contains("merged_manifest"));
         assertTrue(workflow.contains("foundry-java-production-startup"));
         assertTrue(workflow.contains("foundry-java-emulator.log"));
+        assertTrue(
+                workflow.contains("foundry-java-android/build/outputs/apk/androidTest/debug/**"));
+        assertTrue(
+                workflow.contains(
+                        "foundry-java-android/build/intermediates/merged_manifest/debug/**"));
+        assertTrue(
+                workflow.contains(
+                        "foundry-java-android/build/intermediates/packaged_manifests/"
+                                + "debugAndroidTest/**"));
+        assertTrue(workflow.contains("foundry-java-android/build/outputs/androidTest-results/**"));
+        assertTrue(workflow.contains("foundry-java-android/build/reports/androidTests/**"));
     }
 
     @Test

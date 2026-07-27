@@ -27,15 +27,19 @@ jobs:
         shell: bash
         run: bash gradle/verify-configuration-cache-reuse.sh
       - name: Build, test, and inspect the native bridge
+        shell: bash
         run: |
+          set -euo pipefail
           ./gradlew --no-daemon \
             :foundry-java-android:assembleDebug \
             :foundry-java-android:assembleDebugAndroidTest \
             :foundry-java-android:bundleReleaseAar \
             :foundry-java-android:nativeHostTest \
-            :foundry-java-android:nativeSanitizerTest
+            :foundry-java-android:nativeSanitizerTest 2>&1 |
+            tee "${RUNNER_TEMP}/foundry-java-check.log"
           bash gradle/verify-native-bridge.sh \
-            foundry-java-android/build/outputs/aar/foundry-java-android-release.aar
+            foundry-java-android/build/outputs/aar/foundry-java-android-release.aar 2>&1 |
+            tee "${RUNNER_TEMP}/foundry-java-native-verifier.log"
       - run: ./gradlew --write-locks resolveAndLockAll
       - name: Verify dependency locks are unchanged
         shell: bash
@@ -62,6 +66,8 @@ jobs:
             foundry-java-android/build/native-host-sanitized/**
             foundry-java-android/build/outputs/aar/**
             foundry-java-android/build/intermediates/merged_manifest/**
+            ${{ runner.temp }}/foundry-java-check.log
+            ${{ runner.temp }}/foundry-java-native-verifier.log
 
   device:
     name: JNI lifecycle on API 36
@@ -130,3 +136,8 @@ jobs:
           path: |
             ${{ runner.temp }}/foundry-java-production-startup/**
             ${{ runner.temp }}/foundry-java-emulator.log
+            foundry-java-android/build/outputs/apk/androidTest/debug/**
+            foundry-java-android/build/intermediates/merged_manifest/debug/**
+            foundry-java-android/build/intermediates/packaged_manifests/debugAndroidTest/**
+            foundry-java-android/build/outputs/androidTest-results/**
+            foundry-java-android/build/reports/androidTests/**
