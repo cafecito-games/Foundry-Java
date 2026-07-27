@@ -15,6 +15,7 @@ generate() {
   local input_provenance="$2"
   local output="$3"
   cmake \
+    -Werror=dev \
     -DFOUNDRY_JAVA_API_JSON="$input_api" \
     -DFOUNDRY_JAVA_PROVENANCE="$input_provenance" \
     -DFOUNDRY_JAVA_ABI_TEMPLATE="$template" \
@@ -88,6 +89,7 @@ for mode in sha missing_configuration duplicate order invalid_size nil_nonzero n
 done
 
 if cmake \
+    -Werror=dev \
     -DFOUNDRY_JAVA_API_JSON="$api" \
     -DFOUNDRY_JAVA_PROVENANCE="$provenance" \
     -DFOUNDRY_JAVA_ABI_TEMPLATE="$template" \

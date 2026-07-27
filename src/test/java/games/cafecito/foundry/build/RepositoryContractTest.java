@@ -81,6 +81,10 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("isReproducibleFileOrder = true"));
         assertTrue(properties.contains("org.gradle.caching=true"));
         assertTrue(
+                properties.contains(
+                        "org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=1g"
+                                + " -Dfile.encoding=UTF-8"));
+        assertTrue(
                 read("foundry-java-gradle-plugin/build.gradle.kts")
                         .contains("games.cafecito.foundry.java"));
         assertTrue(read("gradle/libs.versions.toml").contains("com.android.library"));
