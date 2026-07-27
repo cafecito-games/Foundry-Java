@@ -349,7 +349,6 @@ struct ClassRecord {
 	std::string base_name;
 	RegistrationAccessToken access = 0;
 	RecordState state = RecordState::REGISTERING;
-	RecordState state_before_retiring = RecordState::ACTIVE;
 	bool native_registered = false;
 	std::mutex mutex;
 	std::condition_variable callbacks_drained;
@@ -1301,16 +1300,14 @@ RegistrationRegistry::unregister_class(std::uint64_t context,
 				found->second->state != RecordState::QUARANTINED) {
 			return { RegistrationStatus::STALE, "registration_stale" };
 		}
-		const RecordState previous_state = found->second->state;
 		found->second->state = RecordState::RETIRING;
-		found->second->state_before_retiring = previous_state;
 		record = found->second.get();
 	}
 	if (!impl->services->unregister_class(record->library,
 				record->foundry_name)) {
 		std::lock_guard<std::mutex> lock(record->mutex);
 		if (record->state == RecordState::RETIRING) {
-			record->state = record->state_before_retiring;
+			record->state = RecordState::QUARANTINED;
 		}
 		return { RegistrationStatus::NATIVE_FAILURE, "registration_unregister" };
 	}

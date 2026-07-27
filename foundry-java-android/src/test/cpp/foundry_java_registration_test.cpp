@@ -473,6 +473,7 @@ public:
 		released_accesses.push_back(access);
 		callback_events.emplace_back("release_access");
 		release_count.fetch_add(1);
+		retained_access_owner.reset();
 	}
 
 	foundry_java::NativeInstance create_instance(
@@ -563,6 +564,7 @@ public:
 	std::vector<foundry_java::RegistrationAccessToken> released_accesses;
 	std::vector<std::string> callback_events;
 	std::atomic<int> release_count{ 0 };
+	std::shared_ptr<void> retained_access_owner;
 	foundry_java::NativeInstance created_instance{
 		reinterpret_cast<FoundryExtensionObjectPtr>(0x100),
 		900,
@@ -1997,6 +1999,130 @@ void test_registry_destructor_drains_owned_classes() {
 			"registry destructor must drain instances before access globals");
 }
 
+void test_failed_active_unregister_quarantines_callbacks_until_retry() {
+	auto services = std::make_shared<RecordingServices>();
+	auto callbacks = std::make_shared<NoOpCallbacks>();
+	foundry_java::RegistrationRegistry registry(services, callbacks);
+	auto descriptor = valid_descriptor();
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::OVERRIDE,
+			"_process",
+			"process",
+			"void(double)",
+			{},
+			{},
+	});
+	descriptor.members.push_back({
+			foundry_java::RegistrationMemberKind::PROPERTY,
+			"speed",
+			"speed",
+			"double",
+			{},
+			foundry_java::RegistrationPropertyDetails{
+					"getSpeed", "setSpeed", -1, "", "", "", "" },
+	});
+	auto transport_owner = std::make_shared<int>(1);
+	std::weak_ptr<int> transport_lifetime = transport_owner;
+	callbacks->retained_access_owner = transport_owner;
+	transport_owner.reset();
+	expect(registry
+					.register_class(
+							24, 18,
+							reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x28),
+							std::move(descriptor))
+					.ok(),
+			"active unregister failure fixture must register");
+	const FoundryExtensionClassCreationInfo5 creation =
+			services->class_registration.creation_info;
+	const auto native_name = [](const char *name) {
+		return reinterpret_cast<FoundryExtensionConstStringNamePtr>(name);
+	};
+	expect(creation.create_instance_func(creation.class_userdata, 0) != nullptr,
+			"active unregister failure fixture must create an instance");
+	void *virtual_data = creation.get_virtual_call_data_func(
+			creation.class_userdata, native_name("_process"), 0);
+	expect(virtual_data != nullptr,
+			"active unregister failure fixture must resolve virtual call data");
+
+	services->fail_operation = "unregister:Player";
+	const auto failure = registry.shutdown(24, 18);
+	expect(!failure.ok() && failure.phase == "registration_unregister",
+			"failed active unregister must report native failure");
+	expect(callbacks->release_count.load() == 0 &&
+					callbacks->freed_instances.empty() &&
+					!transport_lifetime.expired(),
+			"failed unregister must retain instance, access, and transport ownership");
+
+	callbacks->invoked_names.clear();
+	callbacks->get_names.clear();
+	callbacks->set_names.clear();
+	callbacks->virtual_names.clear();
+	const int create_count = callbacks->create_count;
+	std::uint64_t argument = 7;
+	std::uint64_t result = 99;
+	const FoundryExtensionConstVariantPtr arguments[]{ &argument };
+	FoundryExtensionCallError error{
+		FOUNDRY_EXTENSION_CALL_OK,
+		-1,
+		-1,
+	};
+	services->methods[0].call(services->methods[0].userdata,
+			callbacks->created_instance_userdata, arguments, 1, &result, &error);
+	expect(error.error == FOUNDRY_EXTENSION_CALL_ERROR_INVALID_METHOD &&
+					result == 0 && callbacks->invoked_names.empty(),
+			"quarantined method callback must return its deterministic default");
+	result = 99;
+	expect(creation.get_func(callbacks->created_instance_userdata,
+				   native_name("speed"), &result) == 0 &&
+					result == 0 && callbacks->get_names.empty(),
+			"quarantined property getter must return its deterministic default");
+	expect(creation.set_func(callbacks->created_instance_userdata,
+				   native_name("speed"), &argument) == 0 &&
+					callbacks->set_names.empty(),
+			"quarantined property setter must reject without dispatch");
+	expect(creation.get_virtual_call_data_func(
+				   creation.class_userdata, native_name("_process"), 0) == nullptr,
+			"quarantined class must not expose new virtual call data");
+	result = 99;
+	creation.call_virtual_with_data_func(callbacks->created_instance_userdata,
+			native_name("_process"), virtual_data, nullptr, &result);
+	expect(result == 0 && callbacks->virtual_names.empty(),
+			"quarantined virtual callback must initialize its deterministic default");
+	FoundryExtensionBool string_valid = 1;
+	creation.to_string_func(callbacks->created_instance_userdata, &string_valid,
+			&result);
+	expect(string_valid == 0 && callbacks->to_string_count == 0,
+			"quarantined to_string callback must report invalid without dispatch");
+	expect(creation.create_instance_func(creation.class_userdata, 0) == nullptr &&
+					callbacks->create_count == create_count,
+			"quarantined create callback must reject without dispatch");
+
+	expect(!registry.shutdown(24, 18).ok() &&
+					callbacks->release_count.load() == 0 &&
+					callbacks->freed_instances.empty() &&
+					!transport_lifetime.expired(),
+			"failed quarantine retry must preserve all retained ownership");
+	expect(creation.create_instance_func(creation.class_userdata, 0) == nullptr &&
+					callbacks->create_count == create_count,
+			"failed quarantine retry must preserve the callback gate");
+	services->fail_operation.clear();
+	services->operations.clear();
+	expect(registry.shutdown(24, 18).ok(),
+			"later shutdown retry must unregister the quarantined class");
+	expect(services->operations ==
+					std::vector<std::string>{ "unregister:Player" },
+			"successful retry must unregister the retained class exactly once");
+	expect(callbacks->callback_events ==
+					std::vector<std::string>{ "free_instance", "release_access" } &&
+					callbacks->freed_instances ==
+							std::vector<foundry_java::RegistrationInstanceToken>{ 900 } &&
+					callbacks->released_accesses ==
+							std::vector<foundry_java::RegistrationAccessToken>{ 41 } &&
+					callbacks->release_count.load() == 1 &&
+					transport_lifetime.expired(),
+			"retry must clean instances before access and release transport exactly once");
+}
+
 void test_failed_provisional_rollback_retains_ownership_for_shutdown_retry() {
 	auto services = std::make_shared<RecordingServices>();
 	auto callbacks = std::make_shared<NoOpCallbacks>();
@@ -2050,6 +2176,7 @@ int main() {
 	test_registration_uses_class5_and_exact_member_order();
 	test_property_details_emit_canonical_transitions_and_indexed_forms();
 	test_provisional_failure_self_rolls_back_and_completed_classes_reverse();
+	test_failed_active_unregister_quarantines_callbacks_until_retry();
 	test_failed_provisional_rollback_retains_ownership_for_shutdown_retry();
 	test_stable_callbacks_dispatch_instances_properties_and_virtuals();
 	test_callback_outputs_replace_initialized_defaults_exactly_once();
