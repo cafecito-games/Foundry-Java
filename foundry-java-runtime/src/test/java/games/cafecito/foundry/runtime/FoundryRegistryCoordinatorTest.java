@@ -19,9 +19,7 @@ class FoundryRegistryCoordinatorTest {
     void wholeBootstrapUsesQualifiedDependenciesAndStableCrossModuleOrder() {
         FoundryRegistryBootstrap bootstrap =
                 bootstrap(
-                        provider(
-                                "zeta",
-                                type("example.Leaf", "Leaf", "SCENE", "example.Base")),
+                        provider("zeta", type("example.Leaf", "Leaf", "SCENE", "example.Base")),
                         provider("alpha", type("example.Base", "Base", "CORE")),
                         provider("middle", type("example.Other", "Other", "CORE")));
 
@@ -69,7 +67,11 @@ class FoundryRegistryCoordinatorTest {
                                 bootstrap(
                                         provider(
                                                 "levels",
-                                                type("example.Core", "Core", "CORE", "example.Scene"),
+                                                type(
+                                                        "example.Core",
+                                                        "Core",
+                                                        "CORE",
+                                                        "example.Scene"),
                                                 type("example.Scene", "Scene", "SCENE")))));
     }
 
@@ -94,8 +96,7 @@ class FoundryRegistryCoordinatorTest {
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SERVERS.code()));
         assertTrue(coordinator.initialize(41, FoundryInitializationLevel.SCENE.code()));
 
-        assertEquals(
-                List.of("context:41", "register:Core", "register:Scene"), engine.events);
+        assertEquals(List.of("context:41", "register:Core", "register:Scene"), engine.events);
     }
 
     @Test
@@ -241,8 +242,7 @@ class FoundryRegistryCoordinatorTest {
                             reference.get().invalidate(context);
                             reference
                                     .get()
-                                    .deinitialize(
-                                            context, FoundryInitializationLevel.CORE.code());
+                                    .deinitialize(context, FoundryInitializationLevel.CORE.code());
                             engine.contextHandle = context;
                             return engine;
                         },
@@ -281,23 +281,14 @@ class FoundryRegistryCoordinatorTest {
                         unregisterEngine,
                         type("example.A", "A", "CORE"),
                         type("example.B", "B", "SERVERS"));
-        assertTrue(
-                unregisterCoordinator.initialize(
-                        42, FoundryInitializationLevel.CORE.code()));
-        assertTrue(
-                unregisterCoordinator.initialize(
-                        42, FoundryInitializationLevel.SERVERS.code()));
+        assertTrue(unregisterCoordinator.initialize(42, FoundryInitializationLevel.CORE.code()));
+        assertTrue(unregisterCoordinator.initialize(42, FoundryInitializationLevel.SERVERS.code()));
         unregisterEngine.unregisterReentry = () -> unregisterCoordinator.invalidate(42);
 
-        unregisterCoordinator.deinitialize(
-                42, FoundryInitializationLevel.SERVERS.code());
+        unregisterCoordinator.deinitialize(42, FoundryInitializationLevel.SERVERS.code());
 
         assertEquals(
-                List.of(
-                        "register:A",
-                        "register:B",
-                        "unregister:B",
-                        "unregister:A"),
+                List.of("register:A", "register:B", "unregister:B", "unregister:A"),
                 unregisterEngine.events);
         assertEquals(1, unregisterEngine.contextCloses.get());
     }
@@ -331,8 +322,7 @@ class FoundryRegistryCoordinatorTest {
                             contenderInitialization.set(
                                     coordinator.initialize(
                                             41, FoundryInitializationLevel.CORE.code()));
-                            coordinator.deinitialize(
-                                    41, FoundryInitializationLevel.CORE.code());
+                            coordinator.deinitialize(41, FoundryInitializationLevel.CORE.code());
                             coordinator.invalidate(41);
                         });
         contender.setDaemon(true);
@@ -389,8 +379,7 @@ class FoundryRegistryCoordinatorTest {
         Thread invoke = new Thread(() -> coordinator.invoke(41, callback, new long[0]));
         invoke.start();
         assertTrue(callbackStarted.await(2, TimeUnit.SECONDS));
-        boolean staleAdmissionObservation =
-                contextReference.get().callbackRegistry().isEnabled();
+        boolean staleAdmissionObservation = contextReference.get().callbackRegistry().isEnabled();
         Thread invalidate = new Thread(() -> coordinator.invalidate(41));
         invalidate.start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -403,11 +392,7 @@ class FoundryRegistryCoordinatorTest {
         assertTrue(staleAdmissionObservation);
         assertThrows(
                 CallbackRegistry.CallbackUnavailableException.class,
-                () ->
-                        contextReference
-                                .get()
-                                .callbackRegistry()
-                                .invoke(callback, List.of()));
+                () -> contextReference.get().callbackRegistry().invoke(callback, List.of()));
         assertFalse(engine.events.contains("unregister:A"));
         assertEquals(0, coordinator.invoke(41, callback, new long[0]));
         assertEquals(1, userCalls.get());
@@ -544,12 +529,7 @@ class FoundryRegistryCoordinatorTest {
         coordinator.invalidate(41);
 
         assertEquals(
-                List.of(
-                        "register:A",
-                        "register:B",
-                        "unregister:B",
-                        "unregister:A"),
-                engine.events);
+                List.of("register:A", "register:B", "unregister:B", "unregister:A"), engine.events);
         assertEquals(0, engine.contextCloses.get());
         assertEquals(1, engine.reportedFailures.size());
 
@@ -727,8 +707,7 @@ class FoundryRegistryCoordinatorTest {
         private Runnable unregisterReentry = () -> {};
 
         @Override
-        public void registerExtensionClass(
-                long contextHandle, FoundryClassDescriptor descriptor) {
+        public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {
             assertEquals(this.contextHandle, contextHandle);
             events.add("register:" + descriptor.foundryName());
             registerReentry.run();

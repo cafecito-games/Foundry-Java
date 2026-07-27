@@ -5,8 +5,7 @@ import java.util.List;
 
 class NoOpEngine implements FoundryEngine {
     @Override
-    public void registerExtensionClass(
-            long contextHandle, FoundryClassDescriptor descriptor) {}
+    public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {}
 
     @Override
     public void unregisterExtensionClass(long contextHandle, String foundryName) {}

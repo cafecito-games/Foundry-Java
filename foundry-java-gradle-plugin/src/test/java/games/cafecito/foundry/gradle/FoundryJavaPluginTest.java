@@ -717,8 +717,7 @@ class FoundryJavaPluginTest {
 
         assertTrue(second.getOutput().contains("Reusing configuration cache."));
         Path apk = releaseApk(project);
-        Path apkAnalyzer =
-                requireApkAnalyzer(System.getenv(), project.resolve("local.properties"));
+        Path apkAnalyzer = requireApkAnalyzer(System.getenv(), project.resolve("local.properties"));
         String definedPackages =
                 runProcess(apkAnalyzer, "dex", "packages", "--defined-only", apk.toString());
         assertTrue(definedPackages.contains("j$.util"));
@@ -820,8 +819,7 @@ class FoundryJavaPluginTest {
                         temporaryDirectory.resolve("zero-module-placeholder-binding.aar"),
                         List.of("x86_64"));
         Path project =
-                androidProject(
-                        "zero-module-reserved-placeholders", binding, List.of("x86_64"));
+                androidProject("zero-module-reserved-placeholders", binding, List.of("x86_64"));
         Files.writeString(
                 project.resolve("build.gradle"),
                 Files.readString(project.resolve("build.gradle"))
@@ -840,8 +838,7 @@ class FoundryJavaPluginTest {
         assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug").getOutcome());
         assertFalse(mergedManifest(project, "debug").contains("FoundryGeneratedStartupProvider"));
         assertFalse(
-                Files.exists(
-                        project.resolve("build/generated/foundryJava/verification/debug")));
+                Files.exists(project.resolve("build/generated/foundryJava/verification/debug")));
     }
 
     @Test
@@ -857,9 +854,7 @@ class FoundryJavaPluginTest {
         Files.writeString(
                 project.resolve("build.gradle"),
                 Files.readString(project.resolve("build.gradle"))
-                        .replace(
-                                "    id 'games.cafecito.foundry.java'\n",
-                                "")
+                        .replace("    id 'games.cafecito.foundry.java'\n", "")
                         .replace(
                                 "android {\n",
                                 """
@@ -897,8 +892,7 @@ class FoundryJavaPluginTest {
     }
 
     @Test
-    void mergedManifestAuthorityCollisionFailsWithVariantProviderAndAuthority()
-            throws IOException {
+    void mergedManifestAuthorityCollisionFailsWithVariantProviderAndAuthority() throws IOException {
         Path binding =
                 bindingAar(
                         temporaryDirectory.resolve("authority-collision-binding.aar"),
@@ -923,9 +917,7 @@ class FoundryJavaPluginTest {
 
         assertTrue(failure.getOutput().contains("Foundry-Java variant debug"));
         assertTrue(failure.getOutput().contains("example.ConflictingProvider"));
-        assertTrue(
-                failure.getOutput()
-                        .contains("games.cafecito.test.custom.foundry-java-startup"));
+        assertTrue(failure.getOutput().contains("games.cafecito.test.custom.foundry-java-startup"));
     }
 
     @Test
@@ -1692,8 +1684,7 @@ class FoundryJavaPluginTest {
         if (sdkRoot == null || sdkRoot.isBlank()) {
             sdkRoot = environment.get("ANDROID_HOME");
         }
-        if ((sdkRoot == null || sdkRoot.isBlank())
-                && Files.isRegularFile(localPropertiesPath)) {
+        if ((sdkRoot == null || sdkRoot.isBlank()) && Files.isRegularFile(localPropertiesPath)) {
             Properties localProperties = new Properties();
             try (var input = Files.newInputStream(localPropertiesPath)) {
                 localProperties.load(input);
@@ -1706,8 +1697,7 @@ class FoundryJavaPluginTest {
                             + "or provide sdk.dir in "
                             + localPropertiesPath);
         }
-        Path apkAnalyzer =
-                Path.of(sdkRoot.strip()).resolve("cmdline-tools/latest/bin/apkanalyzer");
+        Path apkAnalyzer = Path.of(sdkRoot.strip()).resolve("cmdline-tools/latest/bin/apkanalyzer");
         if (!Files.isRegularFile(apkAnalyzer)) {
             throw new IllegalStateException(
                     "Required apkanalyzer not found at "
@@ -1770,7 +1760,11 @@ class FoundryJavaPluginTest {
         Path root = project.resolve("build/intermediates/merged_manifest").resolve(variant);
         try (var paths = Files.walk(root)) {
             Path manifest =
-                    paths.filter(path -> path.getFileName().toString().equals("AndroidManifest.xml"))
+                    paths.filter(
+                                    path ->
+                                            path.getFileName()
+                                                    .toString()
+                                                    .equals("AndroidManifest.xml"))
                             .findFirst()
                             .orElseThrow();
             return Files.readString(manifest);

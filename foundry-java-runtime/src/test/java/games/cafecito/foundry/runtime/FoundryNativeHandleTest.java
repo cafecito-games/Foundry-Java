@@ -37,9 +37,7 @@ class FoundryNativeHandleTest {
         assertThrows(
                 IllegalArgumentException.class,
                 () -> FoundryNativeHandle.of(0, TestStructure.class, 41));
-        assertThrows(
-                NullPointerException.class,
-                () -> FoundryNativeHandle.of(7, null, 41));
+        assertThrows(NullPointerException.class, () -> FoundryNativeHandle.of(7, null, 41));
     }
 
     @Test

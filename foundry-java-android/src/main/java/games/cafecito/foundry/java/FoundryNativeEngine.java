@@ -32,8 +32,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
             "builtin_classes/Signal/methods/disconnect#3470848906";
     private static final String SIGNAL_EMIT_IDENTITY =
             "builtin_classes/Signal/methods/emit#3286317445";
-    private static final String REGISTRATION_UNAVAILABLE =
-            "registration_unavailable_before_task5";
+    private static final String REGISTRATION_UNAVAILABLE = "registration_unavailable_before_task5";
     private static final ConcurrentHashMap<Long, WeakReference<FoundryNativeEngine>> ENGINES =
             new ConcurrentHashMap<>();
 
@@ -216,10 +215,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
     }
 
     private Variant callValue(
-            long requestedContext,
-            String identity,
-            List<Variant> arguments,
-            String phase) {
+            long requestedContext, String identity, List<Variant> arguments, String phase) {
         CallResult result = call(requestedContext, 0, identity, arguments);
         if (result.error() != FoundryCallError.OK) {
             throw new IllegalStateException(
@@ -263,8 +259,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
             }
         }
 
-        int checkedFormalCount =
-                Math.min(formalCount, dispatch.argumentNativeTypes().size());
+        int checkedFormalCount = Math.min(formalCount, dispatch.argumentNativeTypes().size());
         for (int index = 0; index < checkedFormalCount; index++) {
             validateType(
                     dispatch,
@@ -277,8 +272,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
         }
     }
 
-    private static void validateObjectHandle(
-            FoundryNativeDispatch dispatch, long objectHandle) {
+    private static void validateObjectHandle(FoundryNativeDispatch dispatch, long objectHandle) {
         boolean instanceObject =
                 (dispatch.kind() == FoundryNativeDispatch.Kind.CLASS_METHOD
                                 && !dispatch.staticCall())
@@ -295,10 +289,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
     }
 
     private void validateType(
-            FoundryNativeDispatch dispatch,
-            Variant value,
-            String nativeType,
-            String position) {
+            FoundryNativeDispatch dispatch, Variant value, String nativeType, String position) {
         if (!matchesNativeType(value.type(), nativeType)) {
             throw new IllegalArgumentException(
                     "Native dispatch "
@@ -320,8 +311,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
                 throw new IllegalArgumentException(
                         "closed CALLABLE values are unsupported during " + phase + ".");
             }
-            if (callable.isNativeBacked()
-                    && callable.nativeContextHandle() != contextHandle) {
+            if (callable.isNativeBacked() && callable.nativeContextHandle() != contextHandle) {
                 throw new IllegalArgumentException(
                         "CALLABLE context mismatch during " + phase + ".");
             }
@@ -332,8 +322,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
                         "Local SIGNAL values are unsupported during " + phase + ".");
             }
             if (signal.nativeContextHandle() != contextHandle) {
-                throw new IllegalArgumentException(
-                        "SIGNAL context mismatch during " + phase + ".");
+                throw new IllegalArgumentException("SIGNAL context mismatch during " + phase + ".");
             }
         }
     }
@@ -475,9 +464,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
 
         @Override
         public long connect(
-                long requestedContext,
-                long requestedSignalHandle,
-                FoundryCallable callable) {
+                long requestedContext, long requestedSignalHandle, FoundryCallable callable) {
             requireSignal(requestedSignalHandle);
             synchronized (connectionLock) {
                 if (signalReleased) {
@@ -523,9 +510,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
 
         @Override
         public void disconnect(
-                long requestedContext,
-                long requestedSignalHandle,
-                long connectionHandle) {
+                long requestedContext, long requestedSignalHandle, long connectionHandle) {
             requireSignal(requestedSignalHandle);
             FoundryCallable callable;
             synchronized (connectionLock) {
@@ -549,18 +534,13 @@ public final class FoundryNativeEngine implements FoundryEngine {
 
         @Override
         public void emit(
-                long requestedContext,
-                long requestedSignalHandle,
-                List<Variant> arguments) {
+                long requestedContext, long requestedSignalHandle, List<Variant> arguments) {
             requireSignal(requestedSignalHandle);
             ArrayList<Variant> signalArguments = new ArrayList<>(arguments.size() + 1);
             signalArguments.add(Variant.ofSignal(signal[0]));
             signalArguments.addAll(arguments);
             callValue(
-                    requestedContext,
-                    SIGNAL_EMIT_IDENTITY,
-                    signalArguments,
-                    "native_signal_emit");
+                    requestedContext, SIGNAL_EMIT_IDENTITY, signalArguments, "native_signal_emit");
         }
 
         @Override
@@ -645,11 +625,9 @@ public final class FoundryNativeEngine implements FoundryEngine {
 
         long singleton(long contextHandle, String name);
 
-        void reportCallbackException(
-                long contextHandle, long callbackHandle, Throwable failure);
+        void reportCallbackException(long contextHandle, long callbackHandle, Throwable failure);
 
-        void registerExtensionClass(
-                long contextHandle, FoundryClassDescriptor descriptor);
+        void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor);
 
         void unregisterExtensionClass(long contextHandle, String foundryName);
     }
@@ -711,8 +689,7 @@ public final class FoundryNativeEngine implements FoundryEngine {
         }
 
         @Override
-        public void registerExtensionClass(
-                long contextHandle, FoundryClassDescriptor descriptor) {
+        public void registerExtensionClass(long contextHandle, FoundryClassDescriptor descriptor) {
             nativeRegisterExtensionClassV1(contextHandle, descriptor);
         }
 

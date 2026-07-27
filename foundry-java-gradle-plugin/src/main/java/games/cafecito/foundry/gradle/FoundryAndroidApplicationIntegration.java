@@ -118,9 +118,15 @@ final class FoundryAndroidApplicationIntegration {
                                 task -> {
                                     task.getVariantName().set(variant.getName());
                                     task.getExpectedProviderClass()
-                                            .set(registry.flatMap(RegistryIndexTask::getStartupProviderClass));
+                                            .set(
+                                                    registry.flatMap(
+                                                            RegistryIndexTask
+                                                                    ::getStartupProviderClass));
                                     task.getExpectedAuthority()
-                                            .set(registry.flatMap(RegistryIndexTask::getStartupAuthority));
+                                            .set(
+                                                    registry.flatMap(
+                                                            RegistryIndexTask
+                                                                    ::getStartupAuthority));
                                     task.getRegistryAssetsDirectory()
                                             .set(
                                                     registry.flatMap(

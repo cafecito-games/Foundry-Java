@@ -122,8 +122,7 @@ public abstract class RegistryIndexTask extends DefaultTask {
         Files.createDirectories(manifest.getParent());
         Files.writeString(
                 manifest,
-                startupManifest(
-                        getStartupProviderClass().get(), getStartupAuthority().get()),
+                startupManifest(getStartupProviderClass().get(), getStartupAuthority().get()),
                 StandardCharsets.UTF_8);
     }
 

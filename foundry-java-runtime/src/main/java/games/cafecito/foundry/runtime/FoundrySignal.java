@@ -31,9 +31,7 @@ public final class FoundrySignal implements AutoCloseable {
             long contextHandle, long bridgeHandle, NativeBackend backend) {
         return new FoundrySignal(
                 new NativeIdentity(
-                        contextHandle,
-                        bridgeHandle,
-                        Objects.requireNonNull(backend, "backend")));
+                        contextHandle, bridgeHandle, Objects.requireNonNull(backend, "backend")));
     }
 
     public boolean isLocal() {
@@ -67,8 +65,7 @@ public final class FoundrySignal implements AutoCloseable {
         long connectionHandle;
         try {
             connectionHandle =
-                    identity
-                            .backend()
+                    identity.backend()
                             .connect(identity.contextHandle(), identity.bridgeHandle(), checked);
         } finally {
             NativeOperationCompletion completion = finishNativeOperation();
@@ -101,9 +98,7 @@ public final class FoundrySignal implements AutoCloseable {
         }
         if (identity != null) {
             try {
-                identity
-                        .backend()
-                        .emit(identity.contextHandle(), identity.bridgeHandle(), values);
+                identity.backend().emit(identity.contextHandle(), identity.bridgeHandle(), values);
             } finally {
                 NativeOperationCompletion completion = finishNativeOperation();
                 releaseNative(completion.release());
@@ -223,8 +218,7 @@ public final class FoundrySignal implements AutoCloseable {
                 }
             }
             try {
-                identity
-                        .backend()
+                identity.backend()
                         .disconnect(identity.contextHandle(), identity.bridgeHandle(), id);
                 synchronized (lock) {
                     disconnected = true;
@@ -258,8 +252,7 @@ public final class FoundrySignal implements AutoCloseable {
         void release(long contextHandle, long signalHandle);
     }
 
-    private record NativeIdentity(
-            long contextHandle, long bridgeHandle, NativeBackend backend) {
+    private record NativeIdentity(long contextHandle, long bridgeHandle, NativeBackend backend) {
         private NativeIdentity {
             if (contextHandle == 0) {
                 throw new IllegalArgumentException("Foundry context handle must be nonzero.");

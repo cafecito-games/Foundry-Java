@@ -24,8 +24,7 @@ import org.w3c.dom.NodeList;
 
 /** Observes and verifies the final merged startup provider before packaging. */
 public abstract class VerifyStartupManifestTask extends DefaultTask {
-    private static final String ANDROID_NAMESPACE =
-            "http://schemas.android.com/apk/res/android";
+    private static final String ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/android";
     private static final String REGISTRY_INDEX = "foundry_java/registry-index-v2.txt";
 
     @InputFile
@@ -55,8 +54,7 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
                 getRegistryAssetsDirectory().get().getAsFile().toPath().resolve(REGISTRY_INDEX);
         if (Files.isRegularFile(registryIndex)) {
             verifyModuleBearingManifest(input);
-            Files.createDirectories(
-                    getVerificationOutputDirectory().get().getAsFile().toPath());
+            Files.createDirectories(getVerificationOutputDirectory().get().getAsFile().toPath());
         }
     }
 
@@ -72,7 +70,9 @@ public abstract class VerifyStartupManifestTask extends DefaultTask {
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
 
         NodeList providers =
-                factory.newDocumentBuilder().parse(manifest.toFile()).getElementsByTagName("provider");
+                factory.newDocumentBuilder()
+                        .parse(manifest.toFile())
+                        .getElementsByTagName("provider");
         String expectedProvider = getExpectedProviderClass().get();
         String expectedAuthority = getExpectedAuthority().get();
         List<Element> expectedProviders = new ArrayList<>();

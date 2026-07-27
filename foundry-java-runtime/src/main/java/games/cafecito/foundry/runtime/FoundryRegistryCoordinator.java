@@ -96,7 +96,8 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             if (activeEngine == null) {
                 activeEngine =
                         Objects.requireNonNull(
-                                engineFactory.apply(requestedContextHandle), "engineFactory result");
+                                engineFactory.apply(requestedContextHandle),
+                                "engineFactory result");
                 activeContext =
                         Objects.requireNonNull(
                                 contextFactory.apply(requestedContextHandle, activeEngine),
@@ -160,8 +161,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         try {
             callbacks.deinitialize(requestedContextHandle, levelCode);
         } catch (Throwable failure) {
-            TerminalCleanup cleanup =
-                    promoteDeinitializeFailure(transition, List.of(), failure);
+            TerminalCleanup cleanup = promoteDeinitializeFailure(transition, List.of(), failure);
             performTerminalCleanup(requestedContextHandle, cleanup);
             return;
         }
@@ -241,8 +241,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         }
     }
 
-    private TerminalCleanup reserveTerminal(
-            long requestedContextHandle, Completion completion) {
+    private TerminalCleanup reserveTerminal(long requestedContextHandle, Completion completion) {
         synchronized (lifecycleLock) {
             if (contextHandle != requestedContextHandle) {
                 return null;
@@ -352,8 +351,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
                 false);
     }
 
-    private void performTerminalCleanup(
-            long requestedContextHandle, TerminalCleanup cleanup) {
+    private void performTerminalCleanup(long requestedContextHandle, TerminalCleanup cleanup) {
         if (cleanup.context() != null && !cleanup.context().drainCallbacks()) {
             retainPendingCleanup(cleanup);
             return;
@@ -374,8 +372,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
             FoundryClassDescriptor descriptor = cleanup.cleanupOrder().get(index);
             try {
                 cleanup.engine()
-                        .unregisterExtensionClass(
-                                requestedContextHandle, descriptor.foundryName());
+                        .unregisterExtensionClass(requestedContextHandle, descriptor.foundryName());
             } catch (Throwable failure) {
                 Throwable evidence = combineEvidence(cleanup.failureEvidence(), failure);
                 reportCleanupFailure(requestedContextHandle, cleanup.engine(), failure);
@@ -525,8 +522,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
 
     private record ActiveTransition(FoundryEngine engine, FoundryBindingContext context) {}
 
-    private record InitializeReservation(
-            ActiveTransition transition, boolean alreadyInitialized) {
+    private record InitializeReservation(ActiveTransition transition, boolean alreadyInitialized) {
         static InitializeReservation rejected() {
             return new InitializeReservation(null, false);
         }
@@ -559,8 +555,7 @@ public final class FoundryRegistryCoordinator implements FoundryBridgeCallbacks 
         List<FoundryClassDescriptor> reverseOrder() {
             List<FoundryClassDescriptor> result = new ArrayList<>();
             for (FoundryInitializationLevel level : reverseLevels()) {
-                List<FoundryClassDescriptor> descriptors =
-                        values.getOrDefault(level, List.of());
+                List<FoundryClassDescriptor> descriptors = values.getOrDefault(level, List.of());
                 for (int index = descriptors.size() - 1; index >= 0; index--) {
                     result.add(descriptors.get(index));
                 }

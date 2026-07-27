@@ -205,9 +205,7 @@ class VariantTest {
 
                             @Override
                             public void disconnect(
-                                    long contextHandle,
-                                    long signalHandle,
-                                    long connectionHandle) {}
+                                    long contextHandle, long signalHandle, long connectionHandle) {}
 
                             @Override
                             public void emit(

@@ -44,11 +44,9 @@ public final class FoundryRegistrationPlan {
         Set<String> foundryNames = new HashSet<>();
         for (FoundryModuleDescriptor module : bootstrap.descriptors()) {
             for (FoundryClassDescriptor descriptor : module.classes()) {
-                FoundryInitializationLevel level =
-                        parseLevel(module.module(), descriptor);
+                FoundryInitializationLevel level = parseLevel(module.module(), descriptor);
                 ClassEntry entry =
-                        new ClassEntry(
-                                module.module(), module.registry(), descriptor, level);
+                        new ClassEntry(module.module(), module.registry(), descriptor, level);
                 ClassEntry previous = byJavaName.putIfAbsent(descriptor.javaName(), entry);
                 if (previous != null) {
                     throw new IllegalArgumentException(
@@ -62,9 +60,7 @@ public final class FoundryRegistrationPlan {
                 }
                 if (!foundryNames.add(descriptor.foundryName())) {
                     throw new IllegalArgumentException(
-                            "Duplicate Foundry class identity "
-                                    + descriptor.foundryName()
-                                    + ".");
+                            "Duplicate Foundry class identity " + descriptor.foundryName() + ".");
                 }
             }
         }
@@ -123,8 +119,7 @@ public final class FoundryRegistrationPlan {
             for (ClassEntry dependent : dependents.getOrDefault(entry, List.of())) {
                 int remaining =
                         indegrees.compute(
-                                dependent,
-                                (ignored, degree) -> Objects.requireNonNull(degree) - 1);
+                                dependent, (ignored, degree) -> Objects.requireNonNull(degree) - 1);
                 if (remaining == 0) {
                     ready.add(dependent);
                 }
