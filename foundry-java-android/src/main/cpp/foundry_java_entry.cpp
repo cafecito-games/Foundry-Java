@@ -61,15 +61,27 @@ void initialize_level(void *userdata, FoundryExtensionInitializationLevel level)
 					created, static_cast<std::int32_t>(FOUNDRY_EXTENSION_INITIALIZATION_CORE));
 		}
 	}
-	if (context == 0 || !jni_bridge_initialize(context, static_cast<std::int32_t>(level))) {
-		FoundryExtensionInterfacePrintError print_error = nullptr;
-		{
-			std::lock_guard lock(state->mutex);
-			if (state->services != nullptr) {
-				print_error = state->services->print_error;
-			}
+	if (context != 0 && jni_bridge_initialize(context, static_cast<std::int32_t>(level))) {
+		return;
+	}
+	FoundryExtensionInterfacePrintError print_error = nullptr;
+	{
+		std::lock_guard lock(state->mutex);
+		if (state->entry_active && state->context == context) {
+			state->shutting_down = true;
 		}
-		report_entry_error(print_error, "Foundry Java initialization callback failed.");
+		if (state->services != nullptr) {
+			print_error = state->services->print_error;
+		}
+	}
+	report_entry_error(print_error, "Foundry Java initialization callback failed.");
+	if (context != 0 &&
+			jni_bridge_shutdown_context(
+					context, static_cast<std::int32_t>(FOUNDRY_EXTENSION_INITIALIZATION_CORE))) {
+		std::lock_guard lock(state->mutex);
+		if (state->context == context) {
+			state->context = 0;
+		}
 	}
 }
 

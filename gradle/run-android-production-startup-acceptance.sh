@@ -57,6 +57,16 @@ if [[ ! -f "$test_apk" ]]; then
   exit 1
 fi
 
+test_apk_entries="${artifact_root}/instrumentation-apk-entries.txt"
+unzip -Z1 "$test_apk" >"$test_apk_entries"
+if awk -F/ \
+  '$1 == "lib" && NF == 3 && $3 == "libfoundry_android.so" { found = 1 }
+   END { exit !found }' \
+  "$test_apk_entries"; then
+  printf 'Instrumentation APK must not package libfoundry_android.so.\n' >&2
+  exit 1
+fi
+
 native_check_root="${artifact_root}/native-check"
 mkdir -p "$native_check_root"
 for abi in arm64-v8a armeabi-v7a x86 x86_64; do
@@ -105,24 +115,28 @@ validate_evidence() {
     --argjson expected_run "$run_index" \
     --argjson observed_pid "$observed_pid" \
     '
-      . as $evidence
-      | (.events | type == "array" and length > 0)
-      and (
-        [
-          "provider_on_create",
-          "application_on_create",
-          "activity_on_create",
-          "foundry_extension_entry",
-          "core_initialize",
-          "scene_initialize",
-          "callback_dispatch",
-          "scene_deinitialize",
-          "core_deinitialize",
-          "context_invalidate"
-        ]
-        | map(. as $event | $evidence.events | index($event))
-        | all(.[]; . != null) and (. == sort)
-      )
+      [
+        "provider_on_create",
+        "application_on_create",
+        "activity_on_create",
+        "foundry_extension_entry",
+        "core_initialize",
+        "scene_initialize",
+        "callback_dispatch",
+        "scene_deinitialize",
+        "core_deinitialize",
+        "context_invalidate"
+      ] as $required_events
+      | [
+        "foundry_extension_entry",
+        "core_initialize",
+        "scene_initialize",
+        "callback_dispatch",
+        "scene_deinitialize",
+        "core_deinitialize",
+        "context_invalidate"
+      ] as $native_events
+      | .events == $required_events
       and .schema_version == 1
       and .run_index == $expected_run
       and (.pid | type == "number" and . > 0)
@@ -135,20 +149,100 @@ validate_evidence() {
       and .provider_before_application == true
       and .provider_before_activity == true
       and .context_count_during_priming == 0
+      and .registered_class_count_during_priming == 0
       and .core_context_nonzero == true
       and .provider_registration_count == 1
       and .application_on_create_count == 1
       and .activity_on_create_count == 1
       and .callback_dispatch_count == 1
       and .callback_result == 42
+      and .callback_result_observed_in_java == 42
       and .callback_thread_attached == true
       and .exception_contained == true
+      and .exception_dispatch_count == 1
+      and .exception_default_is_nil == true
       and .stale_instance_callback_rejected == true
       and .invalidation_count == 1
+      and .descriptor_evaluation_count == 1
+      and .initialize_attempts == [
+        "CORE",
+        "CORE",
+        "SERVERS",
+        "SERVERS",
+        "SCENE",
+        "SCENE"
+      ]
       and .registration_order == ["FoundryJavaTestCore", "FoundryJavaTestScene"]
+      and .registration_counts == {
+        "FoundryJavaTestCore": 1,
+        "FoundryJavaTestScene": 1
+      }
+      and .deinitialize_attempts == [
+        "SCENE",
+        "SCENE",
+        "SERVERS",
+        "SERVERS",
+        "CORE",
+        "CORE"
+      ]
       and .teardown_order == ["FoundryJavaTestScene", "FoundryJavaTestCore"]
+      and .unregistration_counts == {
+        "FoundryJavaTestCore": 1,
+        "FoundryJavaTestScene": 1
+      }
+      and .live_instances_after_teardown == 0
+      and .live_handles_after_teardown == 0
+      and .entry_active_after_teardown == false
       and .result == "pass"
       and .failure == null
+      and (
+        .native_lifecycle as $lifecycle
+        | $lifecycle.schema_version == 1
+        and $lifecycle.run_index == $expected_run
+        and $lifecycle.entry_accepted == true
+        and $lifecycle.context_handle == 1
+        and $lifecycle.initialize_attempts == [
+          "CORE",
+          "CORE",
+          "SERVERS",
+          "SERVERS",
+          "SCENE",
+          "SCENE"
+        ]
+        and $lifecycle.registration_order == [
+          "FoundryJavaTestCore",
+          "FoundryJavaTestScene"
+        ]
+        and $lifecycle.registration_counts == {
+          "FoundryJavaTestCore": 1,
+          "FoundryJavaTestScene": 1
+        }
+        and $lifecycle.callback_result == 42
+        and $lifecycle.callback_thread_attached == true
+        and $lifecycle.exception_contained == true
+        and $lifecycle.exception_default_is_nil == true
+        and $lifecycle.stale_instance_callback_rejected == true
+        and $lifecycle.deinitialize_attempts == [
+          "SCENE",
+          "SCENE",
+          "SERVERS",
+          "SERVERS",
+          "CORE",
+          "CORE"
+        ]
+        and $lifecycle.unregistration_order == [
+          "FoundryJavaTestScene",
+          "FoundryJavaTestCore"
+        ]
+        and $lifecycle.unregistration_counts == {
+          "FoundryJavaTestCore": 1,
+          "FoundryJavaTestScene": 1
+        }
+        and $lifecycle.live_instances_after_teardown == 0
+        and $lifecycle.live_handles_after_teardown == 0
+        and $lifecycle.entry_active_after_teardown == false
+        and $lifecycle.events == $native_events
+      )
     ' "$evidence_file" > /dev/null
 }
 

@@ -481,6 +481,56 @@ class RepositoryContractTest {
     }
 
     @Test
+    void productionStartupAcceptanceRejectsForbiddenHostLibraryBeforeInstall() throws IOException {
+        String script = read("gradle/run-android-production-startup-acceptance.sh");
+
+        int archiveScan = script.indexOf("unzip -Z1 \"$test_apk\"");
+        int install = script.indexOf("ANDROID_SERIAL=\"$serial\" \"$adb\" install");
+        assertTrue(archiveScan >= 0, "missing instrumentation APK archive scan");
+        assertTrue(script.contains("awk -F/"));
+        assertTrue(script.contains("$1 == \"lib\" && NF == 3"));
+        assertTrue(script.contains("$3 == \"libfoundry_android.so\""));
+        assertTrue(script.contains("Instrumentation APK must not package libfoundry_android.so."));
+        assertTrue(install > archiveScan, "forbidden host library scan must precede install");
+    }
+
+    @Test
+    void productionStartupHostValidationMatchesDeviceEvidence() throws IOException {
+        String script = read("gradle/run-android-production-startup-acceptance.sh");
+        String normalized = script.replaceAll("\\s+", " ");
+
+        assertTrue(script.contains(".events == $required_events"));
+        assertTrue(script.contains(".registered_class_count_during_priming == 0"));
+        assertTrue(script.contains(".descriptor_evaluation_count == 1"));
+        assertTrue(script.contains(".callback_result_observed_in_java == 42"));
+        assertTrue(script.contains(".exception_dispatch_count == 1"));
+        assertTrue(script.contains(".exception_default_is_nil == true"));
+        assertTrue(script.contains(".native_lifecycle as $lifecycle"));
+        assertTrue(script.contains("$lifecycle.entry_accepted == true"));
+        assertTrue(script.contains("$lifecycle.context_handle == 1"));
+        assertTrue(
+                normalized.contains(
+                        "$lifecycle.initialize_attempts == [ \"CORE\", \"CORE\", \"SERVERS\","
+                                + " \"SERVERS\", \"SCENE\", \"SCENE\" ]"));
+        assertTrue(
+                normalized.contains(
+                        "$lifecycle.deinitialize_attempts == [ \"SCENE\", \"SCENE\", \"SERVERS\","
+                                + " \"SERVERS\", \"CORE\", \"CORE\" ]"));
+        assertTrue(
+                normalized.contains(
+                        "$lifecycle.registration_counts == { \"FoundryJavaTestCore\": 1,"
+                                + " \"FoundryJavaTestScene\": 1 }"));
+        assertTrue(
+                normalized.contains(
+                        "$lifecycle.unregistration_counts == { \"FoundryJavaTestCore\": 1,"
+                                + " \"FoundryJavaTestScene\": 1 }"));
+        assertTrue(script.contains("$lifecycle.live_instances_after_teardown == 0"));
+        assertTrue(script.contains("$lifecycle.live_handles_after_teardown == 0"));
+        assertTrue(script.contains("$lifecycle.entry_active_after_teardown == false"));
+        assertTrue(script.contains("$lifecycle.events == $native_events"));
+    }
+
+    @Test
     void ciPublishesImmutableCheckAndProductionStartupEvidence() throws IOException {
         String workflow = read(".github/workflows/ci.yml");
 
@@ -570,7 +620,7 @@ class RepositoryContractTest {
                 "be69b76a9fb1b5bd9968db1c5bbca8d64e0ef9bb5a881ac3cd37e4f0e1e9dd89",
                 sha256("foundry-java-android/src/main/consumer-rules.pro"));
         assertEquals(
-                "f13b6869087ce8ddd7d47a826e808375b0b92bff328301e15009cf34e9ab9826",
+                "d399fe6e08bf9dcb3ae689621b0d5ce4d657836eafa9da0a4f974fee9e0eedb2",
                 sha256("foundry-java-runtime/api/foundry-java-runtime.api"));
     }
 

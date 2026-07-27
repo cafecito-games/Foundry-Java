@@ -22,9 +22,11 @@
 namespace {
 
 bool jni_ready = false;
+bool jni_initialize_result = true;
 int jni_initialize_count = 0;
 int jni_deinitialize_count = 0;
 int jni_shutdown_context_count = 0;
+std::int32_t jni_shutdown_context_level = -1;
 int jni_shutdown_count = 0;
 bool jni_shutdown_context_result = true;
 bool jni_shutdown_result = true;
@@ -1422,6 +1424,17 @@ void test_shutdown_all_waits_for_concurrent_context_teardown() {
 }
 
 void test_extension_entry_validates_and_orders_lifecycle() {
+	jni_ready = false;
+	jni_initialize_result = true;
+	jni_initialize_count = 0;
+	jni_deinitialize_count = 0;
+	jni_shutdown_context_count = 0;
+	jni_shutdown_context_level = -1;
+	jni_shutdown_count = 0;
+	jni_shutdown_context_result = true;
+	jni_shutdown_result = true;
+	installed_print_error = nullptr;
+
 	FoundryExtensionInitialization unchanged{};
 	unchanged.userdata = reinterpret_cast<void *>(0x1234);
 	expect(
@@ -1498,6 +1511,51 @@ void test_extension_entry_validates_and_orders_lifecycle() {
 	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
 	expect(jni_shutdown_context_count == 1, "successful retry must still preserve one context drain");
 	expect(jni_shutdown_count == 3, "successful retry must release JNI state");
+}
+
+void test_extension_entry_failed_initialize_tears_down_context_once() {
+	jni_ready = true;
+	jni_initialize_result = false;
+	jni_initialize_count = 0;
+	jni_deinitialize_count = 0;
+	jni_shutdown_context_count = 0;
+	jni_shutdown_context_level = -1;
+	jni_shutdown_count = 0;
+	jni_shutdown_context_result = true;
+	jni_shutdown_result = true;
+	installed_print_error = nullptr;
+
+	FoundryExtensionInitialization initialization{};
+	expect(
+			foundry_java::initialize_extension(
+					complete_get_proc_address,
+					reinterpret_cast<void *>(1),
+					&initialization) == 1,
+			"ready entry must publish lifecycle callbacks before CORE initialization");
+
+	initialization.initialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+
+	expect(jni_initialize_count == 1, "failed CORE initialization must enter Java exactly once");
+	expect(
+			jni_shutdown_context_count == 1,
+			"failed CORE initialization must immediately tear down its native context");
+	expect(
+			jni_shutdown_context_level == FOUNDRY_EXTENSION_INITIALIZATION_CORE,
+			"failed initialization must use full CORE context teardown");
+
+	initialization.initialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_SCENE);
+	expect(
+			jni_initialize_count == 1,
+			"terminal entry must ignore later initialization levels after CORE failure");
+	expect(
+			jni_shutdown_context_count == 1,
+			"terminal entry must not create and tear down another context");
+
+	initialization.deinitialize(initialization.userdata, FOUNDRY_EXTENSION_INITIALIZATION_CORE);
+	expect(
+			jni_shutdown_context_count == 1,
+			"CORE deinitialization must not tear down the failed context twice");
+	expect(jni_shutdown_count == 1, "CORE deinitialization must still release the JNI bridge");
 }
 
 void test_generated_abi_layout_is_complete() {
@@ -2896,7 +2954,7 @@ ContextHandle jni_bridge_create_context() noexcept {
 
 bool jni_bridge_initialize(ContextHandle context, std::int32_t) noexcept {
 	jni_initialize_count++;
-	return context == 77;
+	return context == 77 && jni_initialize_result;
 }
 
 void jni_bridge_deinitialize(ContextHandle context, std::int32_t) noexcept {
@@ -2905,8 +2963,9 @@ void jni_bridge_deinitialize(ContextHandle context, std::int32_t) noexcept {
 	}
 }
 
-bool jni_bridge_shutdown_context(ContextHandle context, std::int32_t) noexcept {
+bool jni_bridge_shutdown_context(ContextHandle context, std::int32_t level) noexcept {
 	if (context == 77) {
+		jni_shutdown_context_level = level;
 		if (jni_shutdown_context_result) {
 			jni_shutdown_context_count++;
 		}
@@ -2940,6 +2999,7 @@ int main() {
 	test_java_cleanup_admits_only_authenticated_cleanup_operations();
 	test_native_operation_can_finish_on_a_different_thread();
 	test_shutdown_all_waits_for_concurrent_context_teardown();
+	test_extension_entry_failed_initialize_tears_down_context_once();
 	test_extension_entry_validates_and_orders_lifecycle();
 	test_generated_abi_layout_is_complete();
 	test_bridge_services_resolve_all_or_nothing();
