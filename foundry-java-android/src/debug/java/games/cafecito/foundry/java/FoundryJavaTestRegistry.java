@@ -143,6 +143,7 @@ public final class FoundryJavaTestRegistry {
     private static final class CoreAccess implements FoundryExtensionAccess {
         @Override
         public Object construct(FoundryBindingContext context, ObjectLease lease) {
+            FoundryJavaStartupEvidence.recordCoreContextHandle(context.contextHandle());
             CoreExtension extension = new CoreExtension(context, lease);
             extension.onInvalidated(FoundryJavaStartupEvidence::recordInvalidation);
             return extension;

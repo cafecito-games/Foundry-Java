@@ -24,6 +24,7 @@ public final class FoundryJavaTestHost {
         JSONObject evidence = parse("lifecycle", invokeLifecycle(runIndex));
         requireInt(evidence, "schema_version", 1);
         requireInt(evidence, "run_index", runIndex);
+        replaceContextHandle(evidence, requireObservedCoreContextHandle());
         return evidence;
     }
 
@@ -40,6 +41,24 @@ public final class FoundryJavaTestHost {
         } catch (NumberFormatException failure) {
             throw new IllegalArgumentException(
                     "foundry_run_index must be a positive integer.", failure);
+        }
+    }
+
+    static long requireObservedCoreContextHandle() {
+        long contextHandle = FoundryJavaStartupEvidence.observedCoreContextHandle();
+        require(contextHandle > 0L, "CORE context handle was not observed.");
+        return contextHandle;
+    }
+
+    static void replaceContextHandle(JSONObject evidence, long observedContextHandle) {
+        require(observedContextHandle > 0L, "CORE context handle was not observed.");
+        try {
+            require(
+                    evidence.getLong("context_handle") == 0L,
+                    "Native context_handle was not the expected placeholder.");
+            evidence.put("context_handle", observedContextHandle);
+        } catch (JSONException failure) {
+            throw new IllegalStateException("Native evidence omitted context_handle.", failure);
         }
     }
 

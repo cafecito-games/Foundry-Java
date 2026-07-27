@@ -29,6 +29,7 @@ public final class FoundryJavaStartupEvidence {
     private static int invalidationCount;
     private static int processId;
     private static long callbackResult;
+    private static long coreContextHandle;
     private static String callbackThread = "";
     private static JSONObject applicationPreEntry;
     private static JSONObject activityPreEntry;
@@ -90,6 +91,29 @@ public final class FoundryJavaStartupEvidence {
         }
     }
 
+    static void recordCoreContextHandle(long contextHandle) {
+        if (contextHandle <= 0L) {
+            throw new IllegalArgumentException("CORE context handle must be positive.");
+        }
+        synchronized (LOCK) {
+            if (coreContextHandle != 0L && coreContextHandle != contextHandle) {
+                throw new IllegalStateException(
+                        "CORE context changed from "
+                                + coreContextHandle
+                                + " to "
+                                + contextHandle
+                                + ".");
+            }
+            coreContextHandle = contextHandle;
+        }
+    }
+
+    static long observedCoreContextHandle() {
+        synchronized (LOCK) {
+            return coreContextHandle;
+        }
+    }
+
     public static void recordExceptionDispatch() {
         synchronized (LOCK) {
             exceptionDispatchCount++;
@@ -147,6 +171,7 @@ public final class FoundryJavaStartupEvidence {
             invalidationCount = 0;
             processId = 0;
             callbackResult = 0;
+            coreContextHandle = 0;
             callbackThread = "";
             applicationPreEntry = null;
             activityPreEntry = null;

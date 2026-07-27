@@ -85,6 +85,7 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
                     FoundryJavaStartupEvidence.providerBeforeActivity(),
                     "provider did not prime before Activity.onCreate");
             validateFailureReportContract(runIndex);
+            validateContextHandleReplacementContract();
 
             pidBeforeLifecycle = Process.myPid();
             lifecycle = FoundryJavaTestHost.runLifecycle(runIndex);
@@ -188,6 +189,41 @@ public final class FoundryJavaInstrumentation extends Instrumentation {
         require(
                 rawLifecycle.getInt("run_index") == runIndex,
                 "partial lifecycle run index was lost");
+    }
+
+    private static void validateContextHandleReplacementContract() throws JSONException {
+        JSONObject placeholder = new JSONObject();
+        placeholder.put("context_handle", 0L);
+        FoundryJavaTestHost.replaceContextHandle(placeholder, 47L);
+        require(
+                placeholder.getLong("context_handle") == 47L,
+                "observed Java context handle was not inserted");
+
+        boolean zeroObservationRejected = false;
+        try {
+            FoundryJavaTestHost.replaceContextHandle(
+                    new JSONObject().put("context_handle", 0L), 0L);
+        } catch (IllegalStateException expected) {
+            zeroObservationRejected = true;
+        }
+        require(zeroObservationRejected, "zero Java context observation was accepted");
+
+        boolean missingPlaceholderRejected = false;
+        try {
+            FoundryJavaTestHost.replaceContextHandle(new JSONObject(), 47L);
+        } catch (IllegalStateException expected) {
+            missingPlaceholderRejected = true;
+        }
+        require(missingPlaceholderRejected, "missing native context placeholder was accepted");
+
+        boolean nonzeroPlaceholderRejected = false;
+        try {
+            FoundryJavaTestHost.replaceContextHandle(
+                    new JSONObject().put("context_handle", 1L), 47L);
+        } catch (IllegalStateException expected) {
+            nonzeroPlaceholderRejected = true;
+        }
+        require(nonzeroPlaceholderRejected, "nonzero native context placeholder was accepted");
     }
 
     private static int parseRunIndex(Bundle arguments) {

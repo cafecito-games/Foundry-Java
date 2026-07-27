@@ -171,6 +171,70 @@ class FoundryJavaTestRegistryTest {
     }
 
     @Test
+    void coreContextObservationMustBePositiveAndStable() throws Exception {
+        Class<?> evidence = requireFixture("FoundryJavaStartupEvidence");
+        Method record = requireFixtureMethod(evidence, "recordCoreContextHandle", long.class);
+        Method observed = requireFixtureMethod(evidence, "observedCoreContextHandle");
+        invokeStatic(evidence, "resetForTesting");
+
+        assertEquals(0L, observed.invoke(null));
+        assertInvocationFailure(IllegalArgumentException.class, () -> record.invoke(null, 0L));
+        record.invoke(null, 37L);
+        record.invoke(null, 37L);
+        assertEquals(37L, observed.invoke(null));
+        assertInvocationFailure(IllegalStateException.class, () -> record.invoke(null, 38L));
+    }
+
+    @Test
+    void resetClearsObservedCoreContextHandle() throws Exception {
+        Class<?> evidence = requireFixture("FoundryJavaStartupEvidence");
+        Method record = requireFixtureMethod(evidence, "recordCoreContextHandle", long.class);
+        Method observed = requireFixtureMethod(evidence, "observedCoreContextHandle");
+        invokeStatic(evidence, "resetForTesting");
+        record.invoke(null, 41L);
+
+        invokeStatic(evidence, "resetForTesting");
+
+        assertEquals(0L, observed.invoke(null));
+    }
+
+    @Test
+    void lifecycleRequiresObservationAndReplacesNativePlaceholderOnDevice() throws Exception {
+        Class<?> evidence = requireFixture("FoundryJavaStartupEvidence");
+        Class<?> host = requireFixture("FoundryJavaTestHost");
+        Method record = requireFixtureMethod(evidence, "recordCoreContextHandle", long.class);
+        Method requireObserved = requireFixtureMethod(host, "requireObservedCoreContextHandle");
+        invokeStatic(evidence, "resetForTesting");
+
+        assertInvocationFailure(IllegalStateException.class, () -> requireObserved.invoke(null));
+        record.invoke(null, 43L);
+        assertEquals(43L, requireObserved.invoke(null));
+
+        String hostSource =
+                fixtureSource(
+                        "src/debug/java/games/cafecito/foundry/java/FoundryJavaTestHost.java");
+        String registrySource =
+                fixtureSource(
+                        "src/debug/java/games/cafecito/foundry/java/FoundryJavaTestRegistry.java");
+        String instrumentation =
+                fixtureSource(
+                        "src/androidTest/java/games/cafecito/foundry/java/"
+                                + "FoundryJavaInstrumentation.java");
+        assertTrue(registrySource.contains("recordCoreContextHandle(context.contextHandle())"));
+        assertTrue(
+                hostSource.contains(
+                        "replaceContextHandle(evidence, requireObservedCoreContextHandle())"));
+        assertTrue(hostSource.contains("evidence.getLong(\"context_handle\") == 0L"));
+        assertTrue(instrumentation.contains("validateContextHandleReplacementContract();"));
+        assertTrue(instrumentation.contains("placeholder.put(\"context_handle\", 0L);"));
+        assertTrue(
+                instrumentation.contains(
+                        "FoundryJavaTestHost.replaceContextHandle(placeholder, 47L);"));
+        assertTrue(instrumentation.contains("placeholder.getLong(\"context_handle\") == 47L"));
+        assertTrue(instrumentation.contains("lifecycle.getLong(\"context_handle\") == 1L"));
+    }
+
+    @Test
     void preEntryJsonContractAcceptsIntegerZeroAndRejectsArrayOnDevice() throws Exception {
         String host =
                 fixtureSource(
@@ -245,6 +309,15 @@ class FoundryJavaTestRegistryTest {
         assertTrue(failure.getCause() instanceof IllegalArgumentException);
     }
 
+    private static void assertInvocationFailure(
+            Class<? extends Throwable> expected, ThrowingInvocation invocation) {
+        InvocationTargetException failure =
+                assertThrows(InvocationTargetException.class, invocation::invoke);
+        assertTrue(
+                expected.isInstance(failure.getCause()),
+                "Expected " + expected.getName() + " but got " + failure.getCause());
+    }
+
     private static void invokeStatic(Class<?> type, String name) throws Exception {
         type.getMethod(name).invoke(null);
     }
@@ -270,5 +343,10 @@ class FoundryJavaTestRegistryTest {
             fail("Missing debug fixture " + simpleName + " (expected RED)", failure);
             throw new AssertionError("unreachable");
         }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingInvocation {
+        void invoke() throws Exception;
     }
 }
