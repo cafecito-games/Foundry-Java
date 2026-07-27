@@ -166,6 +166,20 @@ class NativeBridgeContractTest {
                     "foundry_java_runtime.h",
                     "foundry_java_transport.cpp",
                     "foundry_java_transport.h");
+    private static final Set<String> ANDROID_TEST_NATIVE_FILES =
+            Set.of(
+                    "foundry_java_fake_extension_host.cpp",
+                    "foundry_java_fake_extension_host.h",
+                    "foundry_java_test_host_jni.cpp");
+    private static final Set<String> DEBUG_STARTUP_FIXTURE_FILES =
+            Set.of(
+                    "AndroidManifest.xml",
+                    "java/games/cafecito/foundry/java/FoundryJavaStartupEvidence.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestActivity.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestApplication.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestHost.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestRegistry.java",
+                    "java/games/cafecito/foundry/java/FoundryJavaTestStartupProvider.java");
     private static final List<String> BRIDGE_FILES =
             List.of(
                     "foundry-java-android/src/main/consumer-rules.pro",
@@ -387,7 +401,8 @@ class NativeBridgeContractTest {
         assertTrue(workflow.contains("sudo chmod 666 /dev/kvm"));
         assertTrue(workflow.contains("-port 5554"));
         assertTrue(workflow.contains("sys.boot_completed"));
-        assertTrue(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
+        assertTrue(workflow.contains("run-android-production-startup-acceptance.sh"));
+        assertFalse(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
     }
 
     @Test
@@ -482,10 +497,50 @@ class NativeBridgeContractTest {
         assertFalse(tree.contains("libfoundry_android.so"));
     }
 
+    @Test
+    void productionStartupFixtureUsesOnlyThePublicTestHostBoundary() throws IOException {
+        assertEquals(
+                ANDROID_TEST_NATIVE_FILES,
+                fileInventory("foundry-java-android/src/androidTest/cpp"));
+        assertEquals(DEBUG_STARTUP_FIXTURE_FILES, fileInventory("foundry-java-android/src/debug"));
+
+        String cmake = read("foundry-java-android/src/main/cpp/CMakeLists.txt");
+        String androidBuild = read("foundry-java-android/build.gradle.kts");
+        String fixtureSources =
+                readTree("foundry-java-android/src/androidTest")
+                        + readTree("foundry-java-android/src/debug");
+
+        assertTrue(cmake.contains("option(FOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST"));
+        assertTrue(cmake.contains("foundry_java_fake_extension_host.cpp"));
+        assertTrue(cmake.contains("foundry_java_test_host_jni.cpp"));
+        assertTrue(cmake.contains("add_library(foundry_java_test_host SHARED"));
+        assertTrue(androidBuild.contains("-DFOUNDRY_JAVA_BUILD_ANDROID_TEST_HOST=ON"));
+        assertTrue(fixtureSources.contains("System.loadLibrary(\"foundry_java_test_host\")"));
+        assertFalse(fixtureSources.contains("FoundryJavaInitializer.initialize("));
+        assertFalse(fixtureSources.contains("FoundryJavaInitializer.createContext("));
+        assertFalse(fixtureSources.contains("Class.forName"));
+        assertFalse(fixtureSources.contains("getDeclaredMethod"));
+        assertFalse(fixtureSources.contains("java/lang/reflect"));
+        assertFalse(fixtureSources.contains("dlopen("));
+        assertFalse(fixtureSources.contains("org.godotengine"));
+        assertFalse(fixtureSources.contains("FoundryLib"));
+        assertFalse(fixtureSources.contains("libfoundry_android.so"));
+    }
+
     private static String read(String relativePath) throws IOException {
         Path path = ROOT.resolve(relativePath);
         assertTrue(Files.isRegularFile(path), relativePath + " must exist");
         return Files.readString(path);
+    }
+
+    private static Set<String> fileInventory(String relativePath) throws IOException {
+        Path root = ROOT.resolve(relativePath);
+        assertTrue(Files.isDirectory(root), relativePath + " must exist");
+        try (var paths = Files.walk(root)) {
+            return paths.filter(Files::isRegularFile)
+                    .map(path -> root.relativize(path).toString().replace('\\', '/'))
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        }
     }
 
     private static String readTree(String relativePath) throws IOException {
