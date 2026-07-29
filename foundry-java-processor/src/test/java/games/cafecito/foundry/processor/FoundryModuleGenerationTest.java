@@ -51,7 +51,7 @@ class FoundryModuleGenerationTest {
         assertTrue(descriptor.startsWith("format=2\n"));
         assertTrue(
                 descriptor.contains(
-                        "api_sha256=85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51\n"));
+                        "api_sha256=48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b\n"));
         assertTrue(descriptor.contains("generator_version=1\n"));
         assertTrue(descriptor.contains("runtime_contract_version=1\n"));
         assertTrue(descriptor.contains("bridge_contract_version=1\n"));

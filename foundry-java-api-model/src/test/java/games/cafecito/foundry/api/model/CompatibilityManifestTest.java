@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 class CompatibilityManifestTest {
     private static final String API_HASH =
-            "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
+            "48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b";
 
     @Test
     void requiresOneExplicitStableClassificationForEveryParsedIdentity() throws IOException {
