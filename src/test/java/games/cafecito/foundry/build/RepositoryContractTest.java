@@ -624,7 +624,7 @@ class RepositoryContractTest {
                 "655945c7347bb4ba01a9d259c2b4eac67605c5bb2e70b5d74057e31a198f80f9",
                 sha256("foundry-java-android/src/main/consumer-rules.pro"));
         assertEquals(
-                "c3eedd9b1d92f19a04c1aaf8c0427671955cfa65522aea114ff09dd08f650c5d",
+                "5a4c220685253812af07c0486834f67d250ca0832716650287c72ae3b4961a64",
                 sha256("foundry-java-runtime/api/foundry-java-runtime.api"));
     }
 
