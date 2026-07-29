@@ -25,26 +25,83 @@ public final class RealizationVerifier {
     /** Format marker of the pinned per-entity accounting, bumped when its grammar changes. */
     public static final String SUMMARY_FORMAT = "foundry-java-realization-summary/1";
 
+    /** File name the binding-neutral surface manifest is published under as evidence. */
+    public static final String SURFACE_MANIFEST_FILE_NAME = "foundry-java-surface-manifest.json";
+
+    /** Diagnostic prefix of a manifest whose provenance disagrees with the accepted inputs. */
+    public static final String PROVENANCE_DRIFT = "SURFACE_MANIFEST_PROVENANCE_DRIFT";
+
     private RealizationVerifier() {}
 
+    /**
+     * Reports every manifest provenance field that disagrees with the accepted inputs. The
+     * manifest-versus-map comparison re-derives from the manifest's own provenance, so provenance
+     * itself is anchored here instead.
+     */
+    public static List<String> provenanceDrift(
+            SurfaceManifest manifest, SurfaceManifest.Provenance expected) {
+        Map<String, List<String>> fields = new TreeMap<>();
+        SurfaceManifest.Provenance observed = manifest.provenance();
+        fields.put(
+                "engine_api_version",
+                List.of(expected.engineApiVersion(), observed.engineApiVersion()));
+        fields.put(
+                "engine_api_sha256",
+                List.of(expected.engineApiSha256(), observed.engineApiSha256()));
+        fields.put(
+                "binding_version", List.of(expected.bindingVersion(), observed.bindingVersion()));
+        fields.put(
+                "generator_version",
+                List.of(expected.generatorVersion(), observed.generatorVersion()));
+        fields.put(
+                "bridge_contract_version",
+                List.of(expected.bridgeContractVersion(), observed.bridgeContractVersion()));
+        List<String> drift = new ArrayList<>();
+        fields.forEach(
+                (field, values) -> {
+                    if (!values.get(0).equals(values.get(1))) {
+                        drift.add(
+                                PROVENANCE_DRIFT
+                                        + " field="
+                                        + field
+                                        + " expected="
+                                        + Diagnostics.escape(values.get(0))
+                                        + " observed="
+                                        + Diagnostics.escape(values.get(1)));
+                    }
+                });
+        if (manifest.schemaVersion() != SurfaceManifest.SCHEMA_VERSION) {
+            drift.add(
+                    PROVENANCE_DRIFT
+                            + " field=schema_version expected="
+                            + SurfaceManifest.SCHEMA_VERSION
+                            + " observed="
+                            + manifest.schemaVersion());
+        }
+        return List.copyOf(drift);
+    }
+
     public static void main(String[] arguments) {
-        if (arguments.length != 5) {
+        if (arguments.length != 7) {
             throw new IllegalArgumentException(
                     "Usage: RealizationVerifier <api-directory> <realization-map> "
                             + "<generated-classes-directory> <accounting-baseline> "
-                            + "<report-directory>");
+                            + "<report-directory> <surface-manifest> <binding-version>");
         }
         Path apiDirectory = Path.of(arguments[0]);
         Path realizationMapPath = Path.of(arguments[1]);
         Path classesDirectory = Path.of(arguments[2]);
         Path accountingBaseline = Path.of(arguments[3]);
         Path reportDirectory = Path.of(arguments[4]);
+        Path surfaceManifestPath = Path.of(arguments[5]);
+        String bindingVersion = arguments[6];
 
         ApiInputs inputs = ApiInputs.load(apiDirectory);
         FoundryApi api = FoundryApiParser.parse(inputs);
         CompatibilityManifest manifest = CompatibilityManifest.parse(api, inputs);
         RealizationMap map = RealizationMap.parse(read(realizationMapPath));
         GeneratedSurface surface = GeneratedSurface.fromCompiledClasses(classesDirectory);
+        SurfaceManifest surfaceManifest = SurfaceManifest.parse(read(surfaceManifestPath));
 
         List<RealizationOracle.Violation> violations =
                 RealizationOracle.verify(map, manifest, surface);
@@ -54,6 +111,16 @@ public final class RealizationVerifier {
 
         List<String> messages = new ArrayList<>();
         violations.forEach(violation -> messages.add(violation.message()));
+        messages.addAll(surfaceManifest.disagreementsWith(map));
+        messages.addAll(
+                provenanceDrift(
+                        surfaceManifest,
+                        new SurfaceManifest.Provenance(
+                                inputs.provenance().apiVersion(),
+                                inputs.extensionApiSha256(),
+                                bindingVersion,
+                                inputs.provenance().generatorVersion(),
+                                inputs.provenance().bridgeContractVersion())));
         if (!diff.isEmpty()) {
             messages.add(
                     "REALIZATION_ACCOUNTING_DRIFT baseline="
@@ -62,6 +129,7 @@ public final class RealizationVerifier {
         }
         write(reportDirectory.resolve("realization-map.tsv"), map.render());
         write(reportDirectory.resolve("realization-accounting.txt"), accounting);
+        write(reportDirectory.resolve(SURFACE_MANIFEST_FILE_NAME), surfaceManifest.canonicalJson());
         write(reportDirectory.resolve("realization-diff.txt"), diff.isEmpty() ? "" : diff);
         write(
                 reportDirectory.resolve("realization-violations.txt"),
@@ -75,7 +143,9 @@ public final class RealizationVerifier {
                         .append(apiDirectory)
                         .append(": ")
                         .append(violations.size())
-                        .append(" parity violations.");
+                        .append(" parity violations and ")
+                        .append(messages.size() - violations.size())
+                        .append(" manifest or accounting failures.");
         messages.stream()
                 .limit(200)
                 .forEach(message -> failure.append(System.lineSeparator()).append(message));
