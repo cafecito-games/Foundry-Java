@@ -12,6 +12,8 @@ val acceptedApiDirectory = rootProject.layout.projectDirectory.dir("api/current"
 val generatedApiSources = layout.buildDirectory.dir("generated/sources/foundryApi/main")
 val generatedCompatibilityManifest =
     layout.buildDirectory.file("generated/foundryApi/compatibility-manifest.json")
+val generatedRealizationMap =
+    layout.buildDirectory.file("generated/foundryApi/realization-map.tsv")
 val generatorProject = project(":foundry-java-generator")
 val apiModelProject = project(":foundry-java-api-model")
 val annotationsProject = project(":foundry-java-annotations")
@@ -37,12 +39,14 @@ val generateFoundryApi =
         inputs.property("generatorMainClass", mainClass)
         outputs.dir(generatedApiSources)
         outputs.file(generatedCompatibilityManifest)
+        outputs.file(generatedRealizationMap)
         outputs.cacheIf("accepted API generation is deterministic") { true }
 
         args(
             acceptedApiDirectory.asFile.absolutePath,
             generatedApiSources.get().asFile.absolutePath,
             generatedCompatibilityManifest.get().asFile.absolutePath,
+            generatedRealizationMap.get().asFile.absolutePath,
         )
     }
 
@@ -82,9 +86,48 @@ val verifyRuntimeApi =
         )
     }
 
+val realizationAccountingBaseline =
+    layout.projectDirectory.file("api/foundry-java-realization-accounting.txt")
+val realizationReportDirectory = layout.buildDirectory.dir("reports/foundry-realization")
+
+// The parity oracle is anchored to the vendored engine API: it compares the vendored compatibility
+// manifest, the generated realization map, and the compiled generated surface. No sibling binding
+// participates.
+val verifyGeneratedRealization =
+    tasks.register<JavaExec>("verifyGeneratedRealization") {
+        group = "verification"
+        description = "Verifies every accepted engine entity against the generated Java surface."
+        dependsOn(generateFoundryApi, tasks.named("compileJava"))
+        classpath = files(generatorJar, apiModelJar, annotationsJar, runtimeClasses)
+        mainClass.set("games.cafecito.foundry.generator.RealizationVerifier")
+
+        inputs
+            .files(
+                acceptedApiDirectory.file("extension_api.json"),
+                acceptedApiDirectory.file("foundry_extension_interface.h"),
+                acceptedApiDirectory.file("compatibility-manifest.json"),
+                acceptedApiDirectory.file("provenance.json"),
+                generatedRealizationMap,
+                realizationAccountingBaseline,
+            ).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs
+            .dir(runtimeClasses)
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+        outputs.dir(realizationReportDirectory)
+
+        args(
+            acceptedApiDirectory.asFile.absolutePath,
+            generatedRealizationMap.get().asFile.absolutePath,
+            runtimeClasses.get().asFile.absolutePath,
+            realizationAccountingBaseline.asFile.absolutePath,
+            realizationReportDirectory.get().asFile.absolutePath,
+        )
+    }
+
 tasks.named("check") {
     dependsOn(
         verifyRuntimeApi,
+        verifyGeneratedRealization,
         tasks.named("javadoc"),
         generatorProject.tasks.named("test"),
     )

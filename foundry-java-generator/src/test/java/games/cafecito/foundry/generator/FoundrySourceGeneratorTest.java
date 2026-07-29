@@ -826,21 +826,30 @@ class FoundrySourceGeneratorTest {
                 Path.of(System.getProperty("user.dir")).resolve("../api/current").normalize();
         Path output = temporaryDirectory.resolve("cli-output");
         Path manifestOutput = temporaryDirectory.resolve("manifest-output.json");
+        Path realizationOutput = temporaryDirectory.resolve("realization-map.tsv");
 
         FoundrySourceGenerator.main(
                 new String[] {
-                    acceptedDirectory.toString(), output.toString(), manifestOutput.toString()
+                    acceptedDirectory.toString(),
+                    output.toString(),
+                    manifestOutput.toString(),
+                    realizationOutput.toString()
                 });
         Map<String, String> firstHashes = treeHashes(output);
+        String firstRealizationMap = Files.readString(realizationOutput);
         FoundrySourceGenerator.main(
                 new String[] {
-                    acceptedDirectory.toString(), output.toString(), manifestOutput.toString()
+                    acceptedDirectory.toString(),
+                    output.toString(),
+                    manifestOutput.toString(),
+                    realizationOutput.toString()
                 });
 
         assertEquals(
                 Files.readString(acceptedDirectory.resolve("compatibility-manifest.json")),
                 Files.readString(manifestOutput));
         assertEquals(firstHashes, treeHashes(output));
+        assertEquals(firstRealizationMap, Files.readString(realizationOutput));
 
         ApiInputs inputs = ApiInputs.load(acceptedDirectory);
         FoundryApi api = FoundryApiParser.parse(inputs);
@@ -868,6 +877,52 @@ class FoundrySourceGeneratorTest {
     }
 
     @Test
+    void realizationMapCoversEveryClassifiedIdentityExactlyOnceInOneOfTwoStates()
+            throws IOException {
+        Path acceptedDirectory =
+                Path.of(System.getProperty("user.dir")).resolve("../api/current").normalize();
+        ApiInputs inputs = ApiInputs.load(acceptedDirectory);
+        FoundryApi api = FoundryApiParser.parse(inputs);
+        CompatibilityManifest manifest = CompatibilityManifest.parse(api, inputs);
+        FoundrySourceGenerator.Metadata metadata =
+                new FoundrySourceGenerator.Metadata(
+                        inputs.extensionApiSha256(),
+                        inputs.interfaceHeaderSha256(),
+                        inputs.provenance().foundryCommit(),
+                        inputs.provenance().foundryVersion(),
+                        inputs.provenance().generatorVersion(),
+                        inputs.provenance().bridgeContractVersion());
+
+        RealizationMap map =
+                new FoundrySourceGenerator().generate(api, metadata, manifest).realizationMap();
+
+        assertEquals(
+                manifest.entries().stream()
+                        .map(CompatibilityManifest.Entry::sourceIdentity)
+                        .sorted()
+                        .toList(),
+                map.entries().stream().map(RealizationMap.Entry::sourceIdentity).toList());
+        for (RealizationMap.Entry entry : map.entries()) {
+            if (entry.isRealized()) {
+                assertTrue(entry.nonRealizationReason().isEmpty(), entry.sourceIdentity());
+            } else {
+                assertTrue(
+                        NonRealizationReason.isApproved(entry.nonRealizationReason()),
+                        entry.sourceIdentity());
+            }
+        }
+        assertEquals(
+                map.render(), RealizationMap.parse(map.render()).render(), "map must round-trip");
+        assertEquals(
+                map.render(),
+                new FoundrySourceGenerator()
+                        .generate(api, metadata, manifest)
+                        .realizationMap()
+                        .render(),
+                "map must be stable across repeated generation");
+    }
+
+    @Test
     void generatedTreeRejectsNormalizedTraversalOutsideOutputRoot() {
         GeneratedTree malicious =
                 new GeneratedTree(
@@ -875,7 +930,8 @@ class FoundrySourceGeneratorTest {
                         Set.of(),
                         CompatibilityManifest.create(
                                 FoundryApiParser.parse(minimalApi()), API_HASH, "1", "1", Map.of()),
-                        Map.of());
+                        Map.of(),
+                        RealizationMap.of(List.of()));
 
         ApiInputException failure =
                 assertThrows(

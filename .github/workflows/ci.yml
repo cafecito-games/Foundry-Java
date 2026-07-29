@@ -62,6 +62,7 @@ jobs:
           if-no-files-found: warn
           path: |
             **/build/reports/**
+            foundry-java-runtime/build/reports/foundry-realization/**
             foundry-java-android/build/native-host/**
             foundry-java-android/build/native-host-sanitized/**
             foundry-java-android/build/outputs/aar/**
