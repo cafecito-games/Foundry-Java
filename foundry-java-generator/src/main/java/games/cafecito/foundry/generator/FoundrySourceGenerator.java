@@ -1068,6 +1068,54 @@ public final class FoundrySourceGenerator {
         return root.packageName() + "." + root.className();
     }
 
+    /**
+     * Records the member a source entity realized. A declaration that carries type arguments also
+     * records its declared view, because erasure alone would hide a wrong type argument.
+     */
+    private static void realizeMethod(
+            Realizations realizations,
+            String sourceIdentity,
+            String owner,
+            String name,
+            List<String> declaredParameterTypes,
+            String declaredReturnType) {
+        List<String> erasedParameterTypes =
+                declaredParameterTypes.stream()
+                        .map(FoundrySourceGenerator::erasedType)
+                        .collect(Collectors.toList());
+        String erasedReturnType = erasedType(declaredReturnType);
+        realizations.realize(
+                sourceIdentity,
+                JavaMember.ofMethod(owner, name, erasedParameterTypes, erasedReturnType));
+        if (!erasedParameterTypes.equals(declaredParameterTypes)
+                || !erasedReturnType.equals(declaredReturnType)) {
+            realizations.realize(
+                    sourceIdentity,
+                    JavaMember.ofMethod(
+                            owner,
+                            name + JavaMember.DECLARED_VIEW_SUFFIX,
+                            declaredParameterTypes,
+                            declaredReturnType));
+        }
+    }
+
+    /** Records the field a source entity realized, with its declared view when it is generic. */
+    private static void realizeField(
+            Realizations realizations,
+            String sourceIdentity,
+            String owner,
+            String name,
+            String declaredType) {
+        String erased = erasedType(declaredType);
+        realizations.realize(sourceIdentity, JavaMember.ofField(owner, name, erased));
+        if (!erased.equals(declaredType)) {
+            realizations.realize(
+                    sourceIdentity,
+                    JavaMember.ofField(
+                            owner, name + JavaMember.DECLARED_VIEW_SUFFIX, declaredType));
+        }
+    }
+
     /** Removes every type argument so a declaration renders as its erased canonical type. */
     private static String erasedType(String javaTypeText) {
         StringBuilder erased = new StringBuilder();
@@ -1597,7 +1645,7 @@ public final class FoundrySourceGenerator {
         }
         if (style == MethodStyle.BUILTIN) {
             source.append(", ").append(javaType(builtinReceiverType)).append(" receiver");
-            parameterTypes.add(erasedType(javaType(builtinReceiverType)));
+            parameterTypes.add(javaType(builtinReceiverType));
         }
         for (int index = 0; index < argumentCount; index++) {
             if (needsContext || index > 0) {
@@ -1611,7 +1659,7 @@ public final class FoundrySourceGenerator {
                             javaParameterName(
                                     requiredString(
                                             argument.source(), "name", argument.identity())));
-            parameterTypes.add(erasedType(javaType(foundryType)));
+            parameterTypes.add(javaType(foundryType));
         }
         boolean vararg = optionalBoolean(method.source(), "is_vararg");
         if (vararg) {
@@ -1622,9 +1670,8 @@ public final class FoundrySourceGenerator {
             parameterTypes.add("games.cafecito.foundry.types.Variant[]");
         }
         source.append(") {\n");
-        realizations.realize(
-                method.identity(),
-                JavaMember.ofMethod(owner, methodName, parameterTypes, erasedType(returnJavaType)));
+        realizeMethod(
+                realizations, method.identity(), owner, methodName, parameterTypes, returnJavaType);
         appendInvocation(
                 source,
                 method,
@@ -1701,15 +1748,15 @@ public final class FoundrySourceGenerator {
         parameterTypes.add("games.cafecito.foundry.runtime.FoundryBindingContext");
         for (FoundryApi.Entity argument : arguments) {
             parameterTypes.add(
-                    erasedType(
-                            javaType(
-                                    requiredString(
-                                            argument.source(), "type", argument.identity()))));
+                    javaType(requiredString(argument.source(), "type", argument.identity())));
         }
-        realizations.realize(
+        realizeMethod(
+                realizations,
                 constructor.identity(),
-                JavaMember.ofMethod(
-                        owner, "create", parameterTypes, erasedType(javaType(builtinFoundryType))));
+                owner,
+                "create",
+                parameterTypes,
+                javaType(builtinFoundryType));
         source.append("    /** Constructs a ")
                 .append(javaStringBody(builtinFoundryType))
                 .append(". */\n")
@@ -1799,16 +1846,19 @@ public final class FoundrySourceGenerator {
         String rightType = null;
         List<String> parameterTypes = new ArrayList<>();
         parameterTypes.add("games.cafecito.foundry.runtime.FoundryBindingContext");
-        parameterTypes.add(erasedType(javaType(foundryType)));
+        parameterTypes.add(javaType(foundryType));
         if (rightTypeValue != null) {
             rightType = rightTypeValue.requireString(operator.identity() + ".right_type");
             source.append(", ").append(javaType(rightType)).append(" right");
-            parameterTypes.add(erasedType(javaType(rightType)));
+            parameterTypes.add(javaType(rightType));
         }
-        realizations.realize(
+        realizeMethod(
+                realizations,
                 operator.identity(),
-                JavaMember.ofMethod(
-                        owner, methodName, parameterTypes, erasedType(javaType(returnType))));
+                owner,
+                methodName,
+                parameterTypes,
+                javaType(returnType));
         source.append(") {\n")
                 .append("        var __foundryGeneratedCallArguments = new java.util.ArrayList<")
                 .append("games.cafecito.foundry.types.Variant>();\n")
@@ -1838,10 +1888,13 @@ public final class FoundrySourceGenerator {
         String type = requiredString(property.source(), "type", property.identity());
         String suffix = pascalCase(name);
         if (generateGetter) {
-            realizations.realize(
+            realizeMethod(
+                    realizations,
                     property.identity(),
-                    JavaMember.ofMethod(
-                            owner, "get" + suffix, List.of(), erasedType(javaType(type))));
+                    owner,
+                    "get" + suffix,
+                    List.of(),
+                    javaType(type));
             source.append("    /** Gets ")
                     .append(javaStringBody(name))
                     .append(". */\n")
@@ -1857,10 +1910,13 @@ public final class FoundrySourceGenerator {
             source.append("    }\n\n");
         }
         if (generateSetter) {
-            realizations.realize(
+            realizeMethod(
+                    realizations,
                     property.identity(),
-                    JavaMember.ofMethod(
-                            owner, "set" + suffix, List.of(erasedType(javaType(type))), "void"));
+                    owner,
+                    "set" + suffix,
+                    List.of(javaType(type)),
+                    "void");
             source.append("    /** Sets ")
                     .append(javaStringBody(name))
                     .append(". */\n")
@@ -1892,13 +1948,28 @@ public final class FoundrySourceGenerator {
             throw new ApiInputException(
                     "Generated typed signals support at most five arguments: " + signal.identity());
         }
-        realizations.realize(
+        StringBuilder declaredSignalType =
+                new StringBuilder("games.cafecito.foundry.runtime.FoundryTypedSignal.Of")
+                        .append(arity);
+        for (int index = 0; index < arguments.size(); index++) {
+            FoundryApi.Entity argument = arguments.get(index);
+            declaredSignalType
+                    .append(index == 0 ? "<" : ", ")
+                    .append(
+                            boxedJavaType(
+                                    requiredString(
+                                            argument.source(), "type", argument.identity())));
+        }
+        if (!arguments.isEmpty()) {
+            declaredSignalType.append('>');
+        }
+        realizeMethod(
+                realizations,
                 signal.identity(),
-                JavaMember.ofMethod(
-                        owner,
-                        camelCase(name) + "Signal",
-                        List.of(),
-                        "games.cafecito.foundry.runtime.FoundryTypedSignal.Of" + arity));
+                owner,
+                camelCase(name) + "Signal",
+                List.of(),
+                declaredSignalType.toString());
         source.append("    /** Gets the ")
                 .append(javaStringBody(name))
                 .append(" signal. */\n")
@@ -1946,15 +2017,15 @@ public final class FoundrySourceGenerator {
             String owner) {
         String name = requiredString(member.source(), "name", member.identity());
         String type = requiredString(member.source(), "type", member.identity());
-        realizations.realize(
+        realizeMethod(
+                realizations,
                 member.identity(),
-                JavaMember.ofMethod(
-                        owner,
-                        "get" + pascalCase(name),
-                        List.of(
-                                "games.cafecito.foundry.runtime.FoundryBindingContext",
-                                erasedType(javaType(foundryType))),
-                        erasedType(javaType(type))));
+                owner,
+                "get" + pascalCase(name),
+                List.of(
+                        "games.cafecito.foundry.runtime.FoundryBindingContext",
+                        javaType(foundryType)),
+                javaType(type));
         source.append("    /** Gets ")
                 .append(javaStringBody(name))
                 .append(". */\n")
@@ -1987,20 +2058,21 @@ public final class FoundrySourceGenerator {
                 typeValue == null ? "int" : typeValue.requireString(constant.identity() + ".type");
         source.append("    /** Foundry constant ").append(javaStringBody(name)).append(". */\n");
         if (foundryType.equals("int") && value.matches("-?[0-9]+")) {
-            realizations.realize(
-                    constant.identity(), JavaMember.ofField(owner, javaConstant(name), "long"));
+            realizeField(realizations, constant.identity(), owner, javaConstant(name), "long");
             source.append("    public static final long ")
                     .append(javaConstant(name))
                     .append(" = ")
                     .append(value)
                     .append("L;\n\n");
         } else {
-            realizations.realize(
+            realizeField(
+                    realizations,
                     constant.identity(),
-                    JavaMember.ofField(
-                            owner,
-                            javaConstant(name),
-                            "games.cafecito.foundry.runtime.FoundryConstant"));
+                    owner,
+                    javaConstant(name),
+                    "games.cafecito.foundry.runtime.FoundryConstant<"
+                            + javaType(foundryType)
+                            + ">");
             source.append("    public static final games.cafecito.foundry.runtime.FoundryConstant<")
                     .append(javaType(foundryType))
                     .append("> ")

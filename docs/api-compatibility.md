@@ -97,7 +97,11 @@ builds. Each entry resolves to exactly one of two states, never a third:
   name, and an erased signature. A realized type declaration uses the member name `<type>`, a
   constructor uses `<init>`, a method uses `(parameter,parameter)returnType`, and a field uses its
   erased type. Overloads generated from default arguments and paired property accessors are all
-  listed, so the map and the compiled surface can be compared as sets.
+  listed, so the map and the compiled surface can be compared as sets. A declaration that carries
+  type arguments — a typed signal accessor, a typed array or dictionary, a native handle, a typed
+  constant — additionally contributes a declared member suffixed `<>` that keeps those arguments,
+  because erasure alone would let a wrong type argument change the public API without changing any
+  erased signature.
 - **not realized** — one reason from a closed, approved vocabulary. The approved reasons are
   `ARGUMENT_REALIZED_IN_MEMBER_SIGNATURE`, `RETURN_VALUE_REALIZED_IN_MEMBER_SIGNATURE`,
   `SIGNAL_ARGUMENT_REALIZED_IN_SIGNAL_TYPE`, `PROPERTY_REALIZED_BY_ENGINE_METHOD`,

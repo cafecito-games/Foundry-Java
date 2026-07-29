@@ -213,7 +213,7 @@ public final class RealizationOracle {
                 || topLevelOwner.startsWith(APPROVED_NATIVE_DISPATCH_SHARD_PREFIX)) {
             return true;
         }
-        return !member.isType() && APPROVED_STRUCTURAL_MEMBERS.contains(member.name());
+        return !member.isType() && APPROVED_STRUCTURAL_MEMBERS.contains(member.erasedViewName());
     }
 
     private static String manifestEntry(CompatibilityManifest.Entry classified) {

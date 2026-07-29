@@ -27,6 +27,14 @@ public record JavaMember(String owner, String name, String erasedSignature)
     /** Member name of a realized constructor. */
     public static final String CONSTRUCTOR_MEMBER_NAME = "<init>";
 
+    /**
+     * Suffix marking the declared view of a member whose declaration carries type arguments.
+     * Erasure drops those arguments, so a member such as a typed signal accessor contributes both
+     * its erased member and its declared member; without the declared view a wrong type argument
+     * would change the public API without changing any erased signature.
+     */
+    public static final String DECLARED_VIEW_SUFFIX = "<>";
+
     public JavaMember {
         requireText(owner, "owner");
         requireText(name, "member name");
@@ -52,6 +60,18 @@ public record JavaMember(String owner, String name, String erasedSignature)
     /** Returns a realized field. */
     public static JavaMember ofField(String owner, String name, String type) {
         return new JavaMember(owner, name, type);
+    }
+
+    /** Returns whether this member records the declared, type-argument-carrying view. */
+    public boolean isDeclaredView() {
+        return name.endsWith(DECLARED_VIEW_SUFFIX);
+    }
+
+    /** Returns this member name with the declared-view suffix removed. */
+    public String erasedViewName() {
+        return isDeclaredView()
+                ? name.substring(0, name.length() - DECLARED_VIEW_SUFFIX.length())
+                : name;
     }
 
     /** Returns whether this member is a type declaration rather than a member of a type. */

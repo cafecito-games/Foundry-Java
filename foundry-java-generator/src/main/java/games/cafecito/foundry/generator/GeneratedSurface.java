@@ -6,6 +6,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -125,27 +126,57 @@ public final class GeneratedSurface {
                         || !isVisible(method.getModifiers())) {
                     continue;
                 }
+                List<String> erasedParameters = canonicalNames(method.getParameterTypes());
+                String erasedReturn = canonicalName(method.getReturnType());
                 collected.add(
                         JavaMember.ofMethod(
-                                owner,
-                                method.getName(),
-                                canonicalNames(method.getParameterTypes()),
-                                canonicalName(method.getReturnType())));
+                                owner, method.getName(), erasedParameters, erasedReturn));
+                List<String> declaredParameters = declaredNames(method.getGenericParameterTypes());
+                String declaredReturn = declaredName(method.getGenericReturnType());
+                if (!declaredParameters.equals(erasedParameters)
+                        || !declaredReturn.equals(erasedReturn)) {
+                    collected.add(
+                            JavaMember.ofMethod(
+                                    owner,
+                                    method.getName() + JavaMember.DECLARED_VIEW_SUFFIX,
+                                    declaredParameters,
+                                    declaredReturn));
+                }
             }
             for (Field field : type.getDeclaredFields()) {
                 if (field.isSynthetic() || !isVisible(field.getModifiers())) {
                     continue;
                 }
-                collected.add(
-                        JavaMember.ofField(owner, field.getName(), canonicalName(field.getType())));
+                String erasedFieldType = canonicalName(field.getType());
+                collected.add(JavaMember.ofField(owner, field.getName(), erasedFieldType));
+                String declaredFieldType = declaredName(field.getGenericType());
+                if (!declaredFieldType.equals(erasedFieldType)) {
+                    collected.add(
+                            JavaMember.ofField(
+                                    owner,
+                                    field.getName() + JavaMember.DECLARED_VIEW_SUFFIX,
+                                    declaredFieldType));
+                }
             }
             for (Constructor<?> constructor : type.getDeclaredConstructors()) {
                 if (constructor.isSynthetic() || !isVisible(constructor.getModifiers())) {
                     continue;
                 }
-                collected.add(
-                        JavaMember.ofConstructor(
-                                owner, canonicalNames(constructor.getParameterTypes())));
+                List<String> erasedConstructorParameters =
+                        canonicalNames(constructor.getParameterTypes());
+                collected.add(JavaMember.ofConstructor(owner, erasedConstructorParameters));
+                List<String> declaredConstructorParameters =
+                        declaredNames(constructor.getGenericParameterTypes());
+                if (!declaredConstructorParameters.equals(erasedConstructorParameters)) {
+                    collected.add(
+                            new JavaMember(
+                                    owner,
+                                    JavaMember.CONSTRUCTOR_MEMBER_NAME
+                                            + JavaMember.DECLARED_VIEW_SUFFIX,
+                                    "("
+                                            + String.join(",", declaredConstructorParameters)
+                                            + ")void"));
+                }
             }
         } catch (LinkageError error) {
             throw new ApiInputException(
@@ -164,6 +195,24 @@ public final class GeneratedSurface {
             names.add(canonicalName(type));
         }
         return names;
+    }
+
+    private static List<String> declaredNames(Type[] types) {
+        List<String> names = new ArrayList<>(types.length);
+        for (Type type : types) {
+            names.add(declaredName(type));
+        }
+        return names;
+    }
+
+    /**
+     * Renders a declared type the way a generated declaration writes it: canonical names with
+     * nested-type separators, keeping every type argument.
+     */
+    private static String declaredName(Type type) {
+        return type instanceof Class<?> raw
+                ? canonicalName(raw)
+                : type.getTypeName().replace('$', '.');
     }
 
     private static String canonicalName(Class<?> type) {

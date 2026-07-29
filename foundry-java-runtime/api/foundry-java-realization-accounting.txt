@@ -1,11 +1,11 @@
 foundry-java-realization-summary/1
-realization-map-sha256 87c7a07e168b06b02b29c994c82f0ce21acc9060da28224709d150f3babf701d
+realization-map-sha256 e6b91e3c28ff53dc5d48c49407098872fd276c822aa903361dcf102917073723
 source-entities 57899
 realized-entities 26671
 non-realized-entities 31228
-realized-members 28463
-generated-surface-members 35585
-structural-surface-members 7122
+realized-members 30023
+generated-surface-members 37162
+structural-surface-members 7139
 category builtin_class_member_offsets 252
 category builtin_class_sizes 164
 category builtin_classes 3333

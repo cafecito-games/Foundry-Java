@@ -19,6 +19,7 @@ class RealizationOracleTest {
     private static final String METHOD_IDENTITY = "classes/ExampleNode/methods/get_value";
     private static final String ARGUMENT_IDENTITY =
             "classes/ExampleNode/methods/get_value/arguments/index";
+    private static final String SIGNAL_IDENTITY = "classes/ExampleNode/signals/custom_action";
     private static final JavaMember CLASS_TYPE = JavaMember.ofType(OWNER);
     private static final JavaMember METHOD =
             JavaMember.ofMethod(OWNER, "getValue", List.of("long"), "java.lang.String");
@@ -71,6 +72,55 @@ class RealizationOracleTest {
                         + " manifest-entry=classes/ExampleNode/methods/get_value=supported/"
                         + REASON,
                 unrealized.message());
+    }
+
+    @Test
+    void aMutatedGenericTypeArgumentIsReportedThroughTheDeclaredView() {
+        JavaMember declaredSignal =
+                JavaMember.ofMethod(
+                        OWNER,
+                        "customActionSignal" + JavaMember.DECLARED_VIEW_SUFFIX,
+                        List.of(),
+                        "games.cafecito.foundry.runtime.FoundryTypedSignal.Of1"
+                                + "<games.cafecito.foundry.types.StringName>");
+        JavaMember erasedSignal =
+                JavaMember.ofMethod(
+                        OWNER,
+                        "customActionSignal",
+                        List.of(),
+                        "games.cafecito.foundry.runtime.FoundryTypedSignal.Of1");
+        JavaMember driftedSignal =
+                JavaMember.ofMethod(
+                        OWNER,
+                        "customActionSignal" + JavaMember.DECLARED_VIEW_SUFFIX,
+                        List.of(),
+                        "games.cafecito.foundry.runtime.FoundryTypedSignal.Of1<java.lang.Long>");
+        List<CompatibilityManifest.Entry> manifest = new ArrayList<>(manifest());
+        manifest.add(
+                new CompatibilityManifest.Entry(
+                        SIGNAL_IDENTITY, CompatibilityManifest.Status.SUPPORTED, REASON));
+        List<RealizationMap.Entry> entries = new ArrayList<>(map().entries());
+        entries.add(
+                RealizationMap.Entry.realized(
+                        SIGNAL_IDENTITY,
+                        CompatibilityManifest.Status.SUPPORTED,
+                        REASON,
+                        List.of(erasedSignal, driftedSignal)));
+        List<JavaMember> members = new ArrayList<>(surface().members());
+        members.add(erasedSignal);
+        members.add(declaredSignal);
+
+        List<RealizationOracle.Violation> violations =
+                RealizationOracle.verify(
+                        RealizationMap.of(entries), manifest, GeneratedSurface.of(members));
+
+        assertEquals(
+                List.of(
+                        RealizationOracle.Kind.GENERATED_MEMBER_WITHOUT_SOURCE_ENTITY,
+                        RealizationOracle.Kind.SUPPORTED_ENTITY_WITHOUT_REALIZED_MEMBER),
+                violations.stream().map(RealizationOracle.Violation::kind).toList());
+        assertEquals(SIGNAL_IDENTITY, violations.get(1).sourceIdentity());
+        assertTrue(violations.get(1).expected().contains("<java.lang.Long>"));
     }
 
     @Test
