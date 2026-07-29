@@ -222,6 +222,47 @@ class SurfaceManifestTest {
     }
 
     @Test
+    void parseRejectsANotRealizedEntryThatStillClaimsRealizedMembers() {
+        String manifest = SurfaceManifest.from(map(), PROVENANCE).canonicalJson();
+
+        ApiInputException failure =
+                assertThrows(
+                        ApiInputException.class,
+                        () ->
+                                SurfaceManifest.parse(
+                                        manifest.replace(
+                                                "\"non_realization_reason\":"
+                                                        + "\"PROPERTY_REALIZED_BY_ENGINE_METHOD\"}",
+                                                "\"non_realization_reason\":"
+                                                        + "\"PROPERTY_REALIZED_BY_ENGINE_METHOD\","
+                                                        + "\"realized_members\":[\""
+                                                        + NODE
+                                                        + "#name:java.lang.String\"]}")));
+
+        assertTrue(failure.getMessage().contains("realized_members"));
+    }
+
+    @Test
+    void parseRejectsARealizedEntryThatStillClaimsANonRealizationReason() {
+        String manifest = SurfaceManifest.from(map(), PROVENANCE).canonicalJson();
+
+        ApiInputException failure =
+                assertThrows(
+                        ApiInputException.class,
+                        () ->
+                                SurfaceManifest.parse(
+                                        manifest.replace(
+                                                "\"namespace\":\"foundry-java\","
+                                                        + "\"realized_members\"",
+                                                "\"namespace\":\"foundry-java\","
+                                                        + "\"non_realization_reason\":"
+                                                        + "\"PROPERTY_REALIZED_BY_ENGINE_METHOD\","
+                                                        + "\"realized_members\"")));
+
+        assertTrue(failure.getMessage().contains("non_realization_reason"));
+    }
+
+    @Test
     void parseRejectsANeutralReasonThatIsNotTheMeaningOfItsBindingReason() {
         String manifest = SurfaceManifest.from(map(), PROVENANCE).canonicalJson();
 

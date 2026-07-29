@@ -529,6 +529,14 @@ public final class SurfaceManifest {
                     throw new ApiInputException(
                             path + ".non_realization_reason must be absent for a realized entity.");
                 }
+                if (detail.optional("non_realization_reason") != null) {
+                    throw new ApiInputException(
+                            path
+                                    + "."
+                                    + BINDING_SPECIFIC_KEY
+                                    + ".non_realization_reason must be absent for a realized"
+                                    + " entity.");
+                }
                 for (JsonValue member :
                         detail.require("realized_members", path + "." + BINDING_SPECIFIC_KEY)
                                 .requireArray(
@@ -543,6 +551,14 @@ public final class SurfaceManifest {
                                                     + ".realized_members[]")));
                 }
             } else {
+                if (detail.optional("realized_members") != null) {
+                    throw new ApiInputException(
+                            path
+                                    + "."
+                                    + BINDING_SPECIFIC_KEY
+                                    + ".realized_members must be absent for an entity that realizes"
+                                    + " nothing.");
+                }
                 NeutralNonRealizationReason neutral =
                         NeutralNonRealizationReason.require(
                                 object.require("non_realization_reason", path)
