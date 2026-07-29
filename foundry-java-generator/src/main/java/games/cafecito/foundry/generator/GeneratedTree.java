@@ -27,17 +27,20 @@ public final class GeneratedTree {
     private final Set<String> coveredIdentities;
     private final CompatibilityManifest manifest;
     private final Map<String, String> descriptorCatalog;
+    private final RealizationMap realizationMap;
 
     GeneratedTree(
             Map<String, String> sources,
             Set<String> coveredIdentities,
             CompatibilityManifest manifest,
-            Map<String, String> descriptorCatalog) {
+            Map<String, String> descriptorCatalog,
+            RealizationMap realizationMap) {
         this.sources = Collections.unmodifiableMap(new LinkedHashMap<>(new TreeMap<>(sources)));
         this.coveredIdentities = Collections.unmodifiableSet(new TreeSet<>(coveredIdentities));
         this.manifest = manifest;
         this.descriptorCatalog =
                 Collections.unmodifiableMap(new LinkedHashMap<>(new TreeMap<>(descriptorCatalog)));
+        this.realizationMap = realizationMap;
     }
 
     public Map<String, String> sources() {
@@ -54,6 +57,11 @@ public final class GeneratedTree {
 
     public Map<String, String> descriptorCatalog() {
         return descriptorCatalog;
+    }
+
+    /** Returns the total map from source identity to the generated Java surface it realizes. */
+    public RealizationMap realizationMap() {
+        return realizationMap;
     }
 
     public Map<String, String> sha256ByPath() {

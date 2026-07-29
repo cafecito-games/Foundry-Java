@@ -624,8 +624,73 @@ class RepositoryContractTest {
                 "655945c7347bb4ba01a9d259c2b4eac67605c5bb2e70b5d74057e31a198f80f9",
                 sha256("foundry-java-android/src/main/consumer-rules.pro"));
         assertEquals(
-                "5a4c220685253812af07c0486834f67d250ca0832716650287c72ae3b4961a64",
+                "3eca088a6d73105c49658003ac584f74cae20f26dbda86aa7254c19fcc9cd571",
                 sha256("foundry-java-runtime/api/foundry-java-runtime.api"));
+    }
+
+    @Test
+    void theEngineApiParityOracleGatesEveryPullRequestWithUploadedEvidence() throws IOException {
+        String runtimeBuild = read("foundry-java-runtime/build.gradle.kts");
+        String workflow = read(".github/workflows/ci.yml");
+        String accounting =
+                read("foundry-java-runtime/api/foundry-java-realization-accounting.txt");
+        String runtimeApi = read("foundry-java-runtime/api/foundry-java-runtime.api");
+        String oracle =
+                read(
+                        "foundry-java-generator/src/main/java/games/cafecito/foundry/generator/"
+                                + "RealizationOracle.java");
+        String vocabulary =
+                read(
+                        "foundry-java-generator/src/main/java/games/cafecito/foundry/generator/"
+                                + "NonRealizationReason.java");
+
+        assertTrue(
+                runtimeBuild.contains("tasks.register<JavaExec>(\"verifyGeneratedRealization\")"));
+        assertTrue(runtimeBuild.contains("games.cafecito.foundry.generator.RealizationVerifier"));
+        assertTrue(
+                runtimeBuild.contains("api/foundry-java-realization-accounting.txt"),
+                "the pinned per-entity accounting must gate generated realization");
+        assertEquals(
+                1,
+                occurrences(
+                        runtimeBuild,
+                        """
+                        tasks.named("check") {
+                            dependsOn(
+                                verifyRuntimeApi,
+                                verifyGeneratedRealization,
+                        """
+                                .trim()));
+        assertTrue(
+                workflow.contains("foundry-java-runtime/build/reports/foundry-realization/**"),
+                "the realization map and any diff must be uploaded as evidence");
+        assertTrue(accounting.startsWith("foundry-java-realization-summary/1\n"));
+        assertTrue(accounting.contains("realization-map-sha256 "));
+        assertTrue(accounting.contains("source-entities 57899"));
+        assertTrue(accounting.contains("realized-entities "));
+        assertTrue(accounting.contains("non-realized-entities "));
+
+        // The generated surface is accounted for per public root; the collapsed aggregate line
+        // count
+        // no longer stands in for that evidence, while one aggregate digest is retained.
+        assertFalse(runtimeApi.contains("games.cafecito.foundry.generated|public-api-lines"));
+        assertEquals(
+                1, occurrences(runtimeApi, "games.cafecito.foundry.generated|public-api-sha256"));
+        assertTrue(
+                runtimeApi.contains(
+                        "games.cafecito.foundry.generated.classes.Node|public-api-sha256"));
+        assertTrue(
+                runtimeApi.contains(
+                        "games.cafecito.foundry.generated.classes.Node|public-api-lines"));
+
+        // Approving a non-realization reason stays an explicit, reviewable vocabulary change.
+        assertEquals(6, occurrences(vocabulary, "REALIZED_"));
+        assertTrue(vocabulary.contains("Closed vocabulary"));
+        assertTrue(oracle.contains("SUPPORTED_ENTITY_WITHOUT_REALIZED_MEMBER"));
+        assertTrue(oracle.contains("GENERATED_MEMBER_WITHOUT_SOURCE_ENTITY"));
+        assertTrue(oracle.contains("MANIFEST_CLASSIFICATION_DRIFT"));
+        assertTrue(oracle.contains("UNAPPROVED_NON_REALIZATION_REASON"));
+        assertFalse(oracle.contains("Foundry-Swift"));
     }
 
     @Test

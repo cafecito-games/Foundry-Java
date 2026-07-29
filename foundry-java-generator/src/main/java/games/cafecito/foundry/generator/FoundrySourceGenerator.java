@@ -149,6 +149,7 @@ public final class FoundrySourceGenerator {
         List<PublicRoot> publicRoots = publicRoots(descriptors);
         List<NativeDispatchRow> nativeDispatchRows = nativeDispatchRows(api);
 
+        Realizations realizations = new Realizations();
         Map<String, String> sources = new TreeMap<>();
         sources.put(
                 PACKAGE_PATH + "GeneratedApiProvenance.java",
@@ -192,7 +193,10 @@ public final class FoundrySourceGenerator {
             if (sources.put(
                             path,
                             publicRootSource(
-                                    metadata, manifestSha256, List.copyOf(entry.getValue())))
+                                    metadata,
+                                    manifestSha256,
+                                    List.copyOf(entry.getValue()),
+                                    realizations))
                     != null) {
                 throw new ApiInputException(
                         "Generated public source path collision: " + path + ".");
@@ -204,14 +208,19 @@ public final class FoundrySourceGenerator {
                         descriptorCatalog.put(
                                 root.descriptor().rootIdentity(),
                                 root.packageName() + "." + root.className()));
-        return new GeneratedTree(sources, covered.keySet(), manifest, descriptorCatalog);
+        return new GeneratedTree(
+                sources,
+                covered.keySet(),
+                manifest,
+                descriptorCatalog,
+                realizationMap(covered, manifest, realizations));
     }
 
     public static void main(String[] arguments) {
-        if (arguments.length != 3) {
+        if (arguments.length != 4) {
             throw new IllegalArgumentException(
                     "Usage: FoundrySourceGenerator <api-directory> <source-output> "
-                            + "<compatibility-manifest>");
+                            + "<compatibility-manifest> <realization-map>");
         }
         Path apiDirectory = Path.of(arguments[0]);
         ApiInputs inputs = ApiInputs.load(apiDirectory);
@@ -227,37 +236,51 @@ public final class FoundrySourceGenerator {
         CompatibilityManifest manifest = CompatibilityManifest.parse(api, inputs);
         GeneratedTree generated = new FoundrySourceGenerator().generate(api, metadata, manifest);
         generated.writeReplacing(Path.of(arguments[1]));
-        Path manifestPath = Path.of(arguments[2]);
-        String manifestJson = generated.manifest().canonicalJson();
+        writeIfChanged(
+                Path.of(arguments[2]),
+                generated.manifest().canonicalJson(),
+                ".compatibility-manifest-",
+                ".json",
+                "compatibility manifest");
+        writeIfChanged(
+                Path.of(arguments[3]),
+                generated.realizationMap().render(),
+                ".realization-map-",
+                ".tsv",
+                "realization map");
+    }
+
+    /** Writes {@code content} only when it differs, so repeated generation stays byte-stable. */
+    private static void writeIfChanged(
+            Path target, String content, String prefix, String suffix, String description) {
         try {
-            if (Files.isRegularFile(manifestPath)
-                    && Files.readString(manifestPath, StandardCharsets.UTF_8)
-                            .equals(manifestJson)) {
+            if (Files.isRegularFile(target)
+                    && Files.readString(target, StandardCharsets.UTF_8).equals(content)) {
                 return;
             }
-            Path parent = manifestPath.toAbsolutePath().normalize().getParent();
+            Path parent = target.toAbsolutePath().normalize().getParent();
             if (parent == null) {
-                throw new IOException("Manifest output must have a parent.");
+                throw new IOException("Generated " + description + " must have a parent.");
             }
             Files.createDirectories(parent);
-            Path staging = Files.createTempFile(parent, ".compatibility-manifest-", ".json");
+            Path staging = Files.createTempFile(parent, prefix, suffix);
             try {
-                Files.writeString(staging, manifestJson, StandardCharsets.UTF_8);
+                Files.writeString(staging, content, StandardCharsets.UTF_8);
                 try {
                     Files.move(
                             staging,
-                            manifestPath,
+                            target,
                             StandardCopyOption.ATOMIC_MOVE,
                             StandardCopyOption.REPLACE_EXISTING);
                 } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-                    Files.move(staging, manifestPath, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING);
                 }
             } finally {
                 Files.deleteIfExists(staging);
             }
         } catch (IOException exception) {
             throw new ApiInputException(
-                    "Could not write compatibility manifest " + manifestPath + ".", exception);
+                    "Could not write " + description + " " + target + ".", exception);
         }
     }
 
@@ -1013,30 +1036,59 @@ public final class FoundrySourceGenerator {
     }
 
     private static String publicRootSource(
-            Metadata metadata, String manifestSha256, List<PublicRoot> roots) {
+            Metadata metadata,
+            String manifestSha256,
+            List<PublicRoot> roots,
+            Realizations realizations) {
         PublicRoot root = roots.get(0);
         if (root.descriptor().category().equals("utility_functions")) {
-            return utilitiesSource(metadata, manifestSha256, roots);
+            return utilitiesSource(metadata, manifestSha256, roots, realizations);
         }
         if (roots.size() != 1) {
             throw new ApiInputException(
                     "Multiple public roots unexpectedly share " + root.sourcePath() + ".");
         }
         return switch (root.descriptor().category()) {
-            case "classes" -> classRootSource(metadata, manifestSha256, root);
-            case "singletons" -> singletonRootSource(metadata, manifestSha256, root);
-            case "builtin_classes" -> builtinRootSource(metadata, manifestSha256, root);
-            case "native_structures" -> nativeStructureSource(metadata, manifestSha256, root);
-            case "builtin_class_sizes" -> builtinSizesSource(metadata, manifestSha256, root);
+            case "classes" -> classRootSource(metadata, manifestSha256, root, realizations);
+            case "singletons" -> singletonRootSource(metadata, manifestSha256, root, realizations);
+            case "builtin_classes" ->
+                    builtinRootSource(metadata, manifestSha256, root, realizations);
+            case "native_structures" ->
+                    nativeStructureSource(metadata, manifestSha256, root, realizations);
+            case "builtin_class_sizes" ->
+                    builtinSizesSource(metadata, manifestSha256, root, realizations);
             case "builtin_class_member_offsets" ->
-                    builtinOffsetsSource(metadata, manifestSha256, root);
-            default -> staticRootSource(metadata, manifestSha256, root);
+                    builtinOffsetsSource(metadata, manifestSha256, root, realizations);
+            default -> staticRootSource(metadata, manifestSha256, root, realizations);
         };
     }
 
+    /** Returns the canonical Java name of the type a public root declares. */
+    private static String ownerName(PublicRoot root) {
+        return root.packageName() + "." + root.className();
+    }
+
+    /** Removes every type argument so a declaration renders as its erased canonical type. */
+    private static String erasedType(String javaTypeText) {
+        StringBuilder erased = new StringBuilder();
+        int depth = 0;
+        for (int index = 0; index < javaTypeText.length(); index++) {
+            char character = javaTypeText.charAt(index);
+            if (character == '<') {
+                depth++;
+            } else if (character == '>') {
+                depth--;
+            } else if (depth == 0) {
+                erased.append(character);
+            }
+        }
+        return erased.toString().trim();
+    }
+
     private static String classRootSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
+        realizations.realize(root.descriptor().rootIdentity(), JavaMember.ofType(ownerName(root)));
         source.append("public class ").append(root.className());
         if (!root.parentClassName().isEmpty()) {
             source.append(" extends ").append(root.parentClassName());
@@ -1114,14 +1166,16 @@ public final class FoundrySourceGenerator {
                 .append("::new);\n")
                 .append("    }\n\n");
         appendPublicIdentityMarkers(source, root.descriptor().entities());
-        appendClassMembers(source, root.descriptor().entities().get(0));
+        appendClassMembers(
+                source, root.descriptor().entities().get(0), realizations, ownerName(root));
         return source.append("}\n").toString();
     }
 
     private static String singletonRootSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
         FoundryApi.Entity singleton = root.descriptor().entities().get(0);
+        realizations.realize(singleton.identity(), JavaMember.ofType(ownerName(root)));
         String canonicalType = requiredString(singleton.source(), "type", singleton.identity());
         String canonicalClass = PACKAGE + ".classes." + pascalCase(canonicalType);
         source.append("public final class ").append(root.className()).append(" {\n");
@@ -1148,33 +1202,38 @@ public final class FoundrySourceGenerator {
     }
 
     private static String builtinRootSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
+        realizations.realize(root.descriptor().rootIdentity(), JavaMember.ofType(ownerName(root)));
         source.append("public final class ").append(root.className()).append(" {\n");
         appendPublicIdentityMarkers(source, root.descriptor().entities());
-        appendBuiltinMembers(source, root.descriptor().entities().get(0));
+        appendBuiltinMembers(
+                source, root.descriptor().entities().get(0), realizations, ownerName(root));
         source.append("    private ").append(root.className()).append("() {}\n");
         return source.append("}\n").toString();
     }
 
     private static String staticRootSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
         if (root.descriptor().category().equals("global_enums")) {
-            return globalEnumSource(metadata, manifestSha256, root);
+            return globalEnumSource(metadata, manifestSha256, root, realizations);
         }
+        realizations.realize(root.descriptor().rootIdentity(), JavaMember.ofType(ownerName(root)));
         source.append("public final class ").append(root.className()).append(" {\n");
         appendPublicIdentityMarkers(source, root.descriptor().entities());
         if (root.descriptor().category().equals("global_constants")) {
-            appendConstant(source, root.descriptor().entities().get(0));
+            appendConstant(
+                    source, root.descriptor().entities().get(0), realizations, ownerName(root));
         }
         source.append("    private ").append(root.className()).append("() {}\n");
         return source.append("}\n").toString();
     }
 
     private static String nativeStructureSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         FoundryApi.Entity structure = root.descriptor().entities().get(0);
+        realizations.realize(structure.identity(), JavaMember.ofType(ownerName(root)));
         String format = requiredString(structure.source(), "format", structure.identity());
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
         source.append("public final class ")
@@ -1238,8 +1297,9 @@ public final class FoundrySourceGenerator {
     }
 
     private static String builtinSizesSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
+        realizations.realize(root.descriptor().rootIdentity(), JavaMember.ofType(ownerName(root)));
         source.append("public final class ")
                 .append(root.className())
                 .append(" {\n")
@@ -1270,8 +1330,9 @@ public final class FoundrySourceGenerator {
     }
 
     private static String builtinOffsetsSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
+        realizations.realize(root.descriptor().rootIdentity(), JavaMember.ofType(ownerName(root)));
         source.append("public final class ")
                 .append(root.className())
                 .append(" {\n")
@@ -1313,7 +1374,10 @@ public final class FoundrySourceGenerator {
     }
 
     private static String utilitiesSource(
-            Metadata metadata, String manifestSha256, List<PublicRoot> roots) {
+            Metadata metadata,
+            String manifestSha256,
+            List<PublicRoot> roots,
+            Realizations realizations) {
         StringBuilder source =
                 new StringBuilder(generatedHeader(metadata, manifestSha256))
                         .append("package ")
@@ -1325,7 +1389,12 @@ public final class FoundrySourceGenerator {
         for (PublicRoot root : roots) {
             appendPublicIdentityMarkers(source, root.descriptor().entities());
             appendTypedMethod(
-                    source, root.descriptor().entities().get(0), MethodStyle.STATIC_CONTEXT, false);
+                    source,
+                    root.descriptor().entities().get(0),
+                    MethodStyle.STATIC_CONTEXT,
+                    false,
+                    realizations,
+                    PACKAGE + ".Utilities");
         }
         source.append("    private Utilities() {}\n");
         return source.append("}\n").toString();
@@ -1351,7 +1420,8 @@ public final class FoundrySourceGenerator {
         source.append('\n');
     }
 
-    private static void appendClassMembers(StringBuilder source, FoundryApi.Entity root) {
+    private static void appendClassMembers(
+            StringBuilder source, FoundryApi.Entity root, Realizations realizations, String owner) {
         Set<String> generatedMethodNames =
                 root.children().stream()
                         .filter(child -> child.edge().equals("methods"))
@@ -1373,7 +1443,9 @@ public final class FoundrySourceGenerator {
                             source,
                             child,
                             isStatic ? MethodStyle.STATIC_CONTEXT : MethodStyle.INSTANCE,
-                            isVirtual);
+                            isVirtual,
+                            realizations,
+                            owner);
                 }
                 case "properties" -> {
                     String getter = optionalString(child.source(), "getter", child.identity());
@@ -1381,6 +1453,8 @@ public final class FoundrySourceGenerator {
                     appendProperty(
                             source,
                             child,
+                            realizations,
+                            owner,
                             getter != null
                                     && !generatedMethodNames.contains(
                                             javaMethodName(getter, false)),
@@ -1388,9 +1462,9 @@ public final class FoundrySourceGenerator {
                                     && !generatedMethodNames.contains(
                                             javaMethodName(setter, false)));
                 }
-                case "signals" -> appendSignal(source, child);
-                case "constants" -> appendConstant(source, child);
-                case "enums" -> appendNestedEnum(source, child);
+                case "signals" -> appendSignal(source, child, realizations, owner);
+                case "constants" -> appendConstant(source, child, realizations, owner);
+                case "enums" -> appendNestedEnum(source, child, realizations, owner);
                 default -> {
                     // All remaining identities are represented by deterministic metadata markers.
                 }
@@ -1398,7 +1472,8 @@ public final class FoundrySourceGenerator {
         }
     }
 
-    private static void appendBuiltinMembers(StringBuilder source, FoundryApi.Entity root) {
+    private static void appendBuiltinMembers(
+            StringBuilder source, FoundryApi.Entity root, Realizations realizations, String owner) {
         String foundryType = sourceName(root);
         Set<String> generatedMethodNames =
                 root.children().stream()
@@ -1413,9 +1488,18 @@ public final class FoundrySourceGenerator {
         for (FoundryApi.Entity child : root.children()) {
             switch (child.edge()) {
                 case "methods" ->
-                        appendTypedMethod(source, child, MethodStyle.BUILTIN, false, foundryType);
-                case "constructors" -> appendBuiltinConstructor(source, child, foundryType);
-                case "operators" -> appendBuiltinOperator(source, child, foundryType);
+                        appendTypedMethod(
+                                source,
+                                child,
+                                MethodStyle.BUILTIN,
+                                false,
+                                foundryType,
+                                realizations,
+                                owner);
+                case "constructors" ->
+                        appendBuiltinConstructor(source, child, foundryType, realizations, owner);
+                case "operators" ->
+                        appendBuiltinOperator(source, child, foundryType, realizations, owner);
                 case "members" -> {
                     String getterName =
                             "get"
@@ -1423,11 +1507,11 @@ public final class FoundrySourceGenerator {
                                             requiredString(
                                                     child.source(), "name", child.identity()));
                     if (!generatedMethodNames.contains(getterName)) {
-                        appendBuiltinMember(source, child, foundryType);
+                        appendBuiltinMember(source, child, foundryType, realizations, owner);
                     }
                 }
-                case "constants" -> appendConstant(source, child);
-                case "enums" -> appendNestedEnum(source, child);
+                case "constants" -> appendConstant(source, child, realizations, owner);
+                case "enums" -> appendNestedEnum(source, child, realizations, owner);
                 default -> {
                     // All remaining identities are represented by deterministic metadata markers.
                 }
@@ -1436,8 +1520,13 @@ public final class FoundrySourceGenerator {
     }
 
     private static void appendTypedMethod(
-            StringBuilder source, FoundryApi.Entity method, MethodStyle style, boolean virtual) {
-        appendTypedMethod(source, method, style, virtual, null);
+            StringBuilder source,
+            FoundryApi.Entity method,
+            MethodStyle style,
+            boolean virtual,
+            Realizations realizations,
+            String owner) {
+        appendTypedMethod(source, method, style, virtual, null, realizations, owner);
     }
 
     private static void appendTypedMethod(
@@ -1445,7 +1534,9 @@ public final class FoundrySourceGenerator {
             FoundryApi.Entity method,
             MethodStyle style,
             boolean virtual,
-            String builtinReceiverType) {
+            String builtinReceiverType,
+            Realizations realizations,
+            String owner) {
         List<FoundryApi.Entity> arguments = children(method, "arguments");
         int requiredCount = arguments.size();
         while (requiredCount > 0
@@ -1456,7 +1547,15 @@ public final class FoundrySourceGenerator {
                 argumentCount >= requiredCount;
                 argumentCount--) {
             appendTypedMethodOverload(
-                    source, method, style, virtual, arguments, argumentCount, builtinReceiverType);
+                    source,
+                    method,
+                    style,
+                    virtual,
+                    arguments,
+                    argumentCount,
+                    builtinReceiverType,
+                    realizations,
+                    owner);
         }
     }
 
@@ -1467,7 +1566,10 @@ public final class FoundrySourceGenerator {
             boolean virtual,
             List<FoundryApi.Entity> arguments,
             int argumentCount,
-            String builtinReceiverType) {
+            String builtinReceiverType,
+            Realizations realizations,
+            String owner) {
+        List<String> parameterTypes = new ArrayList<>();
         String foundryName = requiredString(method.source(), "name", method.identity());
         String methodName = javaMethodName(foundryName, virtual);
         String returnFoundryType = returnFoundryType(method);
@@ -1491,9 +1593,11 @@ public final class FoundrySourceGenerator {
         boolean needsContext = style == MethodStyle.STATIC_CONTEXT || style == MethodStyle.BUILTIN;
         if (needsContext) {
             source.append("games.cafecito.foundry.runtime.FoundryBindingContext context");
+            parameterTypes.add("games.cafecito.foundry.runtime.FoundryBindingContext");
         }
         if (style == MethodStyle.BUILTIN) {
             source.append(", ").append(javaType(builtinReceiverType)).append(" receiver");
+            parameterTypes.add(erasedType(javaType(builtinReceiverType)));
         }
         for (int index = 0; index < argumentCount; index++) {
             if (needsContext || index > 0) {
@@ -1507,6 +1611,7 @@ public final class FoundrySourceGenerator {
                             javaParameterName(
                                     requiredString(
                                             argument.source(), "name", argument.identity())));
+            parameterTypes.add(erasedType(javaType(foundryType)));
         }
         boolean vararg = optionalBoolean(method.source(), "is_vararg");
         if (vararg) {
@@ -1514,8 +1619,12 @@ public final class FoundrySourceGenerator {
                 source.append(", ");
             }
             source.append("games.cafecito.foundry.types.Variant... varargs");
+            parameterTypes.add("games.cafecito.foundry.types.Variant[]");
         }
         source.append(") {\n");
+        realizations.realize(
+                method.identity(),
+                JavaMember.ofMethod(owner, methodName, parameterTypes, erasedType(returnJavaType)));
         appendInvocation(
                 source,
                 method,
@@ -1582,8 +1691,25 @@ public final class FoundrySourceGenerator {
     }
 
     private static void appendBuiltinConstructor(
-            StringBuilder source, FoundryApi.Entity constructor, String builtinFoundryType) {
+            StringBuilder source,
+            FoundryApi.Entity constructor,
+            String builtinFoundryType,
+            Realizations realizations,
+            String owner) {
         List<FoundryApi.Entity> arguments = children(constructor, "arguments");
+        List<String> parameterTypes = new ArrayList<>();
+        parameterTypes.add("games.cafecito.foundry.runtime.FoundryBindingContext");
+        for (FoundryApi.Entity argument : arguments) {
+            parameterTypes.add(
+                    erasedType(
+                            javaType(
+                                    requiredString(
+                                            argument.source(), "type", argument.identity()))));
+        }
+        realizations.realize(
+                constructor.identity(),
+                JavaMember.ofMethod(
+                        owner, "create", parameterTypes, erasedType(javaType(builtinFoundryType))));
         source.append("    /** Constructs a ")
                 .append(javaStringBody(builtinFoundryType))
                 .append(". */\n")
@@ -1623,7 +1749,11 @@ public final class FoundrySourceGenerator {
     }
 
     private static void appendBuiltinOperator(
-            StringBuilder source, FoundryApi.Entity operator, String foundryType) {
+            StringBuilder source,
+            FoundryApi.Entity operator,
+            String foundryType,
+            Realizations realizations,
+            String owner) {
         String operatorName = requiredString(operator.source(), "name", operator.identity());
         String methodName =
                 switch (operatorName) {
@@ -1667,10 +1797,18 @@ public final class FoundrySourceGenerator {
                 .append(javaType(foundryType))
                 .append(" receiver");
         String rightType = null;
+        List<String> parameterTypes = new ArrayList<>();
+        parameterTypes.add("games.cafecito.foundry.runtime.FoundryBindingContext");
+        parameterTypes.add(erasedType(javaType(foundryType)));
         if (rightTypeValue != null) {
             rightType = rightTypeValue.requireString(operator.identity() + ".right_type");
             source.append(", ").append(javaType(rightType)).append(" right");
+            parameterTypes.add(erasedType(javaType(rightType)));
         }
+        realizations.realize(
+                operator.identity(),
+                JavaMember.ofMethod(
+                        owner, methodName, parameterTypes, erasedType(javaType(returnType))));
         source.append(") {\n")
                 .append("        var __foundryGeneratedCallArguments = new java.util.ArrayList<")
                 .append("games.cafecito.foundry.types.Variant>();\n")
@@ -1692,12 +1830,18 @@ public final class FoundrySourceGenerator {
     private static void appendProperty(
             StringBuilder source,
             FoundryApi.Entity property,
+            Realizations realizations,
+            String owner,
             boolean generateGetter,
             boolean generateSetter) {
         String name = requiredString(property.source(), "name", property.identity());
         String type = requiredString(property.source(), "type", property.identity());
         String suffix = pascalCase(name);
         if (generateGetter) {
+            realizations.realize(
+                    property.identity(),
+                    JavaMember.ofMethod(
+                            owner, "get" + suffix, List.of(), erasedType(javaType(type))));
             source.append("    /** Gets ")
                     .append(javaStringBody(name))
                     .append(". */\n")
@@ -1713,6 +1857,10 @@ public final class FoundrySourceGenerator {
             source.append("    }\n\n");
         }
         if (generateSetter) {
+            realizations.realize(
+                    property.identity(),
+                    JavaMember.ofMethod(
+                            owner, "set" + suffix, List.of(erasedType(javaType(type))), "void"));
             source.append("    /** Sets ")
                     .append(javaStringBody(name))
                     .append(". */\n")
@@ -1732,7 +1880,11 @@ public final class FoundrySourceGenerator {
         }
     }
 
-    private static void appendSignal(StringBuilder source, FoundryApi.Entity signal) {
+    private static void appendSignal(
+            StringBuilder source,
+            FoundryApi.Entity signal,
+            Realizations realizations,
+            String owner) {
         String name = requiredString(signal.source(), "name", signal.identity());
         List<FoundryApi.Entity> arguments = children(signal, "arguments");
         int arity = arguments.size();
@@ -1740,6 +1892,13 @@ public final class FoundrySourceGenerator {
             throw new ApiInputException(
                     "Generated typed signals support at most five arguments: " + signal.identity());
         }
+        realizations.realize(
+                signal.identity(),
+                JavaMember.ofMethod(
+                        owner,
+                        camelCase(name) + "Signal",
+                        List.of(),
+                        "games.cafecito.foundry.runtime.FoundryTypedSignal.Of" + arity));
         source.append("    /** Gets the ")
                 .append(javaStringBody(name))
                 .append(" signal. */\n")
@@ -1780,9 +1939,22 @@ public final class FoundrySourceGenerator {
     }
 
     private static void appendBuiltinMember(
-            StringBuilder source, FoundryApi.Entity member, String foundryType) {
+            StringBuilder source,
+            FoundryApi.Entity member,
+            String foundryType,
+            Realizations realizations,
+            String owner) {
         String name = requiredString(member.source(), "name", member.identity());
         String type = requiredString(member.source(), "type", member.identity());
+        realizations.realize(
+                member.identity(),
+                JavaMember.ofMethod(
+                        owner,
+                        "get" + pascalCase(name),
+                        List.of(
+                                "games.cafecito.foundry.runtime.FoundryBindingContext",
+                                erasedType(javaType(foundryType))),
+                        erasedType(javaType(type))));
         source.append("    /** Gets ")
                 .append(javaStringBody(name))
                 .append(". */\n")
@@ -1802,7 +1974,11 @@ public final class FoundrySourceGenerator {
         source.append("    }\n\n");
     }
 
-    private static void appendConstant(StringBuilder source, FoundryApi.Entity constant) {
+    private static void appendConstant(
+            StringBuilder source,
+            FoundryApi.Entity constant,
+            Realizations realizations,
+            String owner) {
         String name = requiredString(constant.source(), "name", constant.identity());
         JsonValue raw = constant.source().optional("value");
         String value = raw == null ? "0" : raw.canonicalJson().replace("\"", "");
@@ -1811,12 +1987,20 @@ public final class FoundrySourceGenerator {
                 typeValue == null ? "int" : typeValue.requireString(constant.identity() + ".type");
         source.append("    /** Foundry constant ").append(javaStringBody(name)).append(". */\n");
         if (foundryType.equals("int") && value.matches("-?[0-9]+")) {
+            realizations.realize(
+                    constant.identity(), JavaMember.ofField(owner, javaConstant(name), "long"));
             source.append("    public static final long ")
                     .append(javaConstant(name))
                     .append(" = ")
                     .append(value)
                     .append("L;\n\n");
         } else {
+            realizations.realize(
+                    constant.identity(),
+                    JavaMember.ofField(
+                            owner,
+                            javaConstant(name),
+                            "games.cafecito.foundry.runtime.FoundryConstant"));
             source.append("    public static final games.cafecito.foundry.runtime.FoundryConstant<")
                     .append(javaType(foundryType))
                     .append("> ")
@@ -1829,9 +2013,15 @@ public final class FoundrySourceGenerator {
         }
     }
 
-    private static void appendNestedEnum(StringBuilder source, FoundryApi.Entity enumEntity) {
+    private static void appendNestedEnum(
+            StringBuilder source,
+            FoundryApi.Entity enumEntity,
+            Realizations realizations,
+            String owner) {
         String name =
                 pascalCase(requiredString(enumEntity.source(), "name", enumEntity.identity()));
+        String nestedOwner = owner + "." + name;
+        realizations.realize(enumEntity.identity(), JavaMember.ofType(nestedOwner));
         if (optionalBoolean(enumEntity.source(), "is_bitfield")) {
             source.append("    /** Bitfield values for ")
                     .append(name)
@@ -1840,7 +2030,7 @@ public final class FoundrySourceGenerator {
                     .append(name)
                     .append(" {\n");
             for (FoundryApi.Entity value : children(enumEntity, "values")) {
-                appendConstant(source, value);
+                appendConstant(source, value, realizations, nestedOwner);
             }
             source.append("        private ").append(name).append("() {}\n    }\n\n");
             return;
@@ -1854,6 +2044,12 @@ public final class FoundrySourceGenerator {
         List<FoundryApi.Entity> values = children(enumEntity, "values");
         for (int index = 0; index < values.size(); index++) {
             FoundryApi.Entity value = values.get(index);
+            realizations.realize(
+                    value.identity(),
+                    JavaMember.ofField(
+                            nestedOwner,
+                            javaConstant(requiredString(value.source(), "name", value.identity())),
+                            nestedOwner));
             source.append("        ")
                     .append(javaConstant(requiredString(value.source(), "name", value.identity())))
                     .append('(')
@@ -1866,8 +2062,9 @@ public final class FoundrySourceGenerator {
     }
 
     private static String globalEnumSource(
-            Metadata metadata, String manifestSha256, PublicRoot root) {
+            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
         FoundryApi.Entity enumEntity = root.descriptor().entities().get(0);
+        realizations.realize(enumEntity.identity(), JavaMember.ofType(ownerName(root)));
         StringBuilder source =
                 new StringBuilder(generatedHeader(metadata, manifestSha256))
                         .append("package ")
@@ -1883,7 +2080,7 @@ public final class FoundrySourceGenerator {
                     .append(name)
                     .append(" {\n");
             for (FoundryApi.Entity value : children(enumEntity, "values")) {
-                appendConstant(source, value);
+                appendConstant(source, value, realizations, ownerName(root));
             }
             return source.append("    private ").append(name).append("() {}\n}\n").toString();
         }
@@ -1897,6 +2094,12 @@ public final class FoundrySourceGenerator {
         List<FoundryApi.Entity> values = children(enumEntity, "values");
         for (int index = 0; index < values.size(); index++) {
             FoundryApi.Entity value = values.get(index);
+            realizations.realize(
+                    value.identity(),
+                    JavaMember.ofField(
+                            ownerName(root),
+                            javaConstant(requiredString(value.source(), "name", value.identity())),
+                            ownerName(root)));
             source.append("    ")
                     .append(javaConstant(requiredString(value.source(), "name", value.identity())))
                     .append('(')
@@ -2714,6 +2917,95 @@ public final class FoundrySourceGenerator {
                     "Compatibility manifest "
                             + field
                             + " does not match verified generation metadata.");
+        }
+    }
+
+    /**
+     * Builds the total realization map: every covered source identity resolves either to the Java
+     * members it realized during emission or to one approved non-realization reason. An identity
+     * that resolves to neither fails generation instead of widening the approved vocabulary.
+     */
+    private static RealizationMap realizationMap(
+            Map<String, FoundryApi.Entity> covered,
+            CompatibilityManifest manifest,
+            Realizations realizations) {
+        Map<String, CompatibilityManifest.Entry> classifications = new TreeMap<>();
+        for (CompatibilityManifest.Entry entry : manifest.entries()) {
+            classifications.put(entry.sourceIdentity(), entry);
+        }
+        List<RealizationMap.Entry> entries = new ArrayList<>();
+        for (var covering : covered.entrySet()) {
+            String identity = covering.getKey();
+            CompatibilityManifest.Entry classified = classifications.get(identity);
+            if (classified == null) {
+                throw new ApiInputException(
+                        "Compatibility classification is absent for " + identity + ".");
+            }
+            List<JavaMember> members = realizations.members(identity);
+            entries.add(
+                    members.isEmpty()
+                            ? RealizationMap.Entry.notRealized(
+                                    identity,
+                                    classified.status(),
+                                    classified.reasonCode(),
+                                    nonRealizationReason(covering.getValue()).name())
+                            : RealizationMap.Entry.realized(
+                                    identity,
+                                    classified.status(),
+                                    classified.reasonCode(),
+                                    members));
+        }
+        return RealizationMap.of(entries);
+    }
+
+    /**
+     * Resolves why an accepted source entity realizes no Java member of its own. Only the closed
+     * approved vocabulary is reachable; an unexplained entity fails generation.
+     */
+    private static NonRealizationReason nonRealizationReason(FoundryApi.Entity entity) {
+        String identity = entity.identity();
+        boolean layoutTable = identity.startsWith("builtin_class_member_offsets/");
+        return switch (entity.edge()) {
+            case "arguments" ->
+                    identity.contains("/signals/")
+                            ? NonRealizationReason.SIGNAL_ARGUMENT_REALIZED_IN_SIGNAL_TYPE
+                            : NonRealizationReason.ARGUMENT_REALIZED_IN_MEMBER_SIGNATURE;
+            case "return_value" -> NonRealizationReason.RETURN_VALUE_REALIZED_IN_MEMBER_SIGNATURE;
+            case "properties" -> NonRealizationReason.PROPERTY_REALIZED_BY_ENGINE_METHOD;
+            case "sizes" -> NonRealizationReason.LAYOUT_TABLE_ENTRY_REALIZED_BY_QUERY_API;
+            case "classes" -> {
+                if (!layoutTable) {
+                    throw unexplained(entity);
+                }
+                yield NonRealizationReason.LAYOUT_TABLE_ENTRY_REALIZED_BY_QUERY_API;
+            }
+            case "members" ->
+                    layoutTable
+                            ? NonRealizationReason.LAYOUT_TABLE_ENTRY_REALIZED_BY_QUERY_API
+                            : NonRealizationReason.BUILTIN_MEMBER_REALIZED_BY_ENGINE_METHOD;
+            default -> throw unexplained(entity);
+        };
+    }
+
+    private static ApiInputException unexplained(FoundryApi.Entity entity) {
+        return new ApiInputException(
+                "Generated surface neither realizes nor explains source identity "
+                        + entity.identity()
+                        + " (edge "
+                        + entity.edge()
+                        + ").");
+    }
+
+    /** Collects the Java members each source identity realizes while sources are emitted. */
+    private static final class Realizations {
+        private final Map<String, List<JavaMember>> members = new TreeMap<>();
+
+        void realize(String sourceIdentity, JavaMember member) {
+            members.computeIfAbsent(sourceIdentity, identity -> new ArrayList<>()).add(member);
+        }
+
+        List<JavaMember> members(String sourceIdentity) {
+            return List.copyOf(members.getOrDefault(sourceIdentity, List.of()));
         }
     }
 

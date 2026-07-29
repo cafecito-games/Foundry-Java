@@ -12,7 +12,11 @@ actual=$(mktemp "${TMPDIR:-/tmp}/foundry-java-runtime-api.XXXXXX")
 class_names=$(mktemp "${TMPDIR:-/tmp}/foundry-java-runtime-api-classes.XXXXXX")
 inventory=$(mktemp "${TMPDIR:-/tmp}/foundry-java-runtime-api-inventory.XXXXXX")
 generated_inventory=$(mktemp "${TMPDIR:-/tmp}/foundry-java-generated-api.XXXXXX")
-trap 'rm -f "$actual" "$class_names" "$inventory" "$generated_inventory"' EXIT
+root_inventory=$(mktemp -d "${TMPDIR:-/tmp}/foundry-java-generated-roots.XXXXXX")
+root_digests=$(mktemp "${TMPDIR:-/tmp}/foundry-java-generated-root-digests.XXXXXX")
+root_counts=$(mktemp "${TMPDIR:-/tmp}/foundry-java-generated-root-counts.XXXXXX")
+trap 'rm -rf "$actual" "$class_names" "$inventory" "$generated_inventory" "$root_inventory" \
+  "$root_digests" "$root_counts"' EXIT
 
 if [[ ! -d "$classes_directory" ]]; then
   echo "Runtime classes directory does not exist: $classes_directory" >&2
@@ -56,11 +60,44 @@ xargs -n 200 javap -public -classpath "$classes_directory" <"$class_names" |
 
 grep '^games\.cafecito\.foundry\.generated\.' "$inventory" >"$generated_inventory"
 grep -v '^games\.cafecito\.foundry\.generated\.' "$inventory" >"$actual"
+# The generated surface is accounted for per public root rather than as one opaque pair of
+# aggregate lines, so a dropped, renamed, or mistyped member identifies the root it moved in. The
+# aggregate digest is retained for cheap whole-surface change detection, and the realization oracle
+# supplies the per-entity accounting.
 generated_sha256=$(shasum -a 256 "$generated_inventory" | awk '{print $1}')
-generated_lines=$(wc -l <"$generated_inventory" | tr -d '[:space:]')
+awk -F'|' -v directory="$root_inventory" '
+  {
+    root = $1
+    sub(/\$.*/, "", root)
+    if (root != previous) {
+      if (previous != "") {
+        close(directory "/" previous)
+      }
+      previous = root
+    }
+    print $0 >> (directory "/" root)
+  }
+' "$generated_inventory"
 {
-  printf 'games.cafecito.foundry.generated|public-api-lines %s\n' "$generated_lines"
   printf 'games.cafecito.foundry.generated|public-api-sha256 %s\n' "$generated_sha256"
+  if [[ -n "$(ls -A "$root_inventory")" ]]; then
+    shasum -a 256 "$root_inventory"/* >"$root_digests"
+    wc -l "$root_inventory"/* >"$root_counts"
+    awk -v inventory="$root_inventory" '
+      FNR == NR {
+        path = $2
+        sub(inventory "/", "", path)
+        digest[path] = $1
+        next
+      }
+      $2 != "total" && $2 != "" {
+        path = $2
+        sub(inventory "/", "", path)
+        printf "%s|public-api-lines %s\n", path, $1
+        printf "%s|public-api-sha256 %s\n", path, digest[path]
+      }
+    ' "$root_digests" "$root_counts"
+  fi
 } >>"$actual"
 LC_ALL=C sort -o "$actual" "$actual"
 

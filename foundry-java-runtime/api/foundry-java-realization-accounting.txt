@@ -1,0 +1,23 @@
+foundry-java-realization-summary/1
+realization-map-sha256 87c7a07e168b06b02b29c994c82f0ce21acc9060da28224709d150f3babf701d
+source-entities 57899
+realized-entities 26671
+non-realized-entities 31228
+realized-members 28463
+generated-surface-members 35585
+structural-surface-members 7122
+category builtin_class_member_offsets 252
+category builtin_class_sizes 164
+category builtin_classes 3333
+category classes 53235
+category global_constants 11
+category global_enums 542
+category native_structures 14
+category singletons 39
+category utility_functions 309
+reason ARGUMENT_REALIZED_IN_MEMBER_SIGNATURE 17377
+reason BUILTIN_MEMBER_REALIZED_BY_ENGINE_METHOD 1
+reason LAYOUT_TABLE_ENTRY_REALIZED_BY_QUERY_API 408
+reason PROPERTY_REALIZED_BY_ENGINE_METHOD 4024
+reason RETURN_VALUE_REALIZED_IN_MEMBER_SIGNATURE 9021
+reason SIGNAL_ARGUMENT_REALIZED_IN_SIGNAL_TYPE 397
