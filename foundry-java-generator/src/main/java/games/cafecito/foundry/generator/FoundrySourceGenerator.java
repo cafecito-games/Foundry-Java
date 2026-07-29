@@ -217,10 +217,11 @@ public final class FoundrySourceGenerator {
     }
 
     public static void main(String[] arguments) {
-        if (arguments.length != 4) {
+        if (arguments.length != 6) {
             throw new IllegalArgumentException(
                     "Usage: FoundrySourceGenerator <api-directory> <source-output> "
-                            + "<compatibility-manifest> <realization-map>");
+                            + "<compatibility-manifest> <realization-map> <surface-manifest> "
+                            + "<binding-version>");
         }
         Path apiDirectory = Path.of(arguments[0]);
         ApiInputs inputs = ApiInputs.load(apiDirectory);
@@ -248,6 +249,20 @@ public final class FoundrySourceGenerator {
                 ".realization-map-",
                 ".tsv",
                 "realization map");
+        writeIfChanged(
+                Path.of(arguments[4]),
+                SurfaceManifest.from(
+                                generated.realizationMap(),
+                                new SurfaceManifest.Provenance(
+                                        inputs.provenance().apiVersion(),
+                                        inputs.extensionApiSha256(),
+                                        arguments[5],
+                                        inputs.provenance().generatorVersion(),
+                                        inputs.provenance().bridgeContractVersion()))
+                        .canonicalJson(),
+                ".surface-manifest-",
+                ".json",
+                "binding-neutral surface manifest");
     }
 
     /** Writes {@code content} only when it differs, so repeated generation stays byte-stable. */

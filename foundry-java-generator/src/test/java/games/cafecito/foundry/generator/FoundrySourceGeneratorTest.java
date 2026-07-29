@@ -44,6 +44,7 @@ class FoundrySourceGeneratorTest {
                     "0.1.0-alpha.8",
                     "1",
                     "1");
+    private static final String BINDING_VERSION = "0.1.0-SNAPSHOT";
     private static final Pattern MANIFEST_HASH =
             Pattern.compile(
                     "[0-9a-f]{64}(?=\";\\n    public static final String GENERATOR_VERSION)");
@@ -827,29 +828,28 @@ class FoundrySourceGeneratorTest {
         Path output = temporaryDirectory.resolve("cli-output");
         Path manifestOutput = temporaryDirectory.resolve("manifest-output.json");
         Path realizationOutput = temporaryDirectory.resolve("realization-map.tsv");
+        Path surfaceManifestOutput = temporaryDirectory.resolve("surface-manifest.json");
+        String[] cliArguments = {
+            acceptedDirectory.toString(),
+            output.toString(),
+            manifestOutput.toString(),
+            realizationOutput.toString(),
+            surfaceManifestOutput.toString(),
+            BINDING_VERSION
+        };
 
-        FoundrySourceGenerator.main(
-                new String[] {
-                    acceptedDirectory.toString(),
-                    output.toString(),
-                    manifestOutput.toString(),
-                    realizationOutput.toString()
-                });
+        FoundrySourceGenerator.main(cliArguments);
         Map<String, String> firstHashes = treeHashes(output);
         String firstRealizationMap = Files.readString(realizationOutput);
-        FoundrySourceGenerator.main(
-                new String[] {
-                    acceptedDirectory.toString(),
-                    output.toString(),
-                    manifestOutput.toString(),
-                    realizationOutput.toString()
-                });
+        String firstSurfaceManifest = Files.readString(surfaceManifestOutput);
+        FoundrySourceGenerator.main(cliArguments);
 
         assertEquals(
                 Files.readString(acceptedDirectory.resolve("compatibility-manifest.json")),
                 Files.readString(manifestOutput));
         assertEquals(firstHashes, treeHashes(output));
         assertEquals(firstRealizationMap, Files.readString(realizationOutput));
+        assertEquals(firstSurfaceManifest, Files.readString(surfaceManifestOutput));
 
         ApiInputs inputs = ApiInputs.load(acceptedDirectory);
         FoundryApi api = FoundryApiParser.parse(inputs);
@@ -1473,6 +1473,110 @@ class FoundrySourceGeneratorTest {
 
     private static CompatibilityManifest supportedManifest(FoundryApi api) {
         return supportedManifest(api, "1", "1");
+    }
+
+    @Test
+    void theAcceptedSurfaceManifestIsDerivedFromTheMapAndReadableByANeutralConsumer()
+            throws IOException {
+        Path acceptedDirectory =
+                Path.of(System.getProperty("user.dir")).resolve("../api/current").normalize();
+        ApiInputs inputs = ApiInputs.load(acceptedDirectory);
+        RealizationMap map = generateAcceptedApi().realizationMap();
+        SurfaceManifest.Provenance provenance =
+                new SurfaceManifest.Provenance(
+                        inputs.provenance().apiVersion(),
+                        inputs.extensionApiSha256(),
+                        BINDING_VERSION,
+                        inputs.provenance().generatorVersion(),
+                        inputs.provenance().bridgeContractVersion());
+
+        SurfaceManifest manifest = SurfaceManifest.from(map, provenance);
+        String rendering = manifest.canonicalJson();
+        SurfaceManifest reparsed = SurfaceManifest.parse(rendering);
+
+        assertEquals(List.of(), reparsed.disagreementsWith(map));
+        assertEquals(List.of(), RealizationVerifier.provenanceDrift(reparsed, provenance));
+        assertEquals(rendering, reparsed.canonicalJson());
+        assertEquals(map.sha256(), manifest.realizationMapSha256());
+
+        NeutralSurfaceManifestConsumer.Coverage coverage =
+                NeutralSurfaceManifestConsumer.read(rendering).coverage();
+        Map<String, String> accounting = pinnedRealizationAccounting();
+
+        assertEquals(SurfaceManifest.BINDING_ID, coverage.bindingId());
+        assertEquals(
+                Integer.parseInt(accounting.get("source-entities")), coverage.coveredEntities());
+        assertEquals(
+                Integer.parseInt(accounting.get("realized-entities")), coverage.realizedEntities());
+        assertEquals(
+                Integer.parseInt(accounting.get("non-realized-entities")),
+                coverage.nonRealizationReasonCounts().values().stream()
+                        .mapToInt(Integer::intValue)
+                        .sum());
+        assertEquals(
+                NeutralNonRealizationReason.approved().stream()
+                        .map(Enum::name)
+                        .collect(Collectors.toSet()),
+                coverage.nonRealizationReasonCounts().keySet());
+    }
+
+    @Test
+    void aSurfaceManifestThatDisagreesWithTheAcceptedMapIsRejected() throws IOException {
+        Path acceptedDirectory =
+                Path.of(System.getProperty("user.dir")).resolve("../api/current").normalize();
+        ApiInputs inputs = ApiInputs.load(acceptedDirectory);
+        RealizationMap map = generateAcceptedApi().realizationMap();
+        SurfaceManifest.Provenance provenance =
+                new SurfaceManifest.Provenance(
+                        inputs.provenance().apiVersion(),
+                        inputs.extensionApiSha256(),
+                        BINDING_VERSION,
+                        inputs.provenance().generatorVersion(),
+                        inputs.provenance().bridgeContractVersion());
+        RealizationMap.Entry first = map.entries().get(0);
+
+        SurfaceManifest fromADifferentMap =
+                SurfaceManifest.from(
+                        RealizationMap.of(
+                                map.entries().stream()
+                                        .filter(entry -> !entry.equals(first))
+                                        .toList()),
+                        provenance);
+
+        List<String> disagreements = fromADifferentMap.disagreementsWith(map);
+        assertFalse(disagreements.isEmpty());
+        assertTrue(
+                disagreements.stream()
+                        .allMatch(message -> message.startsWith(SurfaceManifest.DISAGREEMENT)));
+        assertTrue(
+                disagreements.stream()
+                        .anyMatch(message -> message.contains(first.sourceIdentity())));
+        assertFalse(
+                RealizationVerifier.provenanceDrift(
+                                SurfaceManifest.from(map, provenance),
+                                new SurfaceManifest.Provenance(
+                                        inputs.provenance().apiVersion(),
+                                        inputs.extensionApiSha256(),
+                                        "9.9.9",
+                                        inputs.provenance().generatorVersion(),
+                                        inputs.provenance().bridgeContractVersion()))
+                        .isEmpty());
+    }
+
+    private static Map<String, String> pinnedRealizationAccounting() throws IOException {
+        Path baseline =
+                Path.of(System.getProperty("user.dir"))
+                        .resolve(
+                                "../foundry-java-runtime/api/foundry-java-realization-accounting.txt")
+                        .normalize();
+        Map<String, String> pinned = new LinkedHashMap<>();
+        for (String line : Files.readString(baseline, StandardCharsets.UTF_8).split("\n", -1)) {
+            String[] fields = line.split(" ", 2);
+            if (fields.length == 2) {
+                pinned.put(fields[0], fields[1]);
+            }
+        }
+        return pinned;
     }
 
     private static GeneratedTree generateAcceptedApi() throws IOException {

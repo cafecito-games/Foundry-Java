@@ -137,6 +137,22 @@ reason. The oracle writes the complete realization map, the accounting, any acco
 violations to `foundry-java-runtime/build/reports/foundry-realization/`, which continuous
 integration uploads as `foundry-java-check-evidence` on success and on failure alike.
 
+## Binding-neutral surface manifest
+
+Generation restates the realization map as a versioned, binding-neutral surface manifest so
+cross-binding parity can later be verified in one place without any binding depending on another.
+`:foundry-java-runtime:generateFoundryApi` emits it to
+`foundry-java-runtime/build/generated/foundryApi/foundry-java-surface-manifest.json`, and
+`:foundry-java-runtime:verifyGeneratedRealization` verifies it against the map and republishes it in
+the realization report directory that continuous integration uploads. The manifest is derived from
+the map and never synthesized independently; a manifest that disagrees with the map, or whose
+provenance disagrees with the accepted inputs, fails the check. Its neutral portion carries the
+schema version, the engine API version and SHA-256, the binding identity and version, and the
+generator and bridge-contract versions, plus one entry per `source_identity`; Java detail is confined
+to optional, namespaced `binding_specific` objects a consumer may ignore entirely. See
+[`docs/binding-neutral-surface-manifest.md`](binding-neutral-surface-manifest.md) for the schema, the
+`schema_version` compatibility rule, and the intended cross-binding use.
+
 Tests generate into two independent clean directories and byte-compare every relative path and
 file hash. They repeat from canonical reordered input, regenerate the complete accepted API, verify
 the checked-in manifest byte-for-byte, and compile all 1,279 generated Java sources with the
