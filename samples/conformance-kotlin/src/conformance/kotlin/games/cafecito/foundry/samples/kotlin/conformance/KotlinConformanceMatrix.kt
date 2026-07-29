@@ -519,10 +519,14 @@ class KotlinLifecycleConformanceTest {
         }
 
     private fun awaitCleanerRelease(handle: Long) {
-        repeat(200) {
+        repeat(200) { attempt ->
             if (engine.releaseCount(handle) == 1L) {
                 return
             }
+            // Allocation pressure plus an explicit hint is the only portable way to make a
+            // Cleaner-backed fallback observable; the assertion below still demands the exact
+            // documented outcome of one release.
+            ByteArray(1 shl 20)[0] = attempt.toByte()
             System.gc()
             Thread.sleep(10L)
         }

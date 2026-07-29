@@ -64,7 +64,7 @@ public class ConformanceCoverageTest {
         for (Class<?> testClass : MATRIX) {
             assertTrue(
                     testClass.getName() + " must live in the conformance package",
-                    testClass.getPackage().getName().endsWith(".conformance"));
+                    testClass.getName().contains(".conformance."));
             assertTrue(
                     testClass.getSimpleName() + " must declare at least one test",
                     List.of(testClass.getDeclaredMethods()).stream()

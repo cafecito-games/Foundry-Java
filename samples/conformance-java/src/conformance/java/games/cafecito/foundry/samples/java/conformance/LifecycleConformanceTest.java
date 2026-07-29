@@ -234,6 +234,11 @@ public class LifecycleConformanceTest {
     private void awaitCleanerRelease(long handle) throws InterruptedException {
         AtomicBoolean released = new AtomicBoolean();
         for (int attempt = 0; attempt < 200 && !released.get(); attempt++) {
+            // Allocation pressure plus an explicit hint is the only portable way to make a
+            // Cleaner-backed fallback observable; the assertion below still demands the exact
+            // documented outcome of one release.
+            byte[] pressure = new byte[1 << 20];
+            pressure[0] = (byte) attempt;
             System.gc();
             Thread.sleep(10L);
             released.set(engine.releaseCount(handle) == 1L);
