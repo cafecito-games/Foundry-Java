@@ -14,9 +14,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ApiInputsTest {
-    private static final String COMMIT = "3923e920b2fb6db68f82dfdab2bf7b1df125492d";
+    private static final String COMMIT = "b9a5e66c21f8f7b707a9e526ca20557485c53227";
     private static final String ARCHIVE_HASH =
-            "5e8dd7cea34051297c2ca89ec05fc2d50ee921b156d220b6007cc274d769beec";
+            "b6f44138e71e2b7c0a863457a26734fb2af812f080845fbc1d8a2fca3d2c1c44";
 
     @TempDir Path temporaryDirectory;
 
@@ -29,7 +29,7 @@ class ApiInputsTest {
 
         assertEquals(COMMIT, inputs.provenance().foundryCommit());
         assertEquals(
-                "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51",
+                "48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b",
                 inputs.extensionApiSha256());
         assertEquals(
                 "ecf9a1f1e6b2642385a521725313efb2baea8b81fcac9dc837f55a4b90498991",
@@ -43,13 +43,13 @@ class ApiInputsTest {
         ApiInputs inputs = ApiInputs.load(apiDirectory);
 
         assertEquals(COMMIT, inputs.provenance().foundryCommit());
-        assertEquals("0.1.0-alpha.8", inputs.provenance().foundryVersion());
-        assertEquals("0.1.0-alpha.8", inputs.provenance().apiVersion());
+        assertEquals("0.1.0-alpha.14", inputs.provenance().foundryVersion());
+        assertEquals("0.1.0-alpha.14", inputs.provenance().apiVersion());
         assertEquals("0.1.0", inputs.provenance().abiMinimum());
         assertEquals("1", inputs.provenance().generatorVersion());
         assertEquals("1", inputs.provenance().bridgeContractVersion());
         assertEquals(
-                "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.8",
+                "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.14",
                 inputs.provenance().releaseUrl());
         assertEquals("MIT", inputs.provenance().license());
         assertEquals("{\"header\":{}}\n", inputs.extensionApiJson());
@@ -97,8 +97,8 @@ class ApiInputsTest {
                 provenance,
                 Files.readString(provenance)
                         .replace(
-                                "\"foundry_version\": \"0.1.0-alpha.8\"",
-                                "\"foundry_version\": \"0.1.0-alpha.8\\nInjected\""),
+                                "\"foundry_version\": \"0.1.0-alpha.14\"",
+                                "\"foundry_version\": \"0.1.0-alpha.14\\nInjected\""),
                 StandardCharsets.UTF_8);
 
         ApiInputException failure =
@@ -177,16 +177,16 @@ class ApiInputsTest {
                 {
                   "schema_version": 1,
                   "source_repository": "https://github.com/cafecito-games/Foundry",
-                  "source_release": "v0.1.0-alpha.8",
-                  "release_url": "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.8",
-                  "archive_url": "https://github.com/cafecito-games/Foundry/releases/download/v0.1.0-alpha.8/Foundry_v0.1.0-alpha.8_api.zip",
+                  "source_release": "v0.1.0-alpha.14",
+                  "release_url": "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.14",
+                  "archive_url": "https://github.com/cafecito-games/Foundry/releases/download/v0.1.0-alpha.14/Foundry_v0.1.0-alpha.14_api.zip",
                   "archive_sha256": "%s",
                   "foundry_commit": "%s",
-                  "foundry_version": "0.1.0-alpha.8",
-                  "api_version": "0.1.0-alpha.8",
+                  "foundry_version": "0.1.0-alpha.14",
+                  "api_version": "0.1.0-alpha.14",
                   "abi_minimum": "0.1.0",
                   "source_license": "MIT",
-                  "source_license_url": "https://github.com/cafecito-games/Foundry/blob/3923e920b2fb6db68f82dfdab2bf7b1df125492d/LICENSE.txt",
+                  "source_license_url": "https://github.com/cafecito-games/Foundry/blob/b9a5e66c21f8f7b707a9e526ca20557485c53227/LICENSE.txt",
                   "generator_version": "1",
                   "bridge_contract_version": "1",
                   "files": {

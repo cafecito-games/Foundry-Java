@@ -21,17 +21,17 @@ class FoundryApiParserTest {
         FoundryApi api = FoundryApiParser.parse(inputs);
         FoundryApi reparsed = FoundryApiParser.parse(api.canonicalJson());
 
-        assertEquals("0.1.0-alpha.8", api.header().apiVersion());
-        assertEquals(1051, api.categories().get("classes").size());
+        assertEquals("0.1.0-alpha.14", api.header().apiVersion());
+        assertEquals(1050, api.categories().get("classes").size());
         assertEquals(38, api.categories().get("builtin_classes").size());
         assertEquals(39, api.categories().get("singletons").size());
-        assertEquals(57_904, api.entities().size());
+        assertEquals(57_899, api.entities().size());
         assertEquals(
                 Map.of(
                         "builtin_class_member_offsets", 252,
                         "builtin_class_sizes", 164,
                         "builtin_classes", 3_333,
-                        "classes", 53_240,
+                        "classes", 53_235,
                         "global_constants", 11,
                         "global_enums", 542,
                         "native_structures", 14,
@@ -76,7 +76,7 @@ class FoundryApiParserTest {
                 assertThrows(ApiInputException.class, () -> FoundryApiParser.parse(mismatched));
 
         assertTrue(failure.getMessage().contains("$.api_version"));
-        assertTrue(failure.getMessage().contains("0.1.0-alpha.8"));
+        assertTrue(failure.getMessage().contains("0.1.0-alpha.14"));
         assertTrue(failure.getMessage().contains("0.2.0"));
     }
 

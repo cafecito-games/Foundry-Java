@@ -1,5 +1,5 @@
-games.cafecito.foundry.generated|public-api-lines 33130
-games.cafecito.foundry.generated|public-api-sha256 dd7efd3781a3dffbac14416ca2d4bfbb37ebff6792efc16bed2393c38afea14c
+games.cafecito.foundry.generated|public-api-lines 33131
+games.cafecito.foundry.generated|public-api-sha256 07a0176c583ea68c3c4cbbb2e346166a1745570a5e4f06864a4e2e1f95975520
 games.cafecito.foundry.runtime.CallbackRegistry|public boolean isEnabled();
 games.cafecito.foundry.runtime.CallbackRegistry|public boolean unregister(long);
 games.cafecito.foundry.runtime.CallbackRegistry|public final class games.cafecito.foundry.runtime.CallbackRegistry {

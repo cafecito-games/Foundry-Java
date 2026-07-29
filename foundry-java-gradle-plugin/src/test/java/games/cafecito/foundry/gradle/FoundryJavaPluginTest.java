@@ -34,7 +34,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class FoundryJavaPluginTest {
     private static final String API_SHA =
-            "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51";
+            "48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b";
     private static final String INDEX =
             "build/generated/foundryJava/assets/foundry_java/registry-index-v2.txt";
     private static final String BOOTSTRAP =

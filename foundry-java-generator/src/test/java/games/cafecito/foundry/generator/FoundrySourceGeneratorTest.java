@@ -436,12 +436,12 @@ class FoundrySourceGeneratorTest {
         Path secondOutput = temporaryDirectory.resolve("accepted-second");
         first.writeTo(output);
         second.writeTo(secondOutput);
-        assertEquals(57_904, api.entities().size());
-        assertEquals(57_904, acceptedManifest.entries().size());
-        assertEquals(1_280, first.sources().size());
-        assertEquals(1_298, first.descriptorCatalog().size());
+        assertEquals(57_899, api.entities().size());
+        assertEquals(57_899, acceptedManifest.entries().size());
+        assertEquals(1_279, first.sources().size());
+        assertEquals(1_297, first.descriptorCatalog().size());
         assertEquals(
-                57_904,
+                57_899,
                 acceptedManifest.statusCounts().get(CompatibilityManifest.Status.SUPPORTED));
         assertTrue(
                 acceptedManifest.entries().stream()
@@ -492,9 +492,9 @@ class FoundrySourceGeneratorTest {
 
         assertNotNull(facade);
         assertEquals(91, shards.size());
-        assertEquals(23_225, countOccurrences(rows, "target.put("));
+        assertEquals(23_226, countOccurrences(rows, "target.put("));
         Map.of(
-                        "CLASS_METHOD", 16_317,
+                        "CLASS_METHOD", 16_318,
                         "CLASS_PROPERTY", 4_108,
                         "CLASS_SIGNAL", 508,
                         "BUILTIN_METHOD", 1_000,
@@ -737,7 +737,7 @@ class FoundrySourceGeneratorTest {
             instantiable += isInstantiable ? 1 : 0;
         }
         assertEquals(676, refcounted);
-        assertEquals(920, instantiable);
+        assertEquals(919, instantiable);
     }
 
     @Test

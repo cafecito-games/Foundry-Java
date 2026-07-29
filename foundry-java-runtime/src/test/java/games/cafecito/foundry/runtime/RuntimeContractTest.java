@@ -15,10 +15,10 @@ class RuntimeContractTest {
     void embedsTheAcceptedGenerationAndBridgeContract() {
         assertEquals("1", FoundryRuntime.RUNTIME_CONTRACT_VERSION);
         assertEquals(
-                "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51",
+                "48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b",
                 FoundryRuntime.API_SHA256);
         assertEquals(
-                "1bd2d0bed9e1d7a7bb6fc4dcb6fd0fcb91202e7f468162d8979552c7028fd7e1",
+                "78fe316fd3c02b5b4c452b1cf966040b37f857d18312bcca19d6b2b8b89b021d",
                 FoundryRuntime.COMPATIBILITY_MANIFEST_SHA256);
         assertEquals("1", FoundryRuntime.GENERATOR_VERSION);
         assertEquals("1", FoundryRuntime.BRIDGE_CONTRACT_VERSION);

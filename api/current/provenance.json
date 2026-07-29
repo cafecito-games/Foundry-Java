@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
   "source_repository": "https://github.com/cafecito-games/Foundry",
-  "source_release": "v0.1.0-alpha.8",
-  "release_url": "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.8",
-  "archive_url": "https://github.com/cafecito-games/Foundry/releases/download/v0.1.0-alpha.8/Foundry_v0.1.0-alpha.8_api.zip",
-  "archive_sha256": "5e8dd7cea34051297c2ca89ec05fc2d50ee921b156d220b6007cc274d769beec",
-  "foundry_commit": "3923e920b2fb6db68f82dfdab2bf7b1df125492d",
-  "foundry_version": "0.1.0-alpha.8",
-  "api_version": "0.1.0-alpha.8",
+  "source_release": "v0.1.0-alpha.14",
+  "release_url": "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.14",
+  "archive_url": "https://github.com/cafecito-games/Foundry/releases/download/v0.1.0-alpha.14/Foundry_v0.1.0-alpha.14_api.zip",
+  "archive_sha256": "b6f44138e71e2b7c0a863457a26734fb2af812f080845fbc1d8a2fca3d2c1c44",
+  "foundry_commit": "b9a5e66c21f8f7b707a9e526ca20557485c53227",
+  "foundry_version": "0.1.0-alpha.14",
+  "api_version": "0.1.0-alpha.14",
   "abi_minimum": "0.1.0",
   "source_license": "MIT",
-  "source_license_url": "https://github.com/cafecito-games/Foundry/blob/3923e920b2fb6db68f82dfdab2bf7b1df125492d/LICENSE.txt",
+  "source_license_url": "https://github.com/cafecito-games/Foundry/blob/b9a5e66c21f8f7b707a9e526ca20557485c53227/LICENSE.txt",
   "generator_version": "1",
   "bridge_contract_version": "1",
   "files": {
     "extension_api_json": {
       "path": "extension_api.json",
-      "sha256": "85e91174c1a8a48629223d6459bb2ef595ad1da405b2ce88435c24fe221aec51"
+      "sha256": "48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b"
     },
     "foundry_extension_interface_h": {
       "path": "foundry_extension_interface.h",
@@ -24,7 +24,7 @@
     },
     "compatibility_manifest_json": {
       "path": "compatibility-manifest.json",
-      "sha256": "1bd2d0bed9e1d7a7bb6fc4dcb6fd0fcb91202e7f468162d8979552c7028fd7e1"
+      "sha256": "78fe316fd3c02b5b4c452b1cf966040b37f857d18312bcca19d6b2b8b89b021d"
     }
   }
 }
