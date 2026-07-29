@@ -14,6 +14,12 @@ val generatedCompatibilityManifest =
     layout.buildDirectory.file("generated/foundryApi/compatibility-manifest.json")
 val generatedRealizationMap =
     layout.buildDirectory.file("generated/foundryApi/realization-map.tsv")
+val generatedSurfaceManifest =
+    layout.buildDirectory.file("generated/foundryApi/foundry-java-surface-manifest.json")
+
+// The binding identity is fixed; the binding version is the published Foundry-Java version, so the
+// manifest a release publishes names the binding release it describes.
+val bindingVersion = project.version.toString()
 val generatorProject = project(":foundry-java-generator")
 val apiModelProject = project(":foundry-java-api-model")
 val annotationsProject = project(":foundry-java-annotations")
@@ -37,9 +43,11 @@ val generateFoundryApi =
                 acceptedApiDirectory.file("provenance.json"),
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.property("generatorMainClass", mainClass)
+        inputs.property("bindingVersion", bindingVersion)
         outputs.dir(generatedApiSources)
         outputs.file(generatedCompatibilityManifest)
         outputs.file(generatedRealizationMap)
+        outputs.file(generatedSurfaceManifest)
         outputs.cacheIf("accepted API generation is deterministic") { true }
 
         args(
@@ -47,6 +55,8 @@ val generateFoundryApi =
             generatedApiSources.get().asFile.absolutePath,
             generatedCompatibilityManifest.get().asFile.absolutePath,
             generatedRealizationMap.get().asFile.absolutePath,
+            generatedSurfaceManifest.get().asFile.absolutePath,
+            bindingVersion,
         )
     }
 
@@ -100,6 +110,9 @@ val verifyGeneratedRealization =
         dependsOn(generateFoundryApi, tasks.named("compileJava"))
         classpath = files(generatorJar, apiModelJar, annotationsJar, runtimeClasses)
         mainClass.set("games.cafecito.foundry.generator.RealizationVerifier")
+        // Parsing the whole engine-API surface manifest alongside the realization map needs more
+        // than the forked default heap on a stock continuous-integration runner.
+        maxHeapSize = "3g"
 
         inputs
             .files(
@@ -108,11 +121,13 @@ val verifyGeneratedRealization =
                 acceptedApiDirectory.file("compatibility-manifest.json"),
                 acceptedApiDirectory.file("provenance.json"),
                 generatedRealizationMap,
+                generatedSurfaceManifest,
                 realizationAccountingBaseline,
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs
             .dir(runtimeClasses)
             .withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.property("bindingVersion", bindingVersion)
         outputs.dir(realizationReportDirectory)
 
         args(
@@ -121,6 +136,8 @@ val verifyGeneratedRealization =
             runtimeClasses.get().asFile.absolutePath,
             realizationAccountingBaseline.asFile.absolutePath,
             realizationReportDirectory.get().asFile.absolutePath,
+            generatedSurfaceManifest.get().asFile.absolutePath,
+            bindingVersion,
         )
     }
 
