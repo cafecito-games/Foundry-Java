@@ -54,17 +54,31 @@ rm -rf "${repo_root}/build/repository"
   2>&1 | tee "${artifact_root}/jvm-matrix.log"
 
 for module in conformance-java-app conformance-kotlin-app; do
-  apk="${repo_root}/samples/${module}/build/outputs/apk/androidTest/debug/${module}-debug-androidTest.apk"
-  "${samples[@]}" ":${module}:assembleDebugAndroidTest" \
+  "${samples[@]}" ":${module}:assembleDebug" ":${module}:assembleDebugAndroidTest" \
     2>&1 | tee "${artifact_root}/${module}-assemble.log"
-  if [[ ! -f "$apk" ]]; then
-    printf 'Consumer instrumentation APK does not exist: %s\n' "$apk" >&2
+  application_apk="${repo_root}/samples/${module}/build/outputs/apk/debug/${module}-debug.apk"
+  instrumentation_apk="${repo_root}/samples/${module}/build/outputs/apk/androidTest/debug/${module}-debug-androidTest.apk"
+  # The published Android library is an implementation dependency, so its native payload lands in
+  # the application APK. Both APKs are installed on the device, so both must be inspected.
+  for apk in "$application_apk" "$instrumentation_apk"; do
+    if [[ ! -f "$apk" ]]; then
+      printf 'Consumer APK does not exist: %s\n' "$apk" >&2
+      exit 1
+    fi
+    entries="${artifact_root}/${module}-$(basename "$apk").entries.txt"
+    unzip -Z1 "$apk" > "$entries"
+    if grep -Fq 'libfoundry_android.so' "$entries"; then
+      printf 'Consumer APK %s must not package libfoundry_android.so.\n' "$apk" >&2
+      exit 1
+    fi
+  done
+  application_entries="${artifact_root}/${module}-$(basename "$application_apk").entries.txt"
+  if ! grep -Fxq 'lib/x86_64/libfoundry_java.so' "$application_entries"; then
+    printf 'Consumer application %s must package the requested bridge ABI.\n' "$module" >&2
     exit 1
   fi
-  entries="${artifact_root}/${module}-apk-entries.txt"
-  unzip -Z1 "$apk" > "$entries"
-  if grep -Fq 'libfoundry_android.so' "$entries"; then
-    printf 'Consumer sample %s must not package libfoundry_android.so.\n' "$module" >&2
+  if grep -E '^lib/(arm64-v8a|armeabi-v7a|x86)/libfoundry_java\.so$' "$application_entries"; then
+    printf 'Consumer application %s packaged an ABI it did not request.\n' "$module" >&2
     exit 1
   fi
 done

@@ -575,6 +575,11 @@ class RepositoryContractTest {
         assertTrue(script.contains(":conformance-java-app:connectedDebugAndroidTest"));
         assertTrue(script.contains(":conformance-kotlin-app:connectedDebugAndroidTest"));
         assertTrue(script.contains("must not package libfoundry_android.so"));
+        assertTrue(
+                script.contains("for apk in \"$application_apk\" \"$instrumentation_apk\""),
+                "both installed consumer APKs must be inspected for the forbidden library");
+        assertTrue(script.contains("lib/x86_64/libfoundry_java.so"));
+        assertTrue(script.contains("packaged an ABI it did not request"));
         assertTrue(script.contains("summary.json"));
         assertTrue(script.contains("total == 0 or failures or errors or skipped"));
 
