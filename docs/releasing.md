@@ -22,6 +22,8 @@ staged release is verified.
    emulator, the Java and Kotlin conformance matrix as consumer samples, and the engine-loaded API
    36 conformance gate. It carries a 150-minute budget because the engine gate downloads a roughly
    1.1 GB export template and builds five exports.
+   The release caller always selects the engine-loaded gate; the pull-request-only optimization
+   cannot skip release verification.
 3. **`stage`** — [`gradle/verify-release-reproducibility.sh`](../gradle/verify-release-reproducibility.sh)
    stages the tag twice through [`gradle/stage-release.sh`](../gradle/stage-release.sh) and compares
    the results byte for byte, then

@@ -4,7 +4,11 @@
 
 **Goal:** Skip the expensive engine-loaded conformance step only for pull requests whose changes are entirely documentation, branding, templates, or test sources, while continuing to run the full gate on relevant PRs, `main`, and releases.
 
-**Architecture:** Add a pure Bash/JQ classifier that accepts a JSON array of changed paths and emits a fixed `run`/`reason` decision. The shared device workflow obtains the complete PR file list through the paginated GitHub API, validates its count, fails closed on every collection or classification error, and applies the decision only to the engine-loaded step.
+**Architecture:** Add a testable Bash/JQ extractor that validates the paginated GitHub API response
+and emits the complete current-and-previous path list, followed by a pure Bash/JQ classifier that
+emits a fixed `run`/`reason` decision. The shared device workflow fails closed on every collection,
+extraction, or classification error and applies the validated decision only to the engine-loaded
+step.
 
 **Tech Stack:** GitHub Actions reusable workflows, Bash, GitHub CLI, JQ, Java 17, JUnit 5, Gradle, actionlint.
 
@@ -14,6 +18,10 @@
 
 - Create `gradle/classify-engine-gate-paths.sh`: pure deterministic changed-path classifier; it has no GitHub dependency and never prints an untrusted path.
 - Create `src/test/java/games/cafecito/foundry/build/EngineGateChangeClassifierTest.java`: executes the classifier against the safe, relevant, mixed, unknown, empty, and malformed cases.
+- Create `gradle/extract-engine-gate-paths.sh`: validates the complete paginated API response and
+  emits current and previous paths without leaking malformed metadata.
+- Create `src/test/java/games/cafecito/foundry/build/EngineGateApiResponseExtractorTest.java`:
+  exercises API schema, count, status, path, and silent-failure behavior independently of GitHub.
 - Modify `.github/workflows/gates.yml`: collect PR files, validate completeness, expose the decision, and condition only the engine-loaded step.
 - Modify `.github/workflows/ci.yml`: grant the reusable workflow read-only access to PR file metadata.
 - Modify `.github/workflows/release.yml`: grant the same read-only permission so the called workflow's declared permission never exceeds either caller.
@@ -207,6 +215,10 @@ git commit -m "test: classify selective engine gate changes"
 
 ### Task 2: Wire the fail-closed decision into the shared device job
 
+Task 2 established the workflow decision and step scoping. Its snippets show the final reviewed
+state; the extractor's later addition and behavior tests are recorded separately in the
+review-hardening subsection after this task.
+
 **Files:**
 - Modify: `.github/workflows/gates.yml`
 - Modify: `.github/workflows/ci.yml`
@@ -240,9 +252,10 @@ void engineGateScopeIsReadOnlyPaginatedCompleteAndFailClosed() throws IOExceptio
     assertTrue(classifier.contains("github.event.pull_request.changed_files"));
     assertTrue(classifier.contains("gh api --paginate --slurp"));
     assertTrue(classifier.contains("pulls/${PR_NUMBER}/files?per_page=100"));
-    assertTrue(classifier.contains(".previous_filename?"));
-    assertTrue(classifier.contains("observed_count"));
     assertTrue(classifier.contains("EXPECTED_CHANGED_FILES"));
+    assertTrue(classifier.contains("bash gradle/extract-engine-gate-paths.sh"));
+    assertTrue(classifier.contains("extract_status"));
+    assertTrue(classifier.contains("classification-incomplete"));
     assertTrue(classifier.contains("bash gradle/classify-engine-gate-paths.sh"));
     assertTrue(classifier.contains("run=true"));
     assertTrue(classifier.contains("classification-failed"));
@@ -319,9 +332,10 @@ In the `permissions` block of `.github/workflows/gates.yml`, `.github/workflows/
 
 No workflow receives any write permission, secret, or protected environment.
 
-- [ ] **Step 4: Add the fail-closed classification step**
+- [ ] **Step 4: Add the fail-closed classification step (final reviewed form)**
 
-Immediately after the device job's checkout step in `.github/workflows/gates.yml`, add:
+The initial wiring established the scope step. After the review-hardening work recorded below, its
+final form immediately after the device job's checkout step in `.github/workflows/gates.yml` is:
 
 ```yaml
       - name: Classify whether this change needs the engine-loaded gate
@@ -334,8 +348,10 @@ Immediately after the device job's checkout step in `.github/workflows/gates.yml
         run: |
           set -euo pipefail
           select_gate() {
-            printf 'run=%s\nreason=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT}"
-            printf 'Engine-loaded gate decision: run=%s reason=%s\n' "$1" "$2"
+            local run="$1"
+            local reason="$2"
+            printf 'run=%s\nreason=%s\n' "$run" "$reason" >> "$GITHUB_OUTPUT"
+            printf 'Engine-loaded gate decision: run=%s reason=%s\n' "$run" "$reason"
           }
 
           if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
@@ -343,45 +359,61 @@ Immediately after the device job's checkout step in `.github/workflows/gates.yml
             exit 0
           fi
 
-          if ! changed_file_pages="$(
+          if ! pages="$(
             gh api --paginate --slurp \
-              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100"
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          set +e
+          paths="$(
+            printf '%s' "$pages" |
+              bash gradle/extract-engine-gate-paths.sh "$EXPECTED_CHANGED_FILES" 2>/dev/null
+          )"
+          extract_status="$?"
+          set -e
+          case "$extract_status" in
+            0)
+              ;;
+            2)
+              select_gate true classification-incomplete
+              exit 0
+              ;;
+            *)
+              select_gate true classification-failed
+              exit 0
+              ;;
+          esac
+          if ! decision="$(
+            printf '%s' "$paths" |
+              bash gradle/classify-engine-gate-paths.sh 2>/dev/null
           )"; then
             select_gate true classification-failed
             exit 0
           fi
 
-          if ! observed_count="$(jq -er '[.[][]] | length' <<<"${changed_file_pages}")"; then
-            select_gate true classification-failed
-            exit 0
-          fi
-          if [[ "${observed_count}" != "${EXPECTED_CHANGED_FILES}" ]]; then
-            select_gate true classification-incomplete
-            exit 0
-          fi
-
-          if ! changed_files="$(
-            jq -ec \
-              '[.[][] | (.filename, .previous_filename?)] | map(select(type == "string"))' \
-              <<<"${changed_file_pages}"
-          )"; then
-            select_gate true classification-failed
-            exit 0
-          fi
-          if ! classification="$(
-            bash gradle/classify-engine-gate-paths.sh <<<"${changed_files}"
-          )"; then
-            select_gate true classification-failed
-            exit 0
-          fi
-          printf '%s\n' "${classification}" >> "${GITHUB_OUTPUT}"
-          printf 'Engine-loaded gate decision: %s\n' \
-            "$(sed -n 's/^reason=//p' <<<"${classification}")"
+          case "$decision" in
+            $'run=false\nreason=safe-only')
+              select_gate false safe-only
+              ;;
+            $'run=true\nreason=relevant')
+              select_gate true relevant
+              ;;
+            $'run=true\nreason=fail-closed')
+              select_gate true fail-closed
+              ;;
+            *)
+              select_gate true classification-failed
+              ;;
+          esac
 ```
 
 This step never writes a changed filename to `GITHUB_OUTPUT` or the log. Both names of a renamed
-file are classified. API failure, unexpected JSON, pagination truncation, an empty list, and
-classifier execution failure all select the gate.
+file are classified. Extractor status `2` maps to `classification-incomplete`; every other
+nonzero extractor status maps to `classification-failed`. API failure, malformed metadata,
+pagination truncation, an empty list, classifier execution failure, and an unexpected classifier
+decision all select the gate. Only a fixed decision is copied to the workflow output.
 
 - [ ] **Step 5: Condition only the engine-loaded step**
 
@@ -403,6 +435,7 @@ Run:
 
 ```bash
 ./gradlew :test \
+  --tests games.cafecito.foundry.build.EngineGateApiResponseExtractorTest \
   --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest \
   --tests games.cafecito.foundry.build.ReusableGateWorkflowContractTest \
   --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
@@ -422,6 +455,75 @@ git add .github/workflows/gates.yml \
 git commit -m "ci: run the engine gate only for relevant pull requests"
 ```
 
+### Review hardening after Task 2: Validate API metadata before classification
+
+This review-hardening work records the extractor introduced after the initial workflow wiring; it
+does not change Task 1's path-policy contract.
+
+**Files:**
+- Create: `gradle/extract-engine-gate-paths.sh`
+- Create: `src/test/java/games/cafecito/foundry/build/EngineGateApiResponseExtractorTest.java`
+- Modify: `.github/workflows/gates.yml`
+- Modify: `src/test/java/games/cafecito/foundry/build/ReusableGateWorkflowContractTest.java`
+
+- [ ] **Step 1: Specify extractor responsibilities with behavior tests**
+
+`EngineGateApiResponseExtractorTest` requires:
+
+- exactly one JSON response whose outer value is a nonempty array of nonempty page arrays and
+  whose page items are objects;
+- one positive integer expected count and an exact flattened item count;
+- the exact GitHub status allowlist: `added`, `removed`, `modified`, `renamed`, `copied`, `changed`,
+  and `unchanged`;
+- a nonempty string current filename for every item, a nonempty string for any present previous
+  filename, and a required previous filename for every renamed item;
+- current and previous paths emitted in API order;
+- exit `2` for count mismatch, exit `1` for malformed metadata or invalid invocation, and no stdout
+  or stderr on either failure path.
+
+Run the extractor test before creating the script to establish RED:
+
+```bash
+./gradlew :test \
+  --tests games.cafecito.foundry.build.EngineGateApiResponseExtractorTest \
+  --rerun-tasks
+```
+
+Expected: FAIL because `gradle/extract-engine-gate-paths.sh` does not exist.
+
+- [ ] **Step 2: Route only validated paths and fixed decisions**
+
+The workflow pipes the single `gh api --paginate --slurp` response through
+`gradle/extract-engine-gate-paths.sh`. Extractor exit `2` selects
+`run=true reason=classification-incomplete`; exit `1` or any other nonzero status selects
+`run=true reason=classification-failed`. Status `0` is the only path to
+`gradle/classify-engine-gate-paths.sh`.
+
+The workflow accepts only `run=false/reason=safe-only`, `run=true/reason=relevant`, or
+`run=true/reason=fail-closed` from the classifier and maps any other output to
+`run=true/reason=classification-failed`. It never exposes raw API metadata or unchecked classifier
+output.
+
+- [ ] **Step 3: Verify extractor, classifier, and workflow behavior**
+
+Run the focused six-class suite from the repository root:
+
+```bash
+./gradlew :test \
+  --tests games.cafecito.foundry.build.EngineGateApiResponseExtractorTest \
+  --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest \
+  --tests games.cafecito.foundry.build.ReusableGateWorkflowContractTest \
+  --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest \
+  --tests games.cafecito.foundry.build.ReleasePipelineContractTest \
+  --tests games.cafecito.foundry.build.RepositoryContractTest \
+  --rerun-tasks
+bash -n gradle/extract-engine-gate-paths.sh
+bash -n gradle/classify-engine-gate-paths.sh
+actionlint
+```
+
+Expected: all six test classes pass, both shell scripts parse, and `actionlint` exits zero.
+
 ### Task 3: Document the selective cadence
 
 **Files:**
@@ -435,12 +537,29 @@ Extend `theEnginePinIsDocumentedWithABumpAndLocalReproductionProcedure` in
 `EngineLoadedConformanceGateContractTest`:
 
 ```java
+String normalizedDocumentation = documentation.replaceAll("\\s+", " ");
+String releasing = read("docs/releasing.md");
+
 assertTrue(documentation.contains("## When the gate runs"));
 assertTrue(documentation.contains("safe-to-skip"));
 assertTrue(documentation.contains("Every push to `main`"));
 assertTrue(documentation.contains("every release"));
+assertTrue(documentation.contains("release dry-run"));
 assertTrue(documentation.contains("unknown path"));
-assertTrue(read("docs/releasing.md").contains("always selects the engine-loaded gate"));
+assertTrue(documentation.contains("gradle/extract-engine-gate-paths.sh"));
+assertTrue(documentation.contains("gradle/classify-engine-gate-paths.sh"));
+assertTrue(normalizedDocumentation.contains("current and previous paths"));
+assertTrue(
+        normalizedDocumentation.contains("malformed metadata")
+                && normalizedDocumentation.contains("incomplete API response")
+                && normalizedDocumentation.contains("unknown GitHub file status")
+                && normalizedDocumentation.contains("fail closed"));
+assertTrue(
+        normalizedDocumentation.contains("Only the engine-loaded step is skipped")
+                && normalizedDocumentation.contains("API 36 emulator")
+                && normalizedDocumentation.contains("production startup")
+                && normalizedDocumentation.contains("Java/Kotlin consumer matrix"));
+assertTrue(releasing.contains("always selects the engine-loaded gate"));
 ```
 
 - [ ] **Step 2: Run the documentation contract to establish RED**
@@ -449,7 +568,8 @@ Run:
 
 ```bash
 ./gradlew :test \
-  --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
+  --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest \
+  --rerun-tasks
 ```
 
 Expected: FAIL because the selective cadence is not documented.
@@ -461,22 +581,25 @@ Add this section to `docs/engine-pin.md` before `## Bumping the pin`:
 ```markdown
 ## When the gate runs
 
-Every push to `main` and every release runs the engine-loaded gate. Pull requests continue to run
-the API 36 emulator, production-startup acceptance, and Java/Kotlin consumer matrix, but the
-engine-loaded step is skipped when every changed file is in the explicit safe-to-skip set:
-documentation, Markdown, branding assets, issue or pull-request templates, and sources under
-`src/test`, `src/testFixtures`, or `gradle/testFixtures`.
+Every push to `main` runs the engine-loaded gate, as does every release and release dry-run. A pull
+request always runs the API 36 emulator, production startup, and Java/Kotlin consumer matrix. Only
+the engine-loaded step is skipped, and only when all changed files belong to the explicit
+safe-to-skip set: documentation or Markdown, branding assets, issue or pull-request templates, and
+sources under `src/test`, `src/testFixtures`, or `gradle/testFixtures`.
 
-Every other change runs the engine gate. A mixed change runs it, and an unknown path, incomplete
-GitHub response, or classification error fails closed by running it. The classifier lives in
-`gradle/classify-engine-gate-paths.sh`; update its behavioral tests whenever the safe-to-skip set
-changes.
+A mixed change or unknown path runs the gate. Collection or classification errors, an incomplete
+API response, malformed metadata, and an unknown GitHub file status fail closed by running it.
+Renamed files are classified by both their current and previous paths.
+
+`gradle/extract-engine-gate-paths.sh` validates the paginated GitHub API response schema, the exact
+changed-file count, and all seven documented statuses. `gradle/classify-engine-gate-paths.sh` then
+applies the safe path policy.
 ```
 
 Add this sentence after the release device-gate description in `docs/releasing.md`:
 
 ```markdown
-The release caller always selects the engine-loaded gate; the pull-request-only safe-path
+The release caller always selects the engine-loaded gate; the pull-request-only
 optimization cannot skip release verification.
 ```
 
@@ -486,7 +609,8 @@ Run:
 
 ```bash
 ./gradlew :test \
-  --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
+  --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest \
+  --rerun-tasks
 git diff --check
 ```
 

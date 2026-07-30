@@ -65,14 +65,22 @@ cannot silently escape the gate.
 ## Workflow design
 
 The shared device job gains one classification step after checkout. For pull requests, it obtains
-the complete changed-file list from GitHub's pull-request files API with pagination. For other
-events it immediately selects the full gate. The workflow retains read-only permissions.
+the complete changed-file list from GitHub's pull-request files API with pagination. Path
+collection is delegated to the testable `gradle/extract-engine-gate-paths.sh`, which validates one
+paginated response, the page and item shapes, an exact expected changed-file count, the documented
+status allowlist, every required current filename, and the required previous filename for a rename.
+Malformed metadata, unknown statuses, incomplete responses, and collection errors fail closed.
+For other events the workflow immediately selects the full gate. The workflow retains read-only
+permissions.
 
-The classification step exposes a boolean-like output consumed only by the engine-loaded
-conformance step. Emulator creation, observable boot, production startup, the Java/Kotlin
-conformance matrix, cache restoration, and evidence collection remain unconditional. The engine
-cache may still be restored on a skipped pull request because the cache action is fast and keeping
-the surrounding job shape stable avoids coupling cache behavior to the classifier.
+The extractor emits both the current and previous paths for renamed files.
+`gradle/classify-engine-gate-paths.sh` then applies the safe path policy. The workflow accepts only
+the classifier's fixed decisions and exposes the selected decision as output; unexpected output
+fails closed. That output is consumed only by the engine-loaded conformance step. Emulator
+creation, observable boot, production startup, the Java/Kotlin conformance matrix, cache
+restoration, and evidence collection remain unconditional. The engine cache may still be restored
+on a skipped pull request because the cache action is fast and keeping the surrounding job shape
+stable avoids coupling cache behavior to the classifier.
 
 When skipped, the job log records that every changed path was in the safe-to-skip set. When run, it
 records whether the reason was a non-pull-request event, at least one relevant path, or fail-closed
@@ -80,8 +88,12 @@ classification. It must not print credentials or request broader permissions.
 
 ## Testing
 
-Add a focused, deterministic classifier that can be exercised without GitHub. Its contract tests
-cover:
+`EngineGateApiResponseExtractorTest` covers valid multi-page responses and all seven documented
+statuses, current and previous rename paths, page and item schema failures, invalid or missing
+filenames and statuses, unknown statuses, an exact positive expected count, distinct count-mismatch
+handling, and silent failures that do not leak paths.
+
+`EngineGateChangeClassifierTest` covers:
 
 - documentation-only and test-only path lists select `run=false`;
 - production source, acceptance, sample, build, lock, workflow, and engine-pin paths select

@@ -306,7 +306,9 @@ class EngineLoadedConformanceGateContractTest {
     @Test
     void theEnginePinIsDocumentedWithABumpAndLocalReproductionProcedure() throws IOException {
         String documentation = read("docs/engine-pin.md");
+        String normalizedDocumentation = documentation.replaceAll("\\s+", " ");
         String compatibility = read("docs/api-compatibility.md");
+        String releasing = read("docs/releasing.md");
 
         assertTrue(documentation.contains(RELEASE_TAG));
         assertTrue(documentation.contains(PRODUCER_COMMIT));
@@ -318,6 +320,30 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(documentation.contains("api/current/provenance.json"));
         assertTrue(documentation.contains(RUNTIME_MARKER));
         assertTrue(documentation.contains("libfoundry_android.so"));
+        assertTrue(documentation.contains("## When the gate runs"));
+        assertTrue(documentation.contains("safe-to-skip"));
+        assertTrue(documentation.contains("Every push to `main`"));
+        assertTrue(documentation.contains("every release"));
+        assertTrue(documentation.contains("release dry-run"));
+        assertTrue(documentation.contains("unknown path"));
+        assertTrue(documentation.contains("gradle/extract-engine-gate-paths.sh"));
+        assertTrue(documentation.contains("gradle/classify-engine-gate-paths.sh"));
+        assertTrue(
+                normalizedDocumentation.contains("current and previous paths"),
+                "renames must be documented as checking both path identities");
+        assertTrue(
+                normalizedDocumentation.contains("malformed metadata")
+                        && normalizedDocumentation.contains("incomplete API response")
+                        && normalizedDocumentation.contains("unknown GitHub file status")
+                        && normalizedDocumentation.contains("fail closed"),
+                "malformed or incomplete GitHub metadata must be documented as fail closed");
+        assertTrue(
+                normalizedDocumentation.contains("Only the engine-loaded step is skipped")
+                        && normalizedDocumentation.contains("API 36 emulator")
+                        && normalizedDocumentation.contains("production startup")
+                        && normalizedDocumentation.contains("Java/Kotlin consumer matrix"),
+                "the always-on API 36 checks must remain explicit");
+        assertTrue(releasing.contains("always selects the engine-loaded gate"));
         assertTrue(compatibility.contains("engine-pin.md"));
     }
 
