@@ -101,9 +101,11 @@ in a log. Nothing in the pipeline echoes a secret.
 whole pipeline against a local staging target. It generates an ephemeral `gpg` signing key, stages the
 declared version twice and compares them, verifies every signature and checksum against that key,
 uploads to a staging repository, and requires a second upload of the same release to fail. It accepts
-no target other than `staging` and never contacts Maven Central. Run it with:
+no target other than `staging` and never contacts Maven Central. It exercises the real preconditions,
+so the declared version has to be tagged locally first:
 
 ```sh
+git tag -f "v$(sed -n 's/^foundryVersion=//p' gradle.properties)"
 bash gradle/run-release-staging-dry-run.sh
 ```
 
