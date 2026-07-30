@@ -158,19 +158,20 @@ Create `gradle/classify-engine-gate-paths.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-input="$(cat)"
 if ! decision="$(
-  jq -r '
+  jq -Rrs '
     def safe_to_skip:
-      test("\\.md$") or
+      endswith(".md") or
       startswith("docs/") or
       startswith("assets/") or
       test("(^|/)src/test(Fixtures)?/") or
       startswith("gradle/testFixtures/") or
       startswith(".github/ISSUE_TEMPLATE/") or
-      test("^\\.github/PULL_REQUEST_TEMPLATE(?:\\.md|/)");
+      . == ".github/PULL_REQUEST_TEMPLATE.md" or
+      startswith(".github/PULL_REQUEST_TEMPLATE/");
 
-    if type != "array" then
+    fromjson
+    | if type != "array" then
       ["run=true", "reason=fail-closed"]
     elif length == 0 then
       ["run=true", "reason=fail-closed"]
@@ -182,7 +183,7 @@ if ! decision="$(
       ["run=true", "reason=relevant"]
     end
     | .[]
-  ' <<<"$input"
+  ' 2>/dev/null
 )"; then
   printf 'run=true\nreason=fail-closed\n'
   exit 0
@@ -191,8 +192,11 @@ fi
 printf '%s\n' "$decision"
 ```
 
-The malformed-JSON branch deliberately exits successfully with `run=true`: classifier failure is a
-decision to run the expensive proof, not a reason to fail CI.
+`jq -Rrs` reads raw standard input as one string, and `fromjson` requires that string to contain
+exactly one JSON document. Blank, multiple, or malformed documents are caught with parser stderr
+suppressed and produce the fixed `run=true` / `reason=fail-closed` fallback. The fallback
+deliberately exits successfully: classifier failure is a decision to run the expensive proof, not
+a reason to fail CI.
 
 - [ ] **Step 4: Run focused verification to establish GREEN**
 

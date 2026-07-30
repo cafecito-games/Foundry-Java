@@ -306,10 +306,7 @@ class EngineLoadedConformanceGateContractTest {
     @Test
     void theEnginePinIsDocumentedWithABumpAndLocalReproductionProcedure() throws IOException {
         String documentation = read("docs/engine-pin.md");
-        String normalizedDocumentation = documentation.replaceAll("\\s+", " ");
         String compatibility = read("docs/api-compatibility.md");
-        String releasing = read("docs/releasing.md");
-        String normalizedReleasing = releasing.replaceAll("\\s+", " ");
 
         assertTrue(documentation.contains(RELEASE_TAG));
         assertTrue(documentation.contains(PRODUCER_COMMIT));
@@ -321,57 +318,68 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(documentation.contains("api/current/provenance.json"));
         assertTrue(documentation.contains(RUNTIME_MARKER));
         assertTrue(documentation.contains("libfoundry_android.so"));
-        assertTrue(documentation.contains("## When the gate runs"));
-        assertTrue(documentation.contains("safe-to-skip"));
-        assertTrue(documentation.contains("Every push to `main`"));
-        assertTrue(documentation.contains("every release"));
-        assertTrue(documentation.contains("release dry-run"));
-        assertTrue(documentation.contains("unknown path"));
-        assertTrue(documentation.contains("gradle/extract-engine-gate-paths.sh"));
-        assertTrue(documentation.contains("gradle/classify-engine-gate-paths.sh"));
+        assertTrue(compatibility.contains("engine-pin.md"));
+    }
+
+    @Test
+    void selectiveEngineGateCadenceIsDocumented() throws IOException {
+        String documentation = read("docs/engine-pin.md");
+        String cadence =
+                markdownSection(documentation, "## When the gate runs", "## Bumping the pin");
+        String normalizedCadence = cadence.replaceAll("\\s+", " ");
+        String normalizedReleasing = read("docs/releasing.md").replaceAll("\\s+", " ");
+
+        assertTrue(normalizedCadence.contains("## When the gate runs"));
+        assertTrue(normalizedCadence.contains("safe-to-skip"));
+        assertTrue(normalizedCadence.contains("all changed files"));
+        assertTrue(normalizedCadence.contains("Every push to `main`"));
+        assertTrue(normalizedCadence.contains("every release"));
+        assertTrue(normalizedCadence.contains("release dry-run"));
+        assertTrue(normalizedCadence.contains("unknown path"));
+        assertTrue(normalizedCadence.contains("gradle/extract-engine-gate-paths.sh"));
+        assertTrue(normalizedCadence.contains("gradle/classify-engine-gate-paths.sh"));
         assertTrue(
-                normalizedDocumentation.contains("current and previous paths"),
+                normalizedCadence.contains("current and previous paths"),
                 "renames must be documented as checking both path identities");
-        assertTrue(
-                normalizedDocumentation.contains("malformed metadata")
-                        && normalizedDocumentation.contains("incomplete API response")
-                        && normalizedDocumentation.contains("unknown GitHub file status")
-                        && normalizedDocumentation.contains("fail closed"),
-                "malformed or incomplete GitHub metadata must be documented as fail closed");
-        assertTrue(
-                normalizedDocumentation.contains("Only the engine-loaded step is skipped")
-                        && normalizedDocumentation.contains("API 36 emulator")
-                        && normalizedDocumentation.contains("production startup")
-                        && normalizedDocumentation.contains("Java/Kotlin consumer matrix"),
-                "the always-on API 36 checks must remain explicit");
-        assertTrue(
-                normalizedDocumentation.contains(
-                        "Only the engine-loaded step is skipped, and only when all changed files"
-                                + " belong to the explicit safe-to-skip set"),
-                "the engine-loaded step may skip only when every path is safe");
         for (String safeCategory :
                 List.of(
-                        "documentation or Markdown",
+                        "documentation",
+                        "Markdown",
                         "branding assets",
                         "issue or pull-request templates",
                         "`src/test`",
                         "`src/testFixtures`",
                         "`gradle/testFixtures`")) {
             assertTrue(
-                    normalizedDocumentation.contains(safeCategory),
+                    normalizedCadence.contains(safeCategory),
                     safeCategory + " must remain in the documented safe-to-skip set");
         }
+        for (String alwaysOn :
+                List.of(
+                        "API 36 emulator",
+                        "production startup",
+                        "Java/Kotlin consumer matrix",
+                        "engine-loaded step is skipped")) {
+            assertTrue(
+                    normalizedCadence.contains(alwaysOn),
+                    alwaysOn + " must remain in the documented selective cadence");
+        }
+        assertTrue(normalizedCadence.contains("mixed change"));
+        assertTrue(normalizedCadence.contains("runs the gate"));
+        for (String failClosedDetail :
+                List.of(
+                        "Collection",
+                        "classification errors",
+                        "incomplete API response",
+                        "malformed metadata",
+                        "unknown GitHub file status",
+                        "fail closed")) {
+            assertTrue(
+                    normalizedCadence.contains(failClosedDetail),
+                    failClosedDetail + " must remain in the documented fail-closed policy");
+        }
         assertTrue(
-                normalizedDocumentation.contains("A mixed change or unknown path runs the gate"),
-                "mixed changes must run the engine-loaded gate");
-        assertTrue(
-                normalizedDocumentation.contains(
-                        "Collection or classification errors, an incomplete API response,"
-                                + " malformed metadata, and an unknown GitHub file status fail"
-                                + " closed by running it"),
-                "collection and classification errors must fail closed by running the gate");
-        assertTrue(
-                normalizedDocumentation.contains("the exact changed-file count"),
+                normalizedCadence.contains("exact changed-file count"),
                 "the extractor's exact count validation must be documented");
         for (String status :
                 List.of(
@@ -383,15 +391,22 @@ class EngineLoadedConformanceGateContractTest {
                         "changed",
                         "unchanged")) {
             assertTrue(
-                    normalizedDocumentation.contains("`" + status + "`"),
+                    normalizedCadence.contains("`" + status + "`"),
                     status + " must remain in the documented GitHub status allowlist");
         }
-        assertTrue(releasing.contains("always selects the engine-loaded gate"));
-        assertTrue(
-                normalizedReleasing.contains(
-                        "pull-request-only optimization cannot skip release verification"),
-                "the PR optimization must be documented as unable to skip release verification");
-        assertTrue(compatibility.contains("engine-pin.md"));
+        assertTrue(normalizedReleasing.contains("always selects the engine-loaded gate"));
+        assertTrue(normalizedReleasing.contains("pull-request-only optimization"));
+        assertTrue(normalizedReleasing.contains("cannot skip release verification"));
+    }
+
+    private static String markdownSection(
+            String documentation, String startHeading, String endHeading) {
+        int start = documentation.indexOf(startHeading);
+        int end = documentation.indexOf(endHeading);
+        assertTrue(start >= 0, startHeading + " must be present");
+        assertTrue(end >= 0, endHeading + " must be present");
+        assertTrue(end > start, endHeading + " must follow " + startHeading);
+        return documentation.substring(start, end);
     }
 
     private static List<String> quotedSymbols(String script) {
