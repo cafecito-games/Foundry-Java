@@ -63,7 +63,6 @@ jobs:
           path: |
             **/build/reports/**
             foundry-java-runtime/build/reports/foundry-realization/**
-            foundry-java-runtime/build/generated/foundryApi/foundry-java-surface-manifest.json
             foundry-java-android/build/native-host/**
             foundry-java-android/build/native-host-sanitized/**
             foundry-java-android/build/outputs/aar/**

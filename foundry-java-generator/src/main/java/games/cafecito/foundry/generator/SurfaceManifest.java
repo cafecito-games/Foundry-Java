@@ -121,22 +121,25 @@ public final class SurfaceManifest {
         }
         Map<String, Entry> derived = new TreeMap<>();
         for (RealizationMap.Entry entry : map.entries()) {
-            NonRealizationReason bindingReason =
-                    entry.isRealized()
-                            ? null
-                            : NonRealizationReason.require(entry.nonRealizationReason());
-            derived.put(
-                    entry.sourceIdentity(),
-                    new Entry(
-                            entry.sourceIdentity(),
-                            entry.status(),
-                            entry.isRealized(),
-                            entry.realizedMembers(),
-                            bindingReason,
-                            entry.reasonCode()));
+            derived.put(entry.sourceIdentity(), derive(entry));
         }
         return new SurfaceManifest(
                 SCHEMA_VERSION, provenance, RealizationMap.FORMAT, map.sha256(), derived);
+    }
+
+    /** Restates one map entry in neutral vocabulary, with its Java detail namespaced. */
+    private static Entry derive(RealizationMap.Entry entry) {
+        NonRealizationReason bindingReason =
+                entry.isRealized()
+                        ? null
+                        : NonRealizationReason.require(entry.nonRealizationReason());
+        return new Entry(
+                entry.sourceIdentity(),
+                entry.status(),
+                entry.isRealized(),
+                entry.realizedMembers(),
+                bindingReason,
+                entry.reasonCode());
     }
 
     /** Returns the schema version of the neutral portion. */
@@ -266,34 +269,41 @@ public final class SurfaceManifest {
     /**
      * Re-derives the manifest from {@code map} and reports every difference, ordered by source
      * identity. An empty result proves the manifest is the map, restated in neutral vocabulary.
+     *
+     * <p>Derivation happens one entry at a time. Deriving a whole second manifest to compare
+     * against would double the resident cost of a document that covers every engine-API entity.
      */
     public List<String> disagreementsWith(RealizationMap map) {
-        SurfaceManifest expected = from(map, provenance);
         List<String> disagreements = new ArrayList<>();
-        if (!expected.realizationMapSha256.equals(realizationMapSha256)) {
+        String expectedMapSha256 = map.sha256();
+        if (!expectedMapSha256.equals(realizationMapSha256)) {
             disagreements.add(
                     DISAGREEMENT
                             + " field=realization_map_sha256 expected="
-                            + Diagnostics.escape(expected.realizationMapSha256)
+                            + Diagnostics.escape(expectedMapSha256)
                             + " observed="
                             + Diagnostics.escape(realizationMapSha256));
         }
-        if (!expected.realizationMapFormat.equals(realizationMapFormat)) {
+        if (!RealizationMap.FORMAT.equals(realizationMapFormat)) {
             disagreements.add(
                     DISAGREEMENT
                             + " field=realization_map_format expected="
-                            + Diagnostics.escape(expected.realizationMapFormat)
+                            + Diagnostics.escape(RealizationMap.FORMAT)
                             + " observed="
                             + Diagnostics.escape(realizationMapFormat));
         }
-        Map<String, Entry> observedEntries = new TreeMap<>(entries);
-        for (Entry expectedEntry : expected.entries.values()) {
-            Entry observed = observedEntries.remove(expectedEntry.sourceIdentity());
+        int covered = 0;
+        for (RealizationMap.Entry mapEntry : map.entries()) {
+            Entry expectedEntry = derive(mapEntry);
+            Entry observed = entries.get(expectedEntry.sourceIdentity());
             if (observed == null) {
                 disagreements.add(
                         disagreement(
                                 expectedEntry.sourceIdentity(), expectedEntry.render(), "absent"));
-            } else if (!observed.equals(expectedEntry)) {
+                continue;
+            }
+            covered++;
+            if (!observed.equals(expectedEntry)) {
                 disagreements.add(
                         disagreement(
                                 expectedEntry.sourceIdentity(),
@@ -301,15 +311,14 @@ public final class SurfaceManifest {
                                 observed.render()));
             }
         }
-        observedEntries
-                .values()
-                .forEach(
-                        observed ->
-                                disagreements.add(
-                                        disagreement(
-                                                observed.sourceIdentity(),
-                                                "absent",
-                                                observed.render())));
+        if (covered != entries.size()) {
+            for (Entry observed : entries.values()) {
+                if (map.entry(observed.sourceIdentity()) == null) {
+                    disagreements.add(
+                            disagreement(observed.sourceIdentity(), "absent", observed.render()));
+                }
+            }
+        }
         return List.copyOf(disagreements);
     }
 

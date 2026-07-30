@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import games.cafecito.foundry.api.model.ApiInputException;
 import games.cafecito.foundry.api.model.CompatibilityManifest;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +54,34 @@ class RealizationMapTest {
                 map.render());
         assertEquals(map.render(), RealizationMap.parse(map.render()).render());
         assertEquals(map.sha256(), RealizationMap.parse(map.render()).sha256());
+    }
+
+    @Test
+    void theDigestMatchesTheDigestOfTheWholeRendering() throws Exception {
+        RealizationMap map =
+                RealizationMap.of(
+                        List.of(
+                                RealizationMap.Entry.realized(
+                                        "classes/ExampleNode",
+                                        CompatibilityManifest.Status.SUPPORTED,
+                                        REASON,
+                                        List.of(
+                                                JavaMember.ofMethod(
+                                                        OWNER, "setValue", List.of("long"), "void"),
+                                                JavaMember.ofType(OWNER))),
+                                RealizationMap.Entry.notRealized(
+                                        "classes/ExampleNode/methods/get_value/arguments/index",
+                                        CompatibilityManifest.Status.SUPPORTED,
+                                        REASON,
+                                        NonRealizationReason.ARGUMENT_REALIZED_IN_MEMBER_SIGNATURE
+                                                .name())));
+
+        assertEquals(
+                HexFormat.of()
+                        .formatHex(
+                                MessageDigest.getInstance("SHA-256")
+                                        .digest(map.render().getBytes(StandardCharsets.UTF_8))),
+                map.sha256());
     }
 
     @Test

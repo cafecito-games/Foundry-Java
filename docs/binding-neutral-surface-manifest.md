@@ -17,7 +17,8 @@ Foundry-Android, or any other binding.
 the compatibility manifest, and the realization map.
 `:foundry-java-runtime:verifyGeneratedRealization` re-reads it, verifies it against the realization
 map, and writes the verified copy into the realization report directory, which continuous
-integration uploads as part of `foundry-java-check-evidence` on success and on failure alike.
+integration uploads as part of `foundry-java-check-evidence` on success and on failure alike. That
+verified copy is the only one uploaded; see [Size and memory](#size-and-memory).
 
 The manifest is a build output, not a checked-in baseline: it is a restatement of the realization map
 whose per-entity accounting is already frozen in
@@ -87,6 +88,52 @@ that shares no code with the producer, rejects any field outside the neutral set
 binding-specific content that does not name its namespace, never interprets that content, and still
 reports coverage and a two-binding diff. Its tests read both this binding's real manifest and a
 hand-written sibling manifest that contains no Java vocabulary at all.
+
+## Size and memory
+
+The manifest covers every accepted engine-API entity, so its size tracks the engine API rather than
+the binding. Measured against `api/current` (engine API `v0.1.0-alpha.14`, 57,899 entries, 26,671 of
+them realized across 30,023 realized members):
+
+| Artifact | Raw bytes | gzip -6 |
+| --- | --- | --- |
+| `foundry-java-surface-manifest.json` | 25,171,662 | 837,959 |
+| Its neutral portion alone | 11,681,754 | 461,915 |
+| `realization-map.tsv` | 12,684,126 | 702,794 |
+
+`actions/upload-artifact` compresses its input at level 6, so the manifest contributes roughly 840 KB
+to `foundry-java-check-evidence`, not 25 MB. It is uploaded once, as the verified copy in the
+realization report directory.
+
+### The document is not split
+
+A neutral-only projection — every `binding_specific` object omitted — is 11,681,754 bytes against
+25,171,662, a factor of 2.3, because the neutral portion is dominated by the 57,899 `source_identity`
+strings that per-entity totality requires. Splitting the document into neutral and binding-specific
+halves would cost a `schema_version` bump, a second published artifact, and a relaxation of
+`SurfaceManifest.parse`, which requires each `binding_specific` object, to buy under 400 KB
+compressed. Foundry-Java therefore publishes the single document, compressed. The release pipeline
+inherits this decision rather than revisiting it.
+
+### Verification heap budget
+
+`:foundry-java-runtime:verifyGeneratedRealization` declares `maxHeapSize = "512m"`. That is a
+measured budget: verification exhausts 256m inside surface-manifest parsing and passes at 288m
+against the pinned inputs on JDK 17. The cap is held explicit because the JVM default is a quarter of
+physical RAM, which would otherwise make the requirement vary from about 1 GB in a small container to
+several gigabytes on a workstation, hiding a memory regression from everyone but the contributors
+least able to absorb it.
+
+Re-measure before changing it, by running `games.cafecito.foundry.generator.RealizationVerifier`
+directly against the generated artifacts under decreasing `-Xmx` values. Verification loads the
+accepted inputs, the compatibility manifest, the realization map, the compiled generated surface, and
+the manifest, so its floor grows with the engine API.
+
+**When the measured floor exceeds roughly 350 MB, stream the manifest rather than raise the cap.**
+The exhaustion point is inside per-entry parsing, so the fix is a pull reader in
+`foundry-java-api-model` — with the existing DOM `JsonParser` rebuilt on top of it, so one JSON
+grammar exists — and a sorted merge-join against the realization map. That work is deliberately not
+done while 512m holds with headroom.
 
 ## Compatibility rule for `schema_version`
 
