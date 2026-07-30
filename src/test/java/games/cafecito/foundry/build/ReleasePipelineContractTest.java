@@ -141,6 +141,9 @@ class ReleasePipelineContractTest {
         for (String commonGate :
                 List.of(
                         "Prove configuration cache reuse from clean outputs",
+                        "Create and launch the API 36 emulator",
+                        "Wait for observable emulator boot",
+                        "Run production startup twice in fresh processes",
                         "Run the Java and Kotlin conformance matrix as consumer samples",
                         "Run the engine-loaded API 36 conformance gate")) {
             String commonStep = namedWorkflowStep(gates, commonGate);

@@ -393,6 +393,7 @@ git commit -m "ci: share host and device gates"
 - Modify: `src/test/java/games/cafecito/foundry/build/NativeBridgeContractTest.java`
 - Modify: `src/test/java/games/cafecito/foundry/build/EngineLoadedConformanceGateContractTest.java`
 - Modify: `src/test/java/games/cafecito/foundry/build/ReleasePipelineContractTest.java`
+- Modify: `src/test/java/games/cafecito/foundry/build/ReusableGateWorkflowContractTest.java`
 
 - [ ] **Step 1: Point CI gate assertions at `gates.yml`**
 
@@ -470,6 +471,56 @@ for (String gateStep : GATE_STEPS) {
     assertTrue(gates.contains(gateStep), gateStep + " must run before publication");
 }
 assertTrue(gates.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
+
+assertEquals(2, occurrences(gates, "- name: Build, test, and inspect the native bridge\n"));
+String releaseBuild =
+        namedWorkflowStep(gates, "Build, test, and inspect the native bridge", 2);
+assertTrue(releaseBuild.contains("\n        if: inputs.release\n"));
+for (String releaseGate :
+        List.of(
+                ":foundry-java-runtime:verifyRuntimeApi",
+                ":foundry-java-runtime:verifyGeneratedRealization",
+                ":foundry-java-android:nativeAbiLayoutTest",
+                ":foundry-java-android:nativeHostTest",
+                ":foundry-java-android:nativeSanitizerTest",
+                "bash gradle/verify-native-bridge.sh",
+                "${RUNNER_TEMP}/foundry-java-release-check.log",
+                "${RUNNER_TEMP}/foundry-java-release-native-verifier.log")) {
+    assertTrue(releaseBuild.contains(releaseGate));
+}
+
+String releasePreconditions =
+        namedWorkflowStep(
+                gates,
+                "Verify the release preconditions with regenerated dependency locks");
+assertTrue(
+        releasePreconditions.contains(
+                "\n        if: inputs.release && github.event_name == 'push'\n"));
+assertTrue(
+        releasePreconditions.contains(
+                "./gradlew --no-daemon --write-locks resolveAndLockAll"));
+assertTrue(releasePreconditions.contains("bash gradle/verify-release-preconditions.sh"));
+
+String nonPushLockDrift =
+        namedWorkflowStep(gates, "Regenerate dependency locks and reject drift");
+assertTrue(
+        nonPushLockDrift.contains(
+                "\n        if: inputs.release && github.event_name != 'push'\n"));
+assertTrue(
+        nonPushLockDrift.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
+assertTrue(nonPushLockDrift.contains("git status --porcelain --untracked-files=all --"));
+
+for (String commonGate :
+        List.of(
+                "Prove configuration cache reuse from clean outputs",
+                "Create and launch the API 36 emulator",
+                "Wait for observable emulator boot",
+                "Run production startup twice in fresh processes",
+                "Run the Java and Kotlin conformance matrix as consumer samples",
+                "Run the engine-loaded API 36 conformance gate")) {
+    String commonStep = namedWorkflowStep(gates, commonGate);
+    assertFalse(commonStep.contains("\n        if:"));
+}
 
 int gateCall = workflow.indexOf("  gates:\n");
 int stage = workflow.indexOf("  stage:\n");
