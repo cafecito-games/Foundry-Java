@@ -101,3 +101,25 @@ tasks.named("check") {
         tasks.named(mixedConsumer.classesTaskName),
     )
 }
+
+// This module has no Java sources, so the standard Javadoc task would produce a documentation
+// archive containing nothing but a manifest. Until Kotlin documentation generation is added, the
+// published archive states where the Kotlin API is documented instead of being silently empty.
+val kotlinDocumentationNotice =
+    tasks.register("kotlinDocumentationNotice") {
+        val notice = layout.buildDirectory.file("docs/kotlin-documentation-notice/README.txt")
+        outputs.file(notice)
+        doLast {
+            val file = notice.get().asFile
+            file.parentFile.mkdirs()
+            file.writeText(
+                "foundry-java-kotlin exposes Kotlin conveniences over the Java API in\n" +
+                    "foundry-java-runtime. Its Kotlin API is documented in docs/kotlin-helpers.md\n" +
+                    "at https://github.com/cafecito-games/Foundry-Java.\n",
+            )
+        }
+    }
+
+tasks.named<org.gradle.jvm.tasks.Jar>("javadocJar") {
+    from(kotlinDocumentationNotice)
+}

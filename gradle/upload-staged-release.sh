@@ -35,6 +35,20 @@ if [[ ! -f "$topology" ]]; then
   exit 1
 fi
 
+# A Central Portal deployment stays USER_MANAGED until a human publishes it, so it is not yet visible
+# in the public repository and the coordinate probe below cannot see it. This staged release records
+# what it uploaded, so a rerun against the same staged release refuses instead of submitting the
+# bundle a second time. Recovering from a partial upload means dropping the incomplete deployment in
+# the Portal first; see docs/releasing.md.
+uploaded="${staging}/upload-summary.json"
+if [[ -f "$uploaded" ]] && grep -q "\"target\": \"${target}\"" "$uploaded" &&
+  grep -q "\"version\": \"${version}\"" "$uploaded"; then
+  printf 'Upload refused: release %s is already published to the %s target according to %s.\n' \
+    "$version" "$target" "$uploaded" >&2
+  printf 'Refusing to republish. Drop any incomplete deployment at the target first.\n' >&2
+  exit 1
+fi
+
 case "$target" in
   staging)
     staging_target="${FOUNDRY_RELEASE_STAGING_TARGET:-}"
@@ -100,6 +114,8 @@ if [[ -n "$(printf '%s' "$already_published" | tr -d '[:space:]')" ]]; then
   exit 1
 fi
 
+deployment_id=''
+
 upload_bundle() {
   case "$target" in
     staging)
@@ -128,7 +144,11 @@ upload_bundle() {
           --form "bundle=@${bundle}" \
           --form "name=foundry-java-${version}" \
           --form 'publishingType=USER_MANAGED' \
+          --output "${staging}/central-deployment-id.txt" \
           "$central_portal_upload"
+      # The Portal answers with the deployment identifier, which is the only handle a human has for
+      # publishing or dropping the deployment, so it is kept as evidence.
+      deployment_id="$(tr -d '[:space:]' < "${staging}/central-deployment-id.txt")"
       ;;
   esac
 }
@@ -142,6 +162,7 @@ uploaded_files="$(cd "$repository" && find . -type f | sed 's|^\./||' | LC_ALL=C
   printf '  "result": "ok",\n'
   printf '  "target": "%s",\n' "$target"
   printf '  "version": "%s",\n' "$version"
+  printf '  "deployment_id": "%s",\n' "$deployment_id"
   printf '  "uploaded_files": %s,\n' "$(printf '%s\n' "$uploaded_files" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
   printf '  "coordinates": [\n'
   separator=''

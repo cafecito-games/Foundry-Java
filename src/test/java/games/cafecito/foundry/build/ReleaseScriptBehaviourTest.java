@@ -389,7 +389,16 @@ class ReleaseScriptBehaviourTest {
 
         assertNotEquals(0, second.exitCode(), second.output());
         assertTrue(second.output().contains("is already published"), second.output());
-        assertTrue(second.output().contains("refusing to republish"), second.output());
+        assertTrue(second.output().contains("efusing to republish"), second.output());
+
+        // Even without its own record of the upload, the coordinate probe against the target still
+        // refuses, so a fresh staging of an already-published version cannot republish it.
+        Files.delete(staging.resolve("upload-summary.json"));
+        Result third = uploadToStaging(staging, target);
+
+        assertNotEquals(0, third.exitCode(), third.output());
+        assertTrue(third.output().contains("is already published"), third.output());
+        assertTrue(third.output().contains("efusing to republish"), third.output());
     }
 
     @Test

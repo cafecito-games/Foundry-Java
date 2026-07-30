@@ -415,6 +415,11 @@ class ReleasePipelineContractTest {
         assertTrue(
                 upload.contains("upload-summary.json"),
                 "a completed upload records what it uploaded so a rerun is a no-op decision");
+        // A Central Portal deployment stays USER_MANAGED and is therefore invisible to the public
+        // coordinate probe, so the recorded upload is what stops a retry submitting a second
+        // bundle.
+        assertTrue(upload.contains("deployment_id"));
+        assertTrue(upload.contains("USER_MANAGED"));
     }
 
     @Test
