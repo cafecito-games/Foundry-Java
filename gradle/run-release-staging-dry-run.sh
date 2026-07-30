@@ -26,10 +26,30 @@ if [[ "$requested_target" != "staging" ]]; then
   exit 1
 fi
 
+# The work directory is deleted and rebuilt, and it is overridable, so it is canonicalized and
+# checked before anything is removed. A path that is, contains, or lives inside the checkout would
+# destroy the sources under test.
 work="${FOUNDRY_RELEASE_DRY_RUN_DIR:-${RUNNER_TEMP:-/tmp}/foundry-java-release-dry-run}"
-rm -rf "$work"
 mkdir -p "$work"
 work="$(cd "$work" && pwd)"
+if [[ "$work" == "/" || "$work" == "$repo_root" ]]; then
+  printf 'The dry run refuses %s as a work directory.\n' "$work" >&2
+  exit 1
+fi
+case "${repo_root}/" in
+  "${work}"/*)
+    printf 'The dry run work directory %s contains the repository checkout.\n' "$work" >&2
+    exit 1
+    ;;
+esac
+case "${work}/" in
+  "${repo_root}"/*)
+    printf 'The dry run work directory %s is inside the repository checkout.\n' "$work" >&2
+    exit 1
+    ;;
+esac
+rm -rf "$work"
+mkdir -p "$work"
 
 # The ephemeral key lives only inside this run's work directory. Its private half is read into an
 # environment variable and never written to a log, a file the release reads, or a command line.

@@ -59,7 +59,9 @@ rm -rf "$staging"
 mkdir -p "${staging}/repository"
 
 # A release is built from nothing, so the two stagings a reproducibility proof compares can never
-# differ because one of them reused an output the other rebuilt.
+# differ because one of them reused an output the other rebuilt — and, for the same reason, the build
+# below runs with --no-build-cache, or the second staging could restore the first staging's artifacts
+# from the local build cache and certify a reproducibility it never observed.
 rm -rf "${repo_root}/build"
 find "$repo_root" -mindepth 2 -maxdepth 2 -type d -name build -exec rm -rf {} +
 
@@ -77,7 +79,7 @@ publication_tasks=(
 
 ORG_GRADLE_PROJECT_signingKey="$FOUNDRY_SIGNING_KEY" \
   ORG_GRADLE_PROJECT_signingPassword="$FOUNDRY_SIGNING_PASSWORD" \
-  "${repo_root}/gradlew" --no-daemon \
+  "${repo_root}/gradlew" --no-daemon --no-build-cache \
   "-PfoundryStagingRepository=${staging}/repository" \
   "${publication_tasks[@]}"
 

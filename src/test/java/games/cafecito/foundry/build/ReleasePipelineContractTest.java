@@ -167,6 +167,10 @@ class ReleasePipelineContractTest {
                 occurrences(reproducibility, "bash \"${repo_root}/gradle/stage-release.sh\""),
                 "reproducibility is proven by staging the same tag twice");
         assertTrue(reproducibility.contains("cmp -s"));
+        // Two stagings are only independent if neither can restore the other's outputs from the
+        // local
+        // build cache.
+        assertTrue(read(STAGE).contains("--no-build-cache"));
         assertTrue(reproducibility.contains("is not reproducible"));
         // An OpenPGP signature embeds its own creation time, so the signatures cannot be compared
         // byte for byte. Everything they sign can be, and is.

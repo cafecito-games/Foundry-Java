@@ -212,6 +212,20 @@ class ReleaseScriptBehaviourTest {
     }
 
     @Test
+    void theStagedRepositoryVerifierRejectsASignatureChecksumThatDoesNotMatch(
+            @TempDir Path directory) throws Exception {
+        Path staging = newStagedRelease(directory);
+        Path jar = artifact(staging, "foundry-java-runtime", "jar", "");
+        Files.writeString(
+                jar.resolveSibling(jar.getFileName() + ".asc.sha256"), "0".repeat(64) + "\n");
+
+        Result result = verifyStaged(staging);
+
+        assertNotEquals(0, result.exitCode(), result.output());
+        assertTrue(result.output().contains(".jar.asc sha256 checksum"), result.output());
+    }
+
+    @Test
     void theStagedRepositoryVerifierRejectsAChecksumThatDoesNotMatch(@TempDir Path directory)
             throws Exception {
         Path staging = newStagedRelease(directory);
@@ -536,14 +550,19 @@ class ReleaseScriptBehaviourTest {
 
     private void publishFile(Path path, String content) throws Exception {
         Files.writeString(path, content);
-        sign(path);
-        writeChecksums(path);
+        signAndChecksum(path);
     }
 
     private void publishZip(Path path, String entry) throws Exception {
         writeZip(path, entry, entry);
+        signAndChecksum(path);
+    }
+
+    private void signAndChecksum(Path path) throws Exception {
         sign(path);
         writeChecksums(path);
+        // A published Maven layout carries checksums for the signature as well as the artifact.
+        writeChecksums(path.resolveSibling(path.getFileName() + ".asc"));
     }
 
     private void writeZip(Path path, String entry, String content) throws IOException {

@@ -134,21 +134,30 @@ verify_file() {
     report "${relative} signature was made by ${signing_key:-an unknown key}, not the expected release key ${expected_fingerprint}."
     return
   fi
+  # The signature travels in the release too, so its own checksums are verified rather than merely
+  # tolerated.
+  verify_checksums "$file"
+  verify_checksums "${file}.asc"
+  verified_files=$((verified_files + 1))
+}
+
+verify_checksums() {
+  local file="$1"
+  local relative="${file#"${repository}"/}"
   local algorithm
+  local recorded
+  local computed
   for algorithm in $checksum_algorithms; do
     if [[ ! -f "${file}.${algorithm}" ]]; then
       report "${relative} has no ${algorithm} checksum."
       continue
     fi
-    local recorded
-    local computed
     recorded="$(tr -d '[:space:]' < "${file}.${algorithm}")"
     computed="$(digest "$algorithm" "$file")"
     if [[ "$recorded" != "$computed" ]]; then
       report "${relative} ${algorithm} checksum does not match its content."
     fi
   done
-  verified_files=$((verified_files + 1))
 }
 
 pom_element() {
