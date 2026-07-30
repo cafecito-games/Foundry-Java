@@ -214,7 +214,7 @@ final class ModuleEmitter {
                 .formatted(
                         model.qualifiedName(),
                         model.exportedName(),
-                        model.baseType(),
+                        model.baseFoundryName(),
                         model.initializationLevel(),
                         after,
                         model.qualifiedName(),

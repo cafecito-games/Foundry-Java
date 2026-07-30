@@ -12,6 +12,7 @@ record ExtensionModel(
         String simpleName,
         String exportedName,
         String baseType,
+        String baseFoundryName,
         String initializationLevel,
         boolean bindingConstructor,
         List<String> initializationDependencies,
