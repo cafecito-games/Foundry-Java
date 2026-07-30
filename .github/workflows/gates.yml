@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   host-gate:
@@ -180,6 +181,72 @@ jobs:
       FOUNDRY_ENGINE_CACHE: ${{ github.workspace }}/.foundry-engine-cache
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Classify whether this change needs the engine-loaded gate
+        id: engine-gate-scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EXPECTED_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          select_gate() {
+            local run="$1"
+            local reason="$2"
+            printf 'run=%s\nreason=%s\n' "$run" "$reason" >> "$GITHUB_OUTPUT"
+            printf 'Engine-loaded gate decision: run=%s reason=%s\n' "$run" "$reason"
+          }
+
+          if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            select_gate true non-pull-request
+            exit 0
+          fi
+
+          if ! pages="$(
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          if ! observed_count="$(jq -er '[.[][]] | length' <<< "$pages" 2>/dev/null)"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          if [[ "$observed_count" != "$EXPECTED_CHANGED_FILES" ]]; then
+            select_gate true classification-incomplete
+            exit 0
+          fi
+          if ! paths="$(
+            jq -ec \
+              '[.[][] | (.filename, .previous_filename?)] | map(select(type == "string"))' \
+              <<< "$pages" 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          if ! decision="$(
+            printf '%s' "$paths" |
+              bash gradle/classify-engine-gate-paths.sh 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+
+          case "$decision" in
+            $'run=false\nreason=safe-only')
+              select_gate false safe-only
+              ;;
+            $'run=true\nreason=relevant')
+              select_gate true relevant
+              ;;
+            $'run=true\nreason=fail-closed')
+              select_gate true fail-closed
+              ;;
+            *)
+              select_gate true classification-failed
+              ;;
+          esac
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
@@ -252,6 +319,7 @@ jobs:
           key: >-
             foundry-engine-v0.1.0-alpha.14-6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f
       - name: Run the engine-loaded API 36 conformance gate
+        if: steps.engine-gate-scope.outputs.run == 'true'
         shell: bash
         run: bash gradle/run-engine-loaded-conformance-gate.sh emulator-5554
       - name: Upload API 36 production startup evidence

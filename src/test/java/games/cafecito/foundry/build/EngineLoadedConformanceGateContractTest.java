@@ -245,6 +245,8 @@ class EngineLoadedConformanceGateContractTest {
     void continuousIntegrationRunsTheGateOnTheApi36EmulatorAndKeepsItsEvidence()
             throws IOException {
         String workflow = read(".github/workflows/gates.yml");
+        String ci = read(".github/workflows/ci.yml");
+        String release = read(".github/workflows/release.yml");
 
         assertTrue(workflow.contains("bash gradle/run-engine-loaded-conformance-gate.sh"));
         // The 1.1 GB export template archive is cached by release tag and digest, so the key must
@@ -258,6 +260,33 @@ class EngineLoadedConformanceGateContractTest {
                 workflow.indexOf("- name: Run the Java and Kotlin conformance matrix as consumer");
         assertTrue(gateStep > 0 && matrixStep > 0);
         assertTrue(gateStep > matrixStep, "the engine gate runs after the cheaper device legs");
+
+        String scopeMarker = "- name: Classify whether this change needs the engine-loaded gate\n";
+        int scopeStart = workflow.indexOf(scopeMarker);
+        assertTrue(scopeStart > 0, "the device job must classify the pull request scope");
+        int scopeEnd = workflow.indexOf("\n      - ", scopeStart + scopeMarker.length());
+        String scopeStep = workflow.substring(scopeStart, scopeEnd);
+        assertTrue(scopeStep.contains("\n        id: engine-gate-scope\n"));
+        assertTrue(
+                scopeStep.contains("if [[ \"${GITHUB_EVENT_NAME}\" != \"pull_request\" ]]; then"));
+        assertTrue(scopeStep.contains("select_gate true non-pull-request"));
+
+        int gateStepEnd = workflow.indexOf("\n      - ", gateStep + 1);
+        String engineStep = workflow.substring(gateStep, gateStepEnd);
+        assertTrue(
+                engineStep.startsWith(
+                        "- name: Run the engine-loaded API 36 conformance gate\n"
+                                + "        if: steps.engine-gate-scope.outputs.run == 'true'\n"
+                                + "        shell: bash\n"
+                                + "        run: bash"
+                                + " gradle/run-engine-loaded-conformance-gate.sh"),
+                "the engine step condition must immediately precede its shell and run command");
+
+        assertTrue(ci.contains("  push:\n    branches: [main]\n"));
+        assertTrue(ci.contains("  pull_request:\n"));
+        assertTrue(release.contains("  push:\n    tags:\n"));
+        assertTrue(release.contains("  workflow_dispatch:\n"));
+        assertFalse(release.contains("  pull_request:\n"));
     }
 
     @Test

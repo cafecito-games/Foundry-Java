@@ -106,6 +106,69 @@ class ReusableGateWorkflowContractTest {
                 shared, ci, release, "- name: Create and launch the API 36 emulator");
     }
 
+    @Test
+    void onlySafePullRequestsSkipTheEngineLoadedDeviceGate() throws IOException {
+        String shared = read(SHARED);
+        String ci = read(".github/workflows/ci.yml");
+        String release = read(".github/workflows/release.yml");
+        String device = workflowJob(shared, "device-gate");
+
+        for (String workflow : new String[] {shared, ci, release}) {
+            assertEquals(
+                    1,
+                    occurrences(workflow, "  pull-requests: read\n"),
+                    "each workflow must grant read-only pull request metadata access");
+            assertEquals(
+                    0,
+                    occurrences(workflow, "pull-requests: write"),
+                    "pull request metadata access must never be writable");
+        }
+
+        String scope =
+                workflowStep(device, "Classify whether this change needs the engine-loaded gate");
+        assertTrue(scope.contains("\n        id: engine-gate-scope\n"));
+        assertTrue(scope.contains("\n          GH_TOKEN: ${{ github.token }}\n"));
+        assertTrue(
+                scope.contains("\n          PR_NUMBER: ${{ github.event.pull_request.number }}\n"));
+        assertTrue(
+                scope.contains(
+                        "\n          EXPECTED_CHANGED_FILES:"
+                                + " ${{ github.event.pull_request.changed_files }}\n"));
+        assertTrue(scope.contains("gh api --paginate --slurp"));
+        assertTrue(scope.contains("pulls/${PR_NUMBER}/files?per_page=100"));
+        assertTrue(scope.contains("[.[][]] | length"));
+        assertTrue(scope.contains("EXPECTED_CHANGED_FILES"));
+        assertTrue(scope.contains("(.filename, .previous_filename?)"));
+        assertTrue(scope.contains("bash gradle/classify-engine-gate-paths.sh"));
+        assertTrue(scope.contains("run=true"));
+        assertTrue(scope.contains("classification-failed"));
+        assertTrue(scope.contains("classification-incomplete"));
+
+        String condition = "if: steps.engine-gate-scope.outputs.run == 'true'";
+        assertEquals(
+                1,
+                occurrences(device, condition),
+                "only the engine-loaded gate may depend on the classifier");
+        String engine = workflowStep(device, "Run the engine-loaded API 36 conformance gate");
+        assertTrue(
+                engine.contains("\n        " + condition + "\n"),
+                "the engine-loaded gate must use the classifier output");
+
+        for (String step :
+                new String[] {
+                    "Create and launch the API 36 emulator",
+                    "Wait for observable emulator boot",
+                    "Run production startup twice in fresh processes",
+                    "Run the Java and Kotlin conformance matrix as consumer samples",
+                    "Upload API 36 production startup evidence",
+                    "Upload device gate evidence"
+                }) {
+            assertFalse(
+                    workflowStep(device, step).contains("engine-gate-scope"),
+                    step + " must remain independent of the engine-loaded gate classifier");
+        }
+    }
+
     private static void assertBooleanInput(String workflow, String input) {
         Pattern inputBlock =
                 Pattern.compile(
@@ -137,6 +200,14 @@ class ReusableGateWorkflowContractTest {
         var matcher = nextJob.matcher(workflow);
         int end = matcher.find(start + marker.length()) ? matcher.start() : workflow.length();
         return workflow.substring(start, end);
+    }
+
+    private static String workflowStep(String job, String name) {
+        String marker = "      - name: " + name + "\n";
+        assertEquals(1, occurrences(job, marker), name + " must identify one workflow step");
+        int start = job.indexOf(marker);
+        int end = job.indexOf("\n      - ", start + marker.length());
+        return job.substring(start, end < 0 ? job.length() : end);
     }
 
     private static int occurrences(String value, String needle) {
