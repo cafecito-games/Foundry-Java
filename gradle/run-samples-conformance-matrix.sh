@@ -37,9 +37,9 @@ fi
 gradle=("${repo_root}/gradlew" --no-daemon)
 samples=("${gradle[@]}" --project-dir "${repo_root}/samples" "-PfoundryVersion=${sample_version}")
 
-# A consumer resolves published artifacts, never project outputs. The bootstrap repository is
-# rebuilt from scratch so the samples can only see this exact publication set.
-rm -rf "${repo_root}/build/repository"
+# A consumer resolves published artifacts, never project outputs. Publishing is scoped to
+# sample_version, and verifyPublications (and Maven resolution generally) only ever consider
+# that exact version, so the bootstrap repository does not need to be cleaned first.
 "${gradle[@]}" "-PfoundryVersion=${sample_version}" \
   :foundry-java-annotations:publishAllPublicationsToBootstrapRepository \
   :foundry-java-api-model:publishAllPublicationsToBootstrapRepository \
