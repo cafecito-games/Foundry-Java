@@ -238,7 +238,10 @@ class ReleasePipelineContractTest {
         assertTrue(topology.contains("games.cafecito.foundry:foundry-java-runtime:jar:sourcesElements+javadocElements"));
         // The Android library plugin's own Javadoc generation cannot read Java records in a
         // dependency, so that Javadoc is a Maven artifact rather than a Gradle variant.
-        assertTrue(topology.contains("games.cafecito.foundry:foundry-java-android:aar:sourcesElements"));
+        assertTrue(
+                topology.contains(
+                        "games.cafecito.foundry:foundry-java-android:aar"
+                                + ":releaseVariantReleaseSourcePublication"));
         assertTrue(androidBuild.contains("releaseJavadocJar"));
         assertTrue(
                 topology.contains(
