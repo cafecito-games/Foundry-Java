@@ -316,10 +316,10 @@ class RepositoryContractTest {
 
         assertTrue(workflow.contains("bash gradle/verify-configuration-cache-reuse.sh"));
         assertTrue(cacheVerification.contains("set -euo pipefail"));
-        assertTrue(cacheVerification.contains("rm -rf \"$repo_root/build\""));
+        assertTrue(cacheVerification.contains("rm -rf \"$project_directory/build\""));
         assertTrue(
                 cacheVerification.contains(
-                        "find \"$repo_root\" -mindepth 2 -maxdepth 2"
+                        "find \"$project_directory\" -mindepth 2 -maxdepth 2"
                                 + " -type d -name build -exec rm -rf {} +"));
         assertEquals(2, cacheVerification.split("\"\\$\\{gradle_command\\[@]}\"", -1).length - 1);
         assertTrue(cacheVerification.contains("tee \"$second_log\""));
@@ -328,6 +328,106 @@ class RepositoryContractTest {
                         "Configuration cache entry reused|Reusing configuration cache"));
         assertTrue(cacheVerification.contains("configuration cache cannot be reused"));
         assertTrue(cacheVerification.contains("--configuration-cache-problems=fail"));
+
+        // Only the second invocation may skip execution. Run 1 must execute the real task graph for
+        // --configuration-cache-problems=fail to have anything to observe, and run 2 only has to
+        // reach the fingerprint check, which happens before any task action runs.
+        assertTrue(
+                cacheVerification.contains(
+                        "\"${gradle_command[@]}\" 2>&1 | tee \"$first_log\"\n"
+                                + "\"${gradle_command[@]}\" --dry-run 2>&1"
+                                + " | tee \"$second_log\""));
+        // Both runs share one command, so both stay --no-daemon: run 2 proves a *fresh process* can
+        // reuse the on-disk entry, and a warm daemon could satisfy the same assertion out of
+        // memory.
+        assertTrue(
+                cacheVerification.contains(
+                        "gradle_command=(\n"
+                                + "  \"$repository_root/gradlew\"\n"
+                                + "  --project-dir \"$project_directory\"\n"
+                                + "  --no-daemon\n"
+                                + "  clean\n"
+                                + "  check\n"
+                                + "  --configuration-cache\n"
+                                + "  --configuration-cache-problems=fail\n"
+                                + ")"));
+    }
+
+    @Test
+    void theConfigurationCacheGateIsProvenToStillFailBothDefectsItCatches() throws IOException {
+        String workflow = read(".github/workflows/ci.yml");
+        String selfTest = read("gradle/verify-configuration-cache-reuse-selftest.sh");
+        String violationFixture =
+                read(
+                        "gradle/testFixtures/configuration-cache/configuration-cache-violation"
+                                + "/build.gradle.kts");
+        String unstableFixture =
+                read(
+                        "gradle/testFixtures/configuration-cache/unstable-configuration-input"
+                                + "/build.gradle.kts");
+
+        assertTrue(workflow.contains("bash gradle/verify-configuration-cache-reuse-selftest.sh"));
+        assertTrue(selfTest.contains("set -euo pipefail"));
+
+        // The self-test must drive the real gate, not a paraphrase of it, or it proves nothing
+        // about
+        // what CI actually runs.
+        assertTrue(
+                selfTest.contains(
+                        "proof=\"$repository_root/gradle/verify-configuration-cache-reuse.sh\""));
+        assertTrue(selfTest.contains("bash \"$proof\" \"$workspace/$fixture\""));
+
+        // Each fixture must be rejected, and rejected for its own reason: a fixture that failed on
+        // an unrelated error would report a passing self-test while proving nothing.
+        assertTrue(
+                selfTest.contains(
+                        "expect_rejection configuration-cache-violation \\\n"
+                                + "  'holds a Project reference at execution time' \\\n"
+                                + "  \"invocation of 'Task\\.project' at execution time"
+                                + " is unsupported\""));
+        assertTrue(
+                selfTest.contains(
+                        "expect_rejection unstable-configuration-input \\\n"
+                                + "  'rewrites one of its own configuration inputs while it runs'"
+                                + " \\\n"
+                                + "  'configuration cache cannot be reused because file'"));
+
+        // Run 1 catches configuration-cache violations in build logic.
+        assertTrue(violationFixture.contains("doLast {"));
+        assertTrue(violationFixture.contains("project.name"));
+
+        // Run 2 catches an entry that stores cleanly and is then discarded every build, which run 1
+        // cannot see. This fixture is what establishes that a --dry-run second invocation still
+        // checks fingerprints rather than reusing blindly.
+        assertTrue(unstableFixture.contains("providers.fileContents(unstableInput).asText.get()"));
+        assertTrue(unstableFixture.contains("target.writeText("));
+    }
+
+    @Test
+    void ciPersistsTheGradleCacheItAlreadyAsksTheBuildToUse() throws IOException {
+        String workflow = read(".github/workflows/ci.yml");
+        String gradleProperties = read("gradle.properties");
+
+        // Asking for a build cache and then discarding it every run was the single largest cause of
+        // the check job's cost: the whole dependency graph was re-resolved and no task output was
+        // ever reused between runs.
+        assertTrue(gradleProperties.contains("org.gradle.caching=true"));
+        assertEquals(
+                2,
+                workflow.split(
+                                        "uses: gradle/actions/setup-gradle@"
+                                                + "0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d",
+                                        -1)
+                                .length
+                        - 1);
+        // Only the check job may publish an entry, so the two jobs cannot race to write one.
+        assertTrue(workflow.contains("cache-read-only: true"));
+        // The dedicated wrapper-validation gate stays the authority on the wrapper.
+        assertTrue(
+                workflow.contains(
+                        "uses: gradle/actions/wrapper-validation@"
+                                + "0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d"));
+        assertEquals(2, workflow.split("validate-wrappers: false", -1).length - 1);
     }
 
     @Test
