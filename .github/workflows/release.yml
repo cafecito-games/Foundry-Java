@@ -2,7 +2,7 @@ name: Release
 
 # Publication is tag-driven. Only `check` is a required status context on this repository and
 # require-branches-up-to-date is off, so branch protection cannot be what orders publication after
-# the gates: this workflow runs the complete gate set itself and stages nothing until every gate job
+# the gates: this workflow calls the shared complete gate set and stages nothing until every gate job
 # has succeeded.
 on:
   push:
@@ -23,184 +23,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  host-gate:
-    name: Host gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      # A manual dispatch can only ever prove the pipeline against a staging target, so a dispatch
-      # that opts out of the dry run would run every gate and then do nothing. Refuse it up front
-      # rather than reporting success for a run that released nothing.
-      - name: Refuse a manual dispatch that is not a dry run
-        if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
-        shell: bash
-        run: |
-          printf 'A manual dispatch only proves the pipeline against a staging target.\n' >&2
-          printf 'A real release is a tag push. Re-run the dispatch with dry_run enabled.\n' >&2
-          exit 1
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
-        with:
-          packages: >-
-            tools platform-tools platforms;android-36 build-tools;35.0.0
-            ndk;29.0.14206865 cmake;3.22.1
-      - uses: gradle/actions/wrapper-validation@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
-      - name: Prove configuration cache reuse from clean outputs
-        shell: bash
-        run: bash gradle/verify-configuration-cache-reuse.sh
-      - name: Build, test, and inspect the native bridge
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon \
-            :foundry-java-runtime:verifyRuntimeApi \
-            :foundry-java-runtime:verifyGeneratedRealization \
-            :foundry-java-android:assembleDebug \
-            :foundry-java-android:assembleDebugAndroidTest \
-            :foundry-java-android:bundleReleaseAar \
-            :foundry-java-android:nativeAbiLayoutTest \
-            :foundry-java-android:nativeHostTest \
-            :foundry-java-android:nativeSanitizerTest 2>&1 |
-            tee "${RUNNER_TEMP}/foundry-java-release-check.log"
-          bash gradle/verify-native-bridge.sh \
-            foundry-java-android/build/outputs/aar/foundry-java-android-release.aar 2>&1 |
-            tee "${RUNNER_TEMP}/foundry-java-release-native-verifier.log"
-      - name: Verify the release preconditions with regenerated dependency locks
-        if: github.event_name == 'push'
-        shell: bash
-        env:
-          FOUNDRY_RELEASE_VERIFY_LOCKS: regenerate
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --write-locks resolveAndLockAll
-          bash gradle/verify-release-preconditions.sh "${GITHUB_REF_NAME}"
-      - name: Regenerate dependency locks and reject drift
-        if: github.event_name != 'push'
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --write-locks resolveAndLockAll
-          lock_status="$(
-            git status --porcelain --untracked-files=all -- \
-              gradle.lockfile \
-              ':(glob)**/gradle.lockfile' \
-              settings-gradle.lockfile
-          )"
-          if [[ -n "$lock_status" ]]; then
-            printf '%s\n' "$lock_status"
-            exit 1
-          fi
-      - name: Upload host gate evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: foundry-java-release-host-gate-evidence
-          if-no-files-found: warn
-          path: |
-            **/build/reports/**
-            foundry-java-runtime/build/reports/foundry-realization/**
-            foundry-java-android/build/native-host/**
-            foundry-java-android/build/native-host-sanitized/**
-            foundry-java-android/build/outputs/aar/**
-            ${{ runner.temp }}/foundry-java-release-check.log
-            ${{ runner.temp }}/foundry-java-release-native-verifier.log
-
-  device-gate:
-    name: Device gate on API 36
-    runs-on: ubuntu-latest
-    # The engine-loaded gate downloads a roughly 1.1 GB export template and builds five exports, so
-    # it keeps the same budget the pull-request device job uses.
-    timeout-minutes: 150
-    env:
-      FOUNDRY_ENGINE_CACHE: ${{ github.workspace }}/.foundry-engine-cache
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
-        with:
-          packages: >-
-            tools platform-tools emulator platforms;android-36 build-tools;35.0.0
-            ndk;29.0.14206865 cmake;3.22.1
-            system-images;android-36;default;x86_64
-      - name: Create and launch the API 36 emulator
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -c /dev/kvm
-          sudo chmod 666 /dev/kvm
-          export ANDROID_AVD_HOME="${RUNNER_TEMP}/android-avd"
-          echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME}" >> "${GITHUB_ENV}"
-          mkdir -p "${ANDROID_AVD_HOME}"
-          echo no | "${ANDROID_HOME}/cmdline-tools/latest/bin/avdmanager" create avd --force \
-            --name foundry-java-release \
-            --package "system-images;android-36;default;x86_64"
-          nohup "${ANDROID_HOME}/emulator/emulator" \
-            -avd foundry-java-release \
-            -port 5554 \
-            -no-window \
-            -no-audio \
-            -no-boot-anim \
-            -no-snapshot \
-            -wipe-data \
-            -gpu swiftshader_indirect \
-            > "${RUNNER_TEMP}/foundry-java-emulator.log" 2>&1 &
-      - name: Wait for observable emulator boot
-        shell: bash
-        run: |
-          set -euo pipefail
-          "${ANDROID_HOME}/platform-tools/adb" start-server
-          attempt=1
-          while test "${attempt}" -le 180; do
-            if test "$("${ANDROID_HOME}/platform-tools/adb" -s emulator-5554 shell \
-              getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1"; then
-              "${ANDROID_HOME}/platform-tools/adb" -s emulator-5554 devices -l
-              exit 0
-            fi
-            sleep 2
-            attempt=$((attempt + 1))
-          done
-          "${ANDROID_HOME}/platform-tools/adb" devices -l
-          exit 1
-      - name: Run production startup twice in fresh processes
-        shell: bash
-        run: bash gradle/run-android-production-startup-acceptance.sh emulator-5554
-      - name: Run the Java and Kotlin conformance matrix as consumer samples
-        shell: bash
-        run: bash gradle/run-samples-conformance-matrix.sh emulator-5554
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ env.FOUNDRY_ENGINE_CACHE }}
-          key: >-
-            foundry-engine-v0.1.0-alpha.14-6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f
-      - name: Run the engine-loaded API 36 conformance gate
-        shell: bash
-        run: bash gradle/run-engine-loaded-conformance-gate.sh emulator-5554
-      - name: Upload device gate evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: foundry-java-release-device-gate-evidence
-          if-no-files-found: warn
-          path: |
-            ${{ runner.temp }}/foundry-java-production-startup/**
-            ${{ runner.temp }}/foundry-java-conformance-matrix/**
-            ${{ runner.temp }}/foundry-java-engine-gate/**
-            ${{ runner.temp }}/foundry-java-emulator.log
-            samples/*/build/reports/**
-            acceptance/*/build/reports/**
+  gates:
+    uses: ./.github/workflows/gates.yml
+    with:
+      release: true
+      dry_run: ${{ inputs.dry_run }}
 
   stage:
     name: Stage, sign, and verify
-    needs: [host-gate, device-gate]
+    needs: [gates]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # The signing key is an encrypted secret scoped to this environment, so no other workflow — and
