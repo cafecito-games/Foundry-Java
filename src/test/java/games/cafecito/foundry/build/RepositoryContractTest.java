@@ -178,7 +178,7 @@ class RepositoryContractTest {
     void ciPinsTheAndroidPackagesRequiredByTheCompileSdk() throws IOException {
         String androidBuild = read("foundry-java-android/build.gradle.kts");
         String catalog = read("gradle/libs.versions.toml");
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         var compileSdkMatcher = Pattern.compile("compileSdk\\s*=\\s*(\\d+)").matcher(androidBuild);
         var buildToolsMatcher =
                 Pattern.compile("android-build-tools\\s*=\\s*\"([^\"]+)\"").matcher(catalog);
@@ -224,7 +224,7 @@ class RepositoryContractTest {
     void buildToolingIsPinnedFormattedAndConfigurationCacheSafe() throws IOException {
         String rootBuild = read("build.gradle.kts");
         String wrapper = read("gradle/wrapper/gradle-wrapper.properties");
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         Pattern immutableAction = Pattern.compile("^[0-9a-f]{40}(?:\\s+#.*)?$");
 
         assertTrue(
@@ -256,8 +256,8 @@ class RepositoryContractTest {
                 List.of("AGENTS.md", "README.md", "CONTRIBUTING.md", "docs/releasing.md")) {
             assertTrue(read(documentation).contains(LOCK_COMMAND), documentation);
         }
-        String workflow = read(".github/workflows/ci.yml");
-        assertTrue(workflow.contains("- run: " + LOCK_COMMAND));
+        String workflow = read(".github/workflows/gates.yml");
+        assertTrue(workflow.contains("- if: ${{ !inputs.release }}\n        run: " + LOCK_COMMAND));
 
         String rootBuild = read("build.gradle.kts");
         assertTrue(rootBuild.contains("layout.buildDirectory.dir(\"repository\")"));
@@ -268,7 +268,7 @@ class RepositoryContractTest {
     @Test
     void repositoryPinsTheExactLockInventoryAndCiRejectsAllLockDrift() throws IOException {
         String rootBuild = read("build.gradle.kts");
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
 
         assertEquals(11, LOCK_FILES.size());
         assertTrue(rootBuild.contains("val requiredLockFilePaths ="));
@@ -311,7 +311,7 @@ class RepositoryContractTest {
 
     @Test
     void ciProvesConfigurationCacheReuseWithoutMaskingGradleFailures() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         String cacheVerification = read("gradle/verify-configuration-cache-reuse.sh");
 
         assertTrue(workflow.contains("bash gradle/verify-configuration-cache-reuse.sh"));
@@ -355,7 +355,7 @@ class RepositoryContractTest {
 
     @Test
     void theConfigurationCacheGateIsProvenToStillFailBothDefectsItCatches() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         String selfTest = read("gradle/verify-configuration-cache-reuse-selftest.sh");
         String violationFixture =
                 read(
@@ -405,7 +405,7 @@ class RepositoryContractTest {
 
     @Test
     void ciPersistsTheGradleCacheItAlreadyAsksTheBuildToUse() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         String gradleProperties = read("gradle.properties");
 
         // Asking for a build cache and then discarding it every run was the single largest cause of
@@ -642,7 +642,7 @@ class RepositoryContractTest {
 
     @Test
     void theConsumerConformanceMatrixIsAStandaloneSampleBuildRunOnTheDevice() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         String script = read("gradle/run-samples-conformance-matrix.sh");
         String settings = read("samples/settings.gradle.kts");
         String javaAppBuild = read("samples/conformance-java-app/build.gradle.kts");
@@ -691,19 +691,20 @@ class RepositoryContractTest {
 
     @Test
     void ciPublishesImmutableCheckAndProductionStartupEvidence() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
 
         assertTrue(workflow.contains("bash gradle/run-android-production-startup-acceptance.sh"));
         assertFalse(workflow.contains(":foundry-java-android:connectedDebugAndroidTest"));
-        assertEquals(2, occurrences(workflow, UPLOAD_ARTIFACT_COMMIT));
+        assertEquals(4, occurrences(workflow, UPLOAD_ARTIFACT_COMMIT));
         assertTrue(workflow.contains("name: foundry-java-check-evidence"));
         assertTrue(workflow.contains("name: foundry-java-api36-production-startup-evidence"));
-        assertEquals(2, occurrences(workflow, "if: always()"));
+        assertEquals(4, occurrences(workflow, "always() &&"));
         int buildStepStart = workflow.indexOf("- name: Build, test, and inspect the native bridge");
         assertTrue(buildStepStart >= 0);
         int buildStepEnd = workflow.indexOf("\n      - ", buildStepStart + 1);
         assertTrue(buildStepEnd > buildStepStart);
         String buildStep = workflow.substring(buildStepStart, buildStepEnd);
+        assertTrue(buildStep.contains("if: ${{ !inputs.release }}"));
         assertTrue(buildStep.contains("shell: bash"));
         assertTrue(buildStep.contains("run: |\n          set -euo pipefail"));
         assertTrue(
@@ -786,7 +787,7 @@ class RepositoryContractTest {
     @Test
     void theEngineApiParityOracleGatesEveryPullRequestWithUploadedEvidence() throws IOException {
         String runtimeBuild = read("foundry-java-runtime/build.gradle.kts");
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
         String accounting =
                 read("foundry-java-runtime/api/foundry-java-realization-accounting.txt");
         String runtimeApi = read("foundry-java-runtime/api/foundry-java-runtime.api");

@@ -26,6 +26,7 @@ class ReusableGateWorkflowContractTest {
         assertBooleanInput(shared, "dry_run");
         assertTrue(shared.contains("  host-gate:\n"));
         assertTrue(shared.contains("  device-gate:\n"));
+        assertTrue(shared.contains("fetch-depth: ${{ inputs.release && '0' || '1' }}"));
 
         assertEquals(1, occurrences(ci, CALL));
         assertEquals(1, occurrences(release, CALL));

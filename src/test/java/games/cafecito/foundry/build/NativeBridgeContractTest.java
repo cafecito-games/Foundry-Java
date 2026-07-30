@@ -380,7 +380,7 @@ class NativeBridgeContractTest {
     void androidBuildAndVerifierRequireTheExactFourAbiBridge() throws IOException {
         String androidBuild = read("foundry-java-android/build.gradle.kts");
         String verifier = read("gradle/verify-native-bridge.sh");
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
 
         assertEquals(Set.copyOf(JNI_SYMBOLS), verifiedJniSymbols(verifier));
         for (String abi : List.of("armeabi-v7a", "arm64-v8a", "x86", "x86_64")) {

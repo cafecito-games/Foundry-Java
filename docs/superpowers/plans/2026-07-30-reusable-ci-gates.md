@@ -107,7 +107,7 @@ class ReusableGateWorkflowContractTest {
 Run:
 
 ```bash
-./gradlew test \
+./gradlew :test \
   --tests games.cafecito.foundry.build.ReusableGateWorkflowContractTest
 ```
 
@@ -368,7 +368,7 @@ Run:
 
 ```bash
 actionlint
-./gradlew test \
+./gradlew :test \
   --tests games.cafecito.foundry.build.ReusableGateWorkflowContractTest
 ```
 

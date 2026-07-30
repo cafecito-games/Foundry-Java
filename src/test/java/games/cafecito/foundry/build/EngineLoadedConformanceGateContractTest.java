@@ -244,7 +244,7 @@ class EngineLoadedConformanceGateContractTest {
     @Test
     void continuousIntegrationRunsTheGateOnTheApi36EmulatorAndKeepsItsEvidence()
             throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+        String workflow = read(".github/workflows/gates.yml");
 
         assertTrue(workflow.contains("bash gradle/run-engine-loaded-conformance-gate.sh"));
         // The 1.1 GB export template archive is cached by release tag and digest, so the key must
