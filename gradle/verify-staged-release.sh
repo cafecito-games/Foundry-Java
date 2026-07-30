@@ -21,6 +21,7 @@ repository="${staging}/repository"
 checksum_algorithms="md5 sha1 sha256 sha512"
 verified_files=0
 failures=0
+expected_files=""
 
 if [[ ! -d "$repository" ]]; then
   printf 'The staged repository does not exist: %s\n' "$repository" >&2
@@ -73,9 +74,23 @@ digest() {
   esac
 }
 
+# Every declared file is recorded here together with the signature and checksum files that
+# accompany it, so the final sweep can reject anything the topology did not declare.
+expect_file() {
+  local relative="$1"
+  local algorithm
+  expected_files="${expected_files}${relative}"$'\n'
+  expected_files="${expected_files}${relative}.asc"$'\n'
+  for algorithm in $checksum_algorithms; do
+    expected_files="${expected_files}${relative}.${algorithm}"$'\n'
+    expected_files="${expected_files}${relative}.asc.${algorithm}"$'\n'
+  done
+}
+
 verify_file() {
   local file="$1"
   local relative="${file#"${repository}"/}"
+  expect_file "$relative"
   if [[ ! -s "$file" ]]; then
     report "${relative} is missing or empty."
     return
@@ -163,7 +178,6 @@ verify_module() {
   done
 }
 
-expected_directories=""
 coordinates=0
 
 while IFS= read -r line; do
@@ -179,7 +193,6 @@ while IFS= read -r line; do
   coordinates=$((coordinates + 1))
   relative_directory="$(printf '%s' "$group" | tr '.' '/')/${artifact}/${version}"
   directory="${repository}/${relative_directory}"
-  expected_directories="${expected_directories}${relative_directory}"$'\n'
   if [[ ! -d "$directory" ]]; then
     report "the coordinate ${group}:${artifact}:${version} is not staged."
     continue
@@ -211,18 +224,16 @@ while IFS= read -r line; do
 done < "$topology"
 
 # Anything staged outside the declared topology — a stray coordinate, a second version left behind by
-# an earlier run — must fail rather than travel along with the release.
-while IFS= read -r staged_directory; do
-  if [[ -z "$staged_directory" ]]; then
+# an earlier run, an extra artifact inside a declared coordinate, repository bookkeeping — must fail
+# rather than travel along with the release, because the uploader transfers every staged file.
+while IFS= read -r staged_file; do
+  if [[ -z "$staged_file" ]]; then
     continue
   fi
-  if ! printf '%s' "$expected_directories" | grep -qxF "$staged_directory"; then
-    report "the staged repository contains an unexpected coordinate directory ${staged_directory}."
+  if ! printf '%s' "$expected_files" | grep -qxF "$staged_file"; then
+    report "the staged repository contains the undeclared file ${staged_file}."
   fi
-done <<< "$(
-  cd "$repository" && find . -type f -name '*.pom' -exec dirname {} ';' |
-    sed 's|^\./||' | sort -u
-)"
+done <<< "$(cd "$repository" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
 
 if [[ "$failures" -ne 0 ]]; then
   printf 'Staged release verification failed with %s problem(s).\n' "$failures" >&2

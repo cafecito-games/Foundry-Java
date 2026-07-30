@@ -62,7 +62,7 @@ jobs:
             foundry-java-android/build/outputs/aar/foundry-java-android-release.aar 2>&1 |
             tee "${RUNNER_TEMP}/foundry-java-release-native-verifier.log"
       - name: Verify the release preconditions with regenerated dependency locks
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         shell: bash
         env:
           FOUNDRY_RELEASE_VERIFY_LOCKS: regenerate
@@ -71,7 +71,7 @@ jobs:
           ./gradlew --no-daemon --write-locks resolveAndLockAll
           bash gradle/verify-release-preconditions.sh "${GITHUB_REF_NAME}"
       - name: Regenerate dependency locks and reject drift
-        if: github.ref_type != 'tag'
+        if: github.event_name != 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -214,7 +214,7 @@ jobs:
         shell: bash
         run: bash gradle/run-release-staging-dry-run.sh
       - name: Stage the release twice and prove it is reproducible
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         shell: bash
         env:
           FOUNDRY_SIGNING_KEY: ${{ secrets.FOUNDRY_SIGNING_KEY }}
@@ -224,7 +224,7 @@ jobs:
           bash gradle/verify-release-reproducibility.sh \
             "${GITHUB_REF_NAME}" "${RUNNER_TEMP}/foundry-java-release"
       - name: Verify signatures, checksums, and metadata in the staged repository
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -232,15 +232,16 @@ jobs:
             "${RUNNER_TEMP}/foundry-java-release/first" \
             "${GITHUB_REF_NAME#v}"
       - name: Upload the verified staged release for the publish job
-        if: github.ref_type == 'tag'
+        if: github.event_name == 'push'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: foundry-java-staged-release
           if-no-files-found: error
           retention-days: 7
-          path: |
-            ${{ runner.temp }}/foundry-java-release/first/**
-            ${{ runner.temp }}/foundry-java-release/summary.json
+          # One path only: the archive is rooted at the least common ancestor of everything uploaded,
+          # so adding a sibling would root it one directory higher and the publish job would download
+          # the staged release into the wrong place.
+          path: ${{ runner.temp }}/foundry-java-release/first/**
       - name: Upload staging and dry-run evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -258,7 +259,9 @@ jobs:
   publish:
     name: Publish to Maven Central
     needs: [stage]
-    if: github.ref_type == 'tag'
+    # A real publication is only ever a tag push. A manual dispatch stages against a local staging
+    # target and never reaches this job, so `dry_run` cannot be bypassed by dispatching on a tag.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The Central Portal token is an encrypted secret scoped to this environment alone, so staging and

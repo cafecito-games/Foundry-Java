@@ -236,6 +236,40 @@ class ReleaseScriptBehaviourTest {
     }
 
     @Test
+    void theStagedRepositoryVerifierRejectsAnUndeclaredFile(@TempDir Path directory)
+            throws Exception {
+        Path staging = newStagedRelease(directory);
+        // The uploader transfers every staged file, so an extra artifact inside a declared
+        // coordinate
+        // would otherwise reach the target with a successful verification summary.
+        Files.writeString(
+                artifact(staging, "foundry-java-runtime", "jar", "").resolveSibling("smuggled.jar"),
+                "not part of the release");
+
+        Result result = verifyStaged(staging);
+
+        assertNotEquals(0, result.exitCode(), result.output());
+        assertTrue(result.output().contains("undeclared file"), result.output());
+        assertTrue(result.output().contains("smuggled.jar"), result.output());
+    }
+
+    @Test
+    void theStagedRepositoryVerifierRejectsAStrayVersionDirectory(@TempDir Path directory)
+            throws Exception {
+        Path staging = newStagedRelease(directory);
+        Path stray =
+                staging.resolve("repository/games/cafecito/foundry/foundry-java-runtime/9.9.9");
+        Files.createDirectories(stray);
+        Files.writeString(stray.resolve("foundry-java-runtime-9.9.9.jar"), "left behind");
+
+        Result result = verifyStaged(staging);
+
+        assertNotEquals(0, result.exitCode(), result.output());
+        assertTrue(result.output().contains("undeclared file"), result.output());
+        assertTrue(result.output().contains("9.9.9"), result.output());
+    }
+
+    @Test
     void uploadingRefusesAStagedRepositoryThatWasNeverVerified(@TempDir Path directory)
             throws Exception {
         Path staging = newStagedRelease(directory);
