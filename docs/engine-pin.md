@@ -89,7 +89,7 @@ failure alike.
    `size`, and `sha256` in `gradle/engine-pin.json`.
 3. Update `device_acceptance.size` and `device_acceptance.sha256` to the size and SHA-256 of
    `platform/android/android_device_acceptance.py` at the new producer commit.
-4. Update the cache key in `.github/workflows/ci.yml`, this page, and the constants in
+4. Update the cache key in `.github/workflows/gates.yml`, this page, and the constants in
    `src/test/java/games/cafecito/foundry/build/EngineLoadedConformanceGateContractTest.java`. The
    cache key contains the release tag and the template digest, so it can never survive a bump.
 5. Run `./gradlew clean check` and let continuous integration run the gate.

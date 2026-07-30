@@ -100,7 +100,7 @@ After implementation, run focused contract tests, `actionlint`, and the full
 ## Documentation and rollout
 
 Update `docs/releasing.md` to describe the release workflow as calling the shared host/device gate
-workflow before its stage and publish jobs. After the change merges, update branch protection from
-the old exact `check` context to the desired nested reusable-workflow checks observed on the pull
-request. That repository-setting change is operational follow-up and is not encoded in this
-repository.
+workflow before its stage and publish jobs. On the pull request, observe the exact nested
+reusable-workflow check names and update branch protection from the old exact `check` context before
+or as part of merging. Do not merge until the desired nested checks protect `main`. This external
+repository setting is operational and is not encoded in this repository.

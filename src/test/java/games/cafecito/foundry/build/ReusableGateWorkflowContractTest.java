@@ -16,6 +16,39 @@ class ReusableGateWorkflowContractTest {
     private static final String CALL = "uses: ./.github/workflows/gates.yml";
 
     @Test
+    void sharedGatesCannotRequestSecretsOrProtectedEnvironments() throws IOException {
+        String shared = read(SHARED);
+
+        assertNoYamlKey(shared, "secrets");
+        assertFalse(shared.contains("secrets: inherit"));
+        assertNoYamlKey(shared, "environment");
+    }
+
+    @Test
+    void callersDoNotForwardSecretsToSharedGates() throws IOException {
+        String ci = read(".github/workflows/ci.yml");
+        String release = read(".github/workflows/release.yml");
+
+        String ciCheck = workflowJob(ci, "check");
+        int releaseStage = release.indexOf("  stage:\n");
+        assertTrue(releaseStage > 0);
+        String releaseGates = workflowJob(release.substring(0, releaseStage), "gates");
+
+        assertNoYamlKey(ciCheck, "secrets");
+        assertFalse(ciCheck.contains("secrets: inherit"));
+        assertNoYamlKey(releaseGates, "secrets");
+        assertFalse(releaseGates.contains("secrets: inherit"));
+    }
+
+    @Test
+    void enginePinDocumentationAssignsTheCacheKeyToSharedGates() throws IOException {
+        String documentation = read("docs/engine-pin.md");
+
+        assertTrue(documentation.contains(".github/workflows/gates.yml"));
+        assertFalse(documentation.contains(".github/workflows/ci.yml"));
+    }
+
+    @Test
     void ciAndReleaseCallOneSharedHostAndDeviceGateWorkflow() throws IOException {
         String shared = read(SHARED);
         String ci = read(".github/workflows/ci.yml");
@@ -87,6 +120,23 @@ class ReusableGateWorkflowContractTest {
         assertEquals(1, occurrences(shared, marker), marker + " must appear once in shared gates");
         assertEquals(0, occurrences(ci, marker), marker + " must not remain in CI");
         assertEquals(0, occurrences(release, marker), marker + " must not remain in release");
+    }
+
+    private static void assertNoYamlKey(String workflowSection, String key) {
+        Pattern declaration = Pattern.compile("(?m)^\\s*" + Pattern.quote(key) + ":");
+        assertFalse(
+                declaration.matcher(workflowSection).find(),
+                key + " must not be declared in this workflow section");
+    }
+
+    private static String workflowJob(String workflow, String name) {
+        String marker = "  " + name + ":\n";
+        assertEquals(1, occurrences(workflow, marker), name + " must identify one workflow job");
+        int start = workflow.indexOf(marker);
+        Pattern nextJob = Pattern.compile("(?m)^  [A-Za-z0-9_-]+:\\s*$");
+        var matcher = nextJob.matcher(workflow);
+        int end = matcher.find(start + marker.length()) ? matcher.start() : workflow.length();
+        return workflow.substring(start, end);
     }
 
     private static int occurrences(String value, String needle) {
