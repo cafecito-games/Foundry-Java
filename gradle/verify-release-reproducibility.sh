@@ -2,10 +2,11 @@
 # Proves that staging the same tag twice produces byte-identical artifacts. Both stagings start from
 # removed build outputs, so nothing is carried between them.
 #
-# Detached OpenPGP signatures are excluded from the comparison because a signature packet records its
-# own signature creation time, which differs between two runs by construction. Everything a signature
-# covers — every POM, Gradle module, JAR, AAR, sources and Javadoc archive, every checksum, and the
-# provenance record — is compared byte for byte.
+# Detached OpenPGP signatures, and the checksum files that restate them, are excluded from the
+# comparison because a signature packet records its own signature creation time, which differs between
+# two runs by construction. Everything a signature covers — every POM, Gradle module, JAR, AAR,
+# sources and Javadoc archive, every artifact checksum, the signing public key, and the provenance
+# record — is compared byte for byte.
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
@@ -26,7 +27,12 @@ bash "${repo_root}/gradle/stage-release.sh" "$tag" "$first"
 bash "${repo_root}/gradle/stage-release.sh" "$tag" "$second"
 
 comparable_files() {
-  (cd "$1" && find . -type f ! -name '*.asc' | sed 's|^\./||' | LC_ALL=C sort)
+  (
+    cd "$1" && find . -type f \
+      ! -name '*.asc' \
+      ! -name '*.asc.md5' ! -name '*.asc.sha1' ! -name '*.asc.sha256' ! -name '*.asc.sha512' |
+      sed 's|^\./||' | LC_ALL=C sort
+  )
 }
 
 first_files="$(comparable_files "$first")"

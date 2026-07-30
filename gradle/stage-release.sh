@@ -58,6 +58,11 @@ ORG_GRADLE_PROJECT_signingKey="$FOUNDRY_SIGNING_KEY" \
   "-PfoundryStagingRepository=${staging}/repository" \
   "${publication_tasks[@]}"
 
+# Repository-level maven-metadata.xml records a lastUpdated timestamp, so it is bookkeeping rather
+# than a release artifact and cannot be reproducible. Maven Central generates its own metadata, so the
+# staged release drops it instead of shipping something that changes on every run.
+find "${staging}/repository" -type f -name 'maven-metadata.xml*' -delete
+
 if [[ ! -f "${repo_root}/${surface_manifest_path}" ]]; then
   printf 'Release refused: the binding-neutral surface manifest was not produced at %s.\n' \
     "$surface_manifest_path" >&2
