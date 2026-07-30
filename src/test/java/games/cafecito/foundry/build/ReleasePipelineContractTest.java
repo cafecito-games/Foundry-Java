@@ -126,7 +126,7 @@ class ReleasePipelineContractTest {
         assertTrue(preconditions.contains("gradle.properties"));
         assertTrue(preconditions.contains("foundryVersion"));
         assertTrue(
-                preconditions.contains("git status --porcelain --untracked-files=all"),
+                preconditions.contains("status --porcelain --untracked-files=all"),
                 "untracked files must count as an unclean tree");
         assertTrue(
                 preconditions.contains("--write-locks resolveAndLockAll"),
@@ -178,7 +178,7 @@ class ReleasePipelineContractTest {
         String upload = read(UPLOAD);
         String workflow = read(WORKFLOW);
 
-        assertTrue(verify.contains("gpg --verify"));
+        assertTrue(verify.contains("gpg --batch --quiet --verify"));
         assertTrue(verify.contains("is not signed"));
         assertTrue(verify.contains("signature is invalid"));
         for (String algorithm : List.of("md5", "sha1", "sha256", "sha512")) {
@@ -216,9 +216,33 @@ class ReleasePipelineContractTest {
         assertTrue(rootBuild.contains("check(sourcesJarCount == 9 && javadocJarCount == 9)"));
         assertEquals(9, PUBLISHED_MODULES.size());
         for (String module : PUBLISHED_MODULES) {
-            assertTrue(rootBuild.contains(module + "|jar|sources|") || module.equals("foundry-java-android"));
+            assertTrue(rootBuild.contains(module + "|jar|sources|"), module + " sources");
             assertTrue(rootBuild.contains(module + "|jar|javadoc|"), module + " javadoc");
         }
+
+        // The declared topology the staged-release verifier enforces and the publication topology the
+        // build configures are the same topology, so they are compared here and cannot drift.
+        List<String> topology =
+                read("gradle/release-topology.txt")
+                        .lines()
+                        .filter(line -> !line.isBlank() && !line.startsWith("#"))
+                        .toList();
+        assertEquals(10, topology.size(), "ten coordinates: nine modules and the plugin marker");
+        for (String coordinate : topology) {
+            String[] fields = coordinate.split(":");
+            assertEquals(4, fields.length, coordinate);
+            assertTrue(rootBuild.contains(fields[1]), fields[1] + " must be a published module");
+            assertTrue(
+                    List.of("jar", "aar", "pom").contains(fields[2]), coordinate + " packaging");
+        }
+        assertTrue(topology.contains("games.cafecito.foundry:foundry-java-runtime:jar:sourcesElements+javadocElements"));
+        // The Android library plugin's own Javadoc generation cannot read Java records in a
+        // dependency, so that Javadoc is a Maven artifact rather than a Gradle variant.
+        assertTrue(topology.contains("games.cafecito.foundry:foundry-java-android:aar:sourcesElements"));
+        assertTrue(androidBuild.contains("releaseJavadocJar"));
+        assertTrue(
+                topology.contains(
+                        "games.cafecito.foundry.java:games.cafecito.foundry.java.gradle.plugin:pom:none"));
 
         // Maven Central rejects a POM without these, so they are part of the published contract.
         assertTrue(rootBuild.contains("developers {"));
@@ -227,8 +251,11 @@ class ReleasePipelineContractTest {
         assertTrue(verify.contains("scm"));
         assertTrue(verify.contains("-sources.jar"));
         assertTrue(verify.contains("-javadoc.jar"));
-        assertTrue(verify.contains("sourcesElements"));
-        assertTrue(verify.contains("javadocElements"));
+        // The Gradle module variants each coordinate must publish are declared in the topology and
+        // enforced from it, so the verifier cannot drift from the published set.
+        assertTrue(verify.contains("declared_variants"));
+        assertTrue(read("gradle/release-topology.txt").contains("sourcesElements"));
+        assertTrue(read("gradle/release-topology.txt").contains("javadocElements"));
     }
 
     @Test
@@ -295,6 +322,15 @@ class ReleasePipelineContractTest {
         assertTrue(read(UPLOAD).contains("--config -"), "the token is fed to curl on stdin");
         assertTrue(read(STAGE).contains("ORG_GRADLE_PROJECT_signingKey"));
         assertFalse(read(STAGE).contains("-Psigning"), "signing material never becomes a -P value");
+
+        // Signing is configured from a Gradle property supplied by that environment value, and it is
+        // only applied when key material is actually present, so an ordinary `check` configures no
+        // signing at all.
+        String rootBuild = read("build.gradle.kts");
+        assertTrue(rootBuild.contains("useInMemoryPgpKeys"));
+        assertTrue(rootBuild.contains("providers.gradleProperty(\"signingKey\")"));
+        assertTrue(rootBuild.contains("if (releaseSigningKey.isPresent)"));
+        assertFalse(rootBuild.contains("signing.password"), "no signing material is checked in");
     }
 
     @Test

@@ -14,7 +14,7 @@ fi
 
 staging="$(cd "$1" && pwd)"
 version="$2"
-public_key="${3:-${FOUNDRY_SIGNING_PUBLIC_KEY:-}}"
+public_key="${3:-${FOUNDRY_SIGNING_PUBLIC_KEY:-$1/signing-public-key.asc}}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 topology="${FOUNDRY_RELEASE_TOPOLOGY:-${repo_root}/gradle/release-topology.txt}"
 repository="${staging}/repository"

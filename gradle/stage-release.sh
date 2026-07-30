@@ -65,6 +65,21 @@ if [[ ! -f "${repo_root}/${surface_manifest_path}" ]]; then
 fi
 cp "${repo_root}/${surface_manifest_path}" "${staging}/foundry-java-surface-manifest.json"
 
+# The staged release carries the public half of the key it was signed with, so verification is
+# self-contained on any machine. It is derived from the supplied key rather than configured
+# separately, and its fingerprint is recorded by gradle/verify-staged-release.sh so a human can
+# compare it with the published Foundry-Java signing key. GnuPG keeps its agent socket inside
+# GNUPGHOME, and a Unix domain socket path is short, so this home lives directly under /tmp.
+signing_home="$(mktemp -d /tmp/foundry-release-XXXXXX)"
+chmod 700 "$signing_home"
+remove_signing_home() {
+  rm -rf "$signing_home"
+}
+trap remove_signing_home EXIT
+GNUPGHOME="$signing_home" gpg --batch --quiet --import <<< "$FOUNDRY_SIGNING_KEY"
+GNUPGHOME="$signing_home" gpg --batch --quiet --armor --output \
+  "${staging}/signing-public-key.asc" --export
+
 sha256_of() {
   shasum -a 256 "$1" | cut -d' ' -f1
 }
