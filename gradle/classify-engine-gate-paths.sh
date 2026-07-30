@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-input="$(cat)"
 if ! decision="$(
-  jq -r '
+  jq -Rrs '
     def safe_to_skip:
       test("\\.md$") or
       startswith("docs/") or
@@ -11,9 +10,10 @@ if ! decision="$(
       test("(^|/)src/test(Fixtures)?/") or
       startswith("gradle/testFixtures/") or
       startswith(".github/ISSUE_TEMPLATE/") or
-      test("^\\.github/PULL_REQUEST_TEMPLATE(?:\\.md|/)");
+      test("^\\.github/PULL_REQUEST_TEMPLATE(?:\\.md$|/)");
 
-    if type != "array" then
+    fromjson
+    | if type != "array" then
       ["run=true", "reason=fail-closed"]
     elif length == 0 then
       ["run=true", "reason=fail-closed"]
@@ -25,7 +25,7 @@ if ! decision="$(
       ["run=true", "reason=relevant"]
     end
     | .[]
-  ' 2>/dev/null <<<"$input"
+  ' 2>/dev/null
 )"; then
   printf 'run=true\nreason=fail-closed\n'
   exit 0

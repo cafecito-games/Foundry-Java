@@ -48,7 +48,8 @@ class EngineGateChangeClassifierTest {
                     "gradle.lockfile",
                     "gradle/engine-pin.json",
                     "gradle/run-engine-loaded-conformance-gate.sh",
-                    ".github/workflows/gates.yml"
+                    ".github/workflows/gates.yml",
+                    ".github/PULL_REQUEST_TEMPLATE.md.bak"
                 }) {
             assertEquals(new Decision(true, "relevant"), classify("[\"" + path + "\"]"), path);
         }
@@ -62,6 +63,21 @@ class EngineGateChangeClassifierTest {
                         "[\"docs/engine-pin.md\","
                                 + "\"foundry-java-android/src/main/AndroidManifest.xml\"]"));
         assertEquals(new Decision(true, "relevant"), classify("[\"future-module/new-file.txt\"]"));
+    }
+
+    @Test
+    void emptyInputFailsClosed() throws Exception {
+        assertEquals(new Decision(true, "fail-closed"), classify(""));
+    }
+
+    @Test
+    void whitespaceOnlyInputFailsClosed() throws Exception {
+        assertEquals(new Decision(true, "fail-closed"), classify(" \n\t"));
+    }
+
+    @Test
+    void multipleJsonDocumentsFailClosed() throws Exception {
+        assertEquals(new Decision(true, "fail-closed"), classify("[] []"));
     }
 
     @Test
