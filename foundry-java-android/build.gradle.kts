@@ -192,6 +192,13 @@ val cmakeVersion = firstLineOf("cmake", "--version")
 // CMAKE_GENERATOR, CMAKE_TOOLCHAIN_FILE, CMAKE_PREFIX_PATH and their relatives all change what gets
 // configured and built, and a hand-maintained list of them is a list that falls behind — the same
 // reason the repository contract suites are excluded from replay rather than given an input list.
+//
+// Known limitation: the *values* are keyed, not the contents of any file or directory a value names.
+// Editing a CMAKE_TOOLCHAIN_FILE in place would leave the key unchanged. Nothing in this repository or
+// its CI sets a file-valued CMAKE_ variable, so this is not reachable here without a developer
+// configuring one by hand; closing it in general means hashing arbitrary machine-specific paths pulled
+// from the environment, which works against the path portability the rest of these keys establish.
+// See issue #76.
 val compilerVariables = listOf("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")
 val cmakeEnvironment = providers.environmentVariablesPrefixedBy("CMAKE_")
 
