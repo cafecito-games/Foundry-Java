@@ -116,17 +116,9 @@ class ReusableGateWorkflowContractTest {
         for (String workflow : new String[] {shared, ci, release}) {
             String permissions = workflowPermissions(workflow);
             assertEquals(
-                    1,
-                    occurrences(permissions, "  contents: read\n"),
-                    "each workflow must grant read-only repository contents access");
-            assertEquals(
-                    1,
-                    occurrences(permissions, "  pull-requests: read\n"),
-                    "each workflow must grant read-only pull request metadata access");
-            assertEquals(
-                    0,
-                    occurrences(workflow, "pull-requests: write"),
-                    "pull request metadata access must never be writable");
+                    "permissions:\n  contents: read\n  pull-requests: read\n",
+                    permissions,
+                    "each workflow must grant exactly the two required read-only permissions");
         }
 
         String scope =
