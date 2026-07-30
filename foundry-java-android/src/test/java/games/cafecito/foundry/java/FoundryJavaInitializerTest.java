@@ -37,6 +37,7 @@ class FoundryJavaInitializerTest {
                 [configuration]
 
                 entry_symbol = "foundry_java_library_init"
+                compatibility_minimum = "0.1.0"
 
                 [libraries]
 
