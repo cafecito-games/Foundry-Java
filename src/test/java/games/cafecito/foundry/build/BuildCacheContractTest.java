@@ -96,9 +96,8 @@ class BuildCacheContractTest {
         String androidBuild = read("foundry-java-android/build.gradle.kts");
         assertEquals(
                 3, occurrences(androidBuild, "inputs.property(\"hostPlatform\", hostPlatform)"));
-        assertEquals(
-                2,
-                occurrences(androidBuild, "inputs.property(\"nativeToolchain\", nativeToolchain)"));
+        assertEquals(2, occurrences(androidBuild, "toolchain.set(nativeToolchain)"));
+        assertTrue(androidBuild.contains(": CommandLineArgumentProvider {"));
         assertTrue(androidBuild.contains("inputs.property(\"cmakeVersion\", cmakeVersion)"));
         // providers.exec is what keeps the version probes compatible with
         // --configuration-cache-problems=fail.
@@ -125,6 +124,17 @@ class BuildCacheContractTest {
                         "layout.buildDirectory.dir(\"native-host-sanitized/report\")"));
         assertTrue(nativeTests.contains("build_directory=\"$output_root/cmake\""));
         assertTrue(nativeTests.contains("report_directory=\"$output_root/report\""));
+
+        // CMake reads CC, CXX and the flag variables only when a tree is first configured, so a
+        // reused tree would test the previous toolchain's binaries and let Gradle store that result
+        // under the new toolchain's key. The tree is discarded exactly when the signature changes,
+        // which is what keeps the tree and the key describing the same thing.
+        assertTrue(
+                nativeTests.contains(
+                        "toolchain_stamp=\"$build_directory/foundry-java-toolchain.stamp\""));
+        assertTrue(nativeTests.contains("rm -rf \"$build_directory\""));
+        assertTrue(
+                nativeTests.contains("printf '%s' \"$toolchain_signature\" >\"$toolchain_stamp\""));
         assertFalse(
                 androidBuild.contains("outputs.dir(layout.buildDirectory.dir(\"native-host\"))"));
         assertTrue(workflow.contains("foundry-java-android/build/native-host/**"));

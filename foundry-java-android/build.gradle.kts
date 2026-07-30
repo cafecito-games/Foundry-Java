@@ -2,6 +2,7 @@ import org.gradle.api.tasks.javadoc.Javadoc
 import org.gradle.api.tasks.testing.Test
 import org.gradle.external.javadoc.StandardJavadocDocletOptions
 import org.gradle.jvm.tasks.Jar
+import org.gradle.process.CommandLineArgumentProvider
 
 plugins {
     alias(libs.plugins.android.library)
@@ -166,6 +167,12 @@ fun firstLineOf(vararg command: String): Provider<String> =
                 .trim()
         }
 
+// A probe that cannot be started must not fail the build. The compiler name itself is in the key
+// either way, through the CXX entry below, so an unprobeable compiler degrades the key's precision
+// rather than its correctness.
+fun firstLineOrBlank(command: List<String>): String =
+    runCatching { firstLineOf(*command.toTypedArray()).get() }.getOrDefault("")
+
 val cmakeVersion = firstLineOf("cmake", "--version")
 
 // The compiler is whichever one CMake selects, and these variables are what steer that choice, so
@@ -175,14 +182,40 @@ val compilerVariables = listOf("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")
 
 val nativeToolchain =
     providers.provider {
-        val compiler = providers.environmentVariable("CXX").getOrElse("c++")
-        val probes = listOf(cmakeVersion.get(), firstLineOf(compiler, "--version").get())
+        // CMake accepts a CXX that carries required arguments after the compiler, so only the first
+        // token is the executable. Handing the whole value to Gradle as one executable name would
+        // stop the tasks from starting on a configuration CMake itself accepts.
+        val compiler =
+            providers
+                .environmentVariable("CXX")
+                .getOrElse("c++")
+                .trim()
+                .split(Regex("\\s+"))
+                .filter(String::isNotEmpty)
+                .ifEmpty { listOf("c++") }
+        val probes =
+            listOf(
+                firstLineOrBlank(listOf("cmake", "--version")),
+                firstLineOrBlank(compiler + "--version"),
+            )
         val overrides =
             compilerVariables.map { name ->
                 "$name=" + providers.environmentVariable(name).getOrElse("")
             }
         (probes + overrides).joinToString("\n")
     }
+
+// The signature is handed to the script as well as declared in the key, so there is exactly one
+// definition of "the toolchain" and the CMake tree can be discarded whenever it stops matching. An
+// argument provider is what allows both: its @Input is part of the key, and its value reaches the
+// process. asArguments() is evaluated at execution time, so the version probes do not run on every
+// configuration of this build.
+abstract class NativeToolchainArgumentProvider : CommandLineArgumentProvider {
+    @get:Input
+    abstract val toolchain: Property<String>
+
+    override fun asArguments(): Iterable<String> = listOf(toolchain.get())
+}
 
 val nativeAbiLayoutReport =
     layout.buildDirectory.file("reports/native-abi-layout/verification.txt")
@@ -231,7 +264,11 @@ val nativeHostTest =
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
-        inputs.property("nativeToolchain", nativeToolchain)
+        argumentProviders.add(
+            objects.newInstance<NativeToolchainArgumentProvider>().apply {
+                toolchain.set(nativeToolchain)
+            },
+        )
         outputs
             .dir(layout.buildDirectory.dir("native-host/report"))
             .withPropertyName("verificationReport")
@@ -254,7 +291,11 @@ val nativeSanitizerTest =
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
-        inputs.property("nativeToolchain", nativeToolchain)
+        argumentProviders.add(
+            objects.newInstance<NativeToolchainArgumentProvider>().apply {
+                toolchain.set(nativeToolchain)
+            },
+        )
         outputs
             .dir(layout.buildDirectory.dir("native-host-sanitized/report"))
             .withPropertyName("verificationReport")

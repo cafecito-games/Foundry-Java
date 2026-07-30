@@ -13,8 +13,11 @@ set -euo pipefail
 # what the CI job uploads as evidence. It holds no absolute paths, so a cache hit leaves the same
 # observable state an execution would.
 
-mode="${1:?usage: run-native-tests.sh host|sanitizer android-module-directory}"
-android_module_directory="${2:?usage: run-native-tests.sh host|sanitizer android-module-directory}"
+mode="${1:?usage: run-native-tests.sh host|sanitizer android-module-directory [toolchain]}"
+android_module_directory="${2:?usage: run-native-tests.sh host|sanitizer android-module-directory [toolchain]}"
+# The toolchain signature the driving Gradle task put in its build cache key. There is one definition
+# of it, computed there and passed here, because the two must not be able to disagree.
+toolchain_signature="${3:-}"
 
 case "$mode" in
   host)
@@ -36,11 +39,23 @@ report_directory="$output_root/report"
 rm -rf "$report_directory"
 mkdir -p "$report_directory"
 
+# Keeping the build tree is what makes a C++ edit rebuild incrementally, but CMake reads CC, CXX and
+# the flag variables only when a tree is first configured. Reusing a tree across a toolchain change
+# would therefore test the previous toolchain's binaries and let Gradle store that result under the new
+# toolchain's cache key — a false result that a clean checkout could then replay. Discarding the tree
+# exactly when the signature changes keeps the tree and the key describing the same thing.
+toolchain_stamp="$build_directory/foundry-java-toolchain.stamp"
+if [[ ! -f "$toolchain_stamp" ]] ||
+  [[ "$(cat "$toolchain_stamp")" != "$toolchain_signature" ]]; then
+  rm -rf "$build_directory"
+fi
+
 cmake \
   -S "$android_module_directory/src/main/cpp" \
   -B "$build_directory" \
   -DFOUNDRY_JAVA_BUILD_TESTS=ON \
   -DFOUNDRY_JAVA_ENABLE_SANITIZERS="$sanitizer_flag"
+printf '%s' "$toolchain_signature" >"$toolchain_stamp"
 cmake --build "$build_directory" --parallel
 
 # The toolchain is not a declared input of the task, only the host platform is. Recording the exact
