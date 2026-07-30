@@ -260,8 +260,8 @@ public final class RealizationVerifier {
     }
 
     /**
-     * Publishes the accepted manifest as evidence by copying its bytes. Re-rendering the parsed model
-     * would allocate the whole document a second time to produce the same bytes; the
+     * Publishes the accepted manifest as evidence by copying its bytes. Re-rendering the parsed
+     * model would allocate the whole document a second time to produce the same bytes; the
      * parse-then-render round trip is frozen by the generator's own tests instead.
      */
     private static void copy(Path source, Path target) {

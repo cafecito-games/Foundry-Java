@@ -270,8 +270,8 @@ public final class SurfaceManifest {
      * Re-derives the manifest from {@code map} and reports every difference, ordered by source
      * identity. An empty result proves the manifest is the map, restated in neutral vocabulary.
      *
-     * <p>Derivation happens one entry at a time. Deriving a whole second manifest to compare against
-     * would double the resident cost of a document that covers every engine-API entity.
+     * <p>Derivation happens one entry at a time. Deriving a whole second manifest to compare
+     * against would double the resident cost of a document that covers every engine-API entity.
      */
     public List<String> disagreementsWith(RealizationMap map) {
         List<String> disagreements = new ArrayList<>();
