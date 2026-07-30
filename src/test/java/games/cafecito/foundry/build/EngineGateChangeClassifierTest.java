@@ -2,6 +2,7 @@ package games.cafecito.foundry.build;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -66,6 +67,18 @@ class EngineGateChangeClassifierTest {
     }
 
     @Test
+    void markdownPathWithATrailingNewlineIsRelevant() throws Exception {
+        assertEquals(new Decision(true, "relevant"), classify("[\"README.md\\n\"]"));
+    }
+
+    @Test
+    void pullRequestTemplatePathWithATrailingNewlineIsRelevant() throws Exception {
+        assertEquals(
+                new Decision(true, "relevant"),
+                classify("[\".github/PULL_REQUEST_TEMPLATE.md\\n\"]"));
+    }
+
+    @Test
     void emptyInputFailsClosed() throws Exception {
         assertEquals(new Decision(true, "fail-closed"), classify(""));
     }
@@ -96,17 +109,25 @@ class EngineGateChangeClassifierTest {
                         .start();
         process.getOutputStream().write(input.getBytes(StandardCharsets.UTF_8));
         process.getOutputStream().close();
-        assertTrue(process.waitFor(10, TimeUnit.SECONDS), "classifier timed out");
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            assertTrue(
+                    process.waitFor(10, TimeUnit.SECONDS),
+                    "classifier did not stop after forced destruction");
+            fail("classifier timed out");
+        }
         String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         assertEquals(0, process.exitValue(), output);
         List<String> lines = output.lines().toList();
         assertEquals(2, lines.size(), output);
-        assertTrue(lines.stream().allMatch(line -> line.matches("[^=]+=[^=]+")), output);
+        assertTrue(lines.get(0).matches("run=(?:true|false)"), output);
+        assertTrue(lines.get(1).matches("reason=(?:safe-only|relevant|fail-closed)"), output);
         Map<String, String> fields =
                 lines.stream()
                         .map(line -> line.split("=", 2))
                         .collect(Collectors.toMap(parts -> parts[0], parts -> parts[1]));
         assertEquals(Set.of("run", "reason"), fields.keySet(), output);
+        assertTrue(Set.of("true", "false").contains(fields.get("run")), output);
         return new Decision(Boolean.parseBoolean(fields.get("run")), fields.get("reason"));
     }
 

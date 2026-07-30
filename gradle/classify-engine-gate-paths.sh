@@ -4,13 +4,14 @@ set -euo pipefail
 if ! decision="$(
   jq -Rrs '
     def safe_to_skip:
-      test("\\.md$") or
+      endswith(".md") or
       startswith("docs/") or
       startswith("assets/") or
       test("(^|/)src/test(Fixtures)?/") or
       startswith("gradle/testFixtures/") or
       startswith(".github/ISSUE_TEMPLATE/") or
-      test("^\\.github/PULL_REQUEST_TEMPLATE(?:\\.md$|/)");
+      . == ".github/PULL_REQUEST_TEMPLATE.md" or
+      startswith(".github/PULL_REQUEST_TEMPLATE/");
 
     fromjson
     | if type != "array" then
