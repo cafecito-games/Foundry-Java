@@ -95,6 +95,18 @@ const char *abi_text(const void *value) {
 	return value == nullptr ? "" : *static_cast<const char *const *>(value);
 }
 
+// The engine copies every `FoundryExtensionPropertyInfo` field through
+// `PropertyInfo(const FoundryExtensionPropertyInfo &)`, which dereferences
+// `name`, `class_name` and `hint_string` unconditionally. A null pointer in any
+// of them faults inside the engine rather than being reported as a failed
+// registration, so the adapter must always supply constructed storage.
+void expect_engine_readable_property_info(
+		const FoundryExtensionPropertyInfo &property, const char *message) {
+	expect(property.name != nullptr, message);
+	expect(property.class_name != nullptr, message);
+	expect(property.hint_string != nullptr, message);
+}
+
 void abi_noop_destructor(FoundryExtensionTypePtr) {}
 
 void abi_string_destructor(FoundryExtensionTypePtr) {
@@ -162,6 +174,16 @@ void abi_register_method(FoundryExtensionClassLibraryPtr,
 			abi_text(method->name));
 	expect(method->call_func != nullptr && method->ptrcall_func == nullptr,
 			"method mapping must use only the registry variant callback");
+	if (method->has_return_value) {
+		expect(method->return_value_info != nullptr,
+				"method mapping must supply return metadata when it returns a value");
+		expect_engine_readable_property_info(*method->return_value_info,
+				"method return metadata must be engine-readable");
+	}
+	for (std::uint32_t index = 0; index < method->argument_count; ++index) {
+		expect_engine_readable_property_info(method->arguments_info[index],
+				"method argument metadata must be engine-readable");
+	}
 }
 
 void abi_register_constant(FoundryExtensionClassLibraryPtr,
@@ -199,6 +221,10 @@ void abi_register_property(FoundryExtensionClassLibraryPtr,
 		FoundryExtensionConstStringNamePtr getter) {
 	abi_operations.push_back("property:" + std::string(abi_text(property->name)) +
 			":" + abi_text(setter) + ":" + abi_text(getter));
+	expect_engine_readable_property_info(*property,
+			"property metadata must be engine-readable");
+	expect(setter != nullptr && getter != nullptr,
+			"property accessor names must be engine-readable StringName storage");
 }
 
 void abi_register_indexed_property(FoundryExtensionClassLibraryPtr,
@@ -210,6 +236,10 @@ void abi_register_indexed_property(FoundryExtensionClassLibraryPtr,
 	abi_operations.push_back("indexed:" + std::string(abi_text(property->name)) +
 			":" + abi_text(setter) + ":" + abi_text(getter) +
 			":" + std::to_string(index));
+	expect_engine_readable_property_info(*property,
+			"indexed property metadata must be engine-readable");
+	expect(setter != nullptr && getter != nullptr,
+			"indexed property accessor names must be engine-readable StringName storage");
 }
 
 void abi_register_signal(FoundryExtensionClassLibraryPtr,
@@ -219,10 +249,16 @@ void abi_register_signal(FoundryExtensionClassLibraryPtr,
 		FoundryExtensionInt count) {
 	abi_operations.push_back("signal:" + std::string(abi_text(signal)) + ":" +
 			std::to_string(count));
-	expect(count == 1 &&
-					arguments[0].type == FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT &&
-					std::string(abi_text(arguments[0].class_name)) == "Node",
-			"signal mapping must preserve resolved object metadata");
+	expect(count >= 1 && arguments != nullptr,
+			"signal mapping must forward its argument metadata");
+	for (FoundryExtensionInt index = 0; index < count; ++index) {
+		expect_engine_readable_property_info(arguments[index],
+				"signal argument metadata must be engine-readable");
+	}
+	if (arguments[0].type == FOUNDRY_EXTENSION_VARIANT_TYPE_OBJECT) {
+		expect(std::string(abi_text(arguments[0].class_name)) == "Node",
+				"signal mapping must preserve resolved object metadata");
+	}
 }
 
 void abi_unregister_class(FoundryExtensionClassLibraryPtr,
@@ -375,6 +411,58 @@ void test_public_abi_registration_adapter_maps_exact_void_services() {
 	services.initialize_nil(&nil);
 	expect(nil == 0,
 			"adapter must initialize callback failures through variant_new_nil");
+}
+
+void test_public_abi_registration_adapter_supplies_storage_for_typeless_members() {
+	auto native = std::make_shared<foundry_java::BridgeServices>();
+	native->string_name_new_with_utf8_chars_and_len = &abi_make_name;
+	native->string_new_with_utf8_chars_and_len2 = &abi_make_string;
+	native->variant_get_ptr_destructor = &abi_get_destructor;
+	native->classdb_register_extension_class_method = &abi_register_method;
+	native->classdb_register_extension_class_property = &abi_register_property;
+	native->classdb_register_extension_class_property_indexed =
+			&abi_register_indexed_property;
+	native->classdb_register_extension_class_signal = &abi_register_signal;
+	foundry_java::AbiRegistrationServices services(native, {});
+	const auto library = reinterpret_cast<FoundryExtensionClassLibraryPtr>(0x991);
+	const foundry_java::JavaTransportType long_type{
+		FOUNDRY_EXTENSION_VARIANT_TYPE_INT,
+		FOUNDRY_EXTENSION_METHOD_ARGUMENT_METADATA_INT_IS_INT64,
+		"long",
+		"",
+		false,
+	};
+	abi_operations.clear();
+
+	foundry_java::NativeMethodRegistration method;
+	method.name = "engine_probe";
+	method.signature.return_type = long_type;
+	method.signature.arguments.push_back(long_type);
+	method.call = reinterpret_cast<FoundryExtensionClassMethodCall>(0x1);
+	expect(services.register_method(library, "FoundryJavaEngineProbe", method),
+			"a primitive-typed method must map onto the public ABI");
+
+	foundry_java::NativePropertyRegistration read_only{ "score", long_type,
+		"get_score", "", -1 };
+	expect(services.register_property(library, "FoundryJavaEngineProbe", read_only),
+			"a read-only primitive property must map onto the public ABI");
+	read_only.index = 2;
+	expect(services.register_indexed_property(library, "FoundryJavaEngineProbe",
+				   read_only),
+			"a read-only indexed primitive property must map onto the public ABI");
+
+	expect(services.register_signal(library, "FoundryJavaEngineProbe",
+				   { "ticked", { long_type } }),
+			"a primitive-typed signal argument must map onto the public ABI");
+
+	expect(abi_operations ==
+					std::vector<std::string>{
+							"method:FoundryJavaEngineProbe:engine_probe",
+							"property:score::get_score",
+							"indexed:score::get_score:2",
+							"signal:ticked:1",
+					},
+			"typeless members must reach the engine without omitted operations");
 }
 
 void test_public_abi_registration_adapter_destroys_failed_strings_before_mutation() {
@@ -2387,6 +2475,7 @@ int main() {
 	test_strict_java_transport_signature_parser();
 	test_registration_interface_inventory_excludes_virtual_registration();
 	test_public_abi_registration_adapter_maps_exact_void_services();
+	test_public_abi_registration_adapter_supplies_storage_for_typeless_members();
 	test_public_abi_registration_adapter_destroys_failed_strings_before_mutation();
 	test_whole_descriptor_validation_precedes_native_mutation();
 	test_object_types_resolve_before_native_mutation();
