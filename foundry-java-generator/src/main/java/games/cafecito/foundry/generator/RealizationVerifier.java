@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -129,7 +130,7 @@ public final class RealizationVerifier {
         }
         write(reportDirectory.resolve("realization-map.tsv"), map.render());
         write(reportDirectory.resolve("realization-accounting.txt"), accounting);
-        write(reportDirectory.resolve(SURFACE_MANIFEST_FILE_NAME), surfaceManifest.canonicalJson());
+        copy(surfaceManifestPath, reportDirectory.resolve(SURFACE_MANIFEST_FILE_NAME));
         write(reportDirectory.resolve("realization-diff.txt"), diff.isEmpty() ? "" : diff);
         write(
                 reportDirectory.resolve("realization-violations.txt"),
@@ -255,6 +256,24 @@ public final class RealizationVerifier {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (IOException exception) {
             throw new ApiInputException("Could not read " + path + ".", exception);
+        }
+    }
+
+    /**
+     * Publishes the accepted manifest as evidence by copying its bytes. Re-rendering the parsed model
+     * would allocate the whole document a second time to produce the same bytes; the
+     * parse-then-render round trip is frozen by the generator's own tests instead.
+     */
+    private static void copy(Path source, Path target) {
+        try {
+            Path parent = target.toAbsolutePath().normalize().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException exception) {
+            throw new ApiInputException(
+                    "Could not copy " + source + " to " + target + ".", exception);
         }
     }
 
