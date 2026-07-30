@@ -373,6 +373,9 @@ class EngineLoadedConformanceGateContractTest {
                         "incomplete API response",
                         "malformed metadata",
                         "unknown GitHub file status",
+                        "event head and base",
+                        "Before and after file pagination",
+                        "duplicate current filenames",
                         "fail closed")) {
             assertTrue(
                     normalizedCadence.contains(failClosedDetail),

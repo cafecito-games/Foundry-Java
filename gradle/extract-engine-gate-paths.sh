@@ -52,6 +52,8 @@ paths="$(
               )
             ) then
               reject
+            elif ([$items[].filename] | unique | length) != ($items | length) then
+              reject
             elif ($items | length) != $expected then
               null | halt_error(2)
             else

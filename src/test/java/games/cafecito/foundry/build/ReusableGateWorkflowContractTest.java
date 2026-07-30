@@ -131,6 +131,45 @@ class ReusableGateWorkflowContractTest {
                 scope.contains(
                         "\n          EXPECTED_CHANGED_FILES:"
                                 + " ${{ github.event.pull_request.changed_files }}\n"));
+        assertTrue(
+                scope.contains(
+                        "\n          EXPECTED_HEAD_SHA:"
+                                + " ${{ github.event.pull_request.head.sha }}\n"));
+        assertTrue(
+                scope.contains(
+                        "\n          EXPECTED_BASE_SHA:"
+                                + " ${{ github.event.pull_request.base.sha }}\n"));
+        String pullRequestMetadataEndpoint = "\"repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\"";
+        assertEquals(
+                2,
+                occurrences(scope, pullRequestMetadataEndpoint),
+                "PR metadata must be queried on both sides of file pagination");
+        int beforeSnapshot = scope.indexOf("if ! before_snapshot=\"$(");
+        int filePagination = scope.indexOf("if ! pages=\"$(");
+        int afterSnapshot = scope.indexOf("if ! after_snapshot=\"$(");
+        assertTrue(
+                beforeSnapshot >= 0
+                        && filePagination > beforeSnapshot
+                        && afterSnapshot > filePagination,
+                "event-bound PR metadata must bracket file pagination");
+        assertTrue(
+                scope.contains(
+                        "if [[ \"$before_head\" != \"$EXPECTED_HEAD_SHA\" ||\n"
+                                + "            \"$before_base\" != \"$EXPECTED_BASE_SHA\" ]]; then\n"
+                                + "            select_gate true classification-failed\n"
+                                + "            exit 0\n"
+                                + "          fi"),
+                "classification must reject event-to-before snapshot drift");
+        assertTrue(
+                scope.contains(
+                        "if [[ \"$after_head\" != \"$EXPECTED_HEAD_SHA\" ||\n"
+                                + "            \"$after_base\" != \"$EXPECTED_BASE_SHA\" ||\n"
+                                + "            \"$after_head\" != \"$before_head\" ||\n"
+                                + "            \"$after_base\" != \"$before_base\" ]]; then\n"
+                                + "            select_gate true classification-failed\n"
+                                + "            exit 0\n"
+                                + "          fi"),
+                "same-count file replacement must be rejected when the snapshot drifts");
         assertTrue(scope.contains("gh api --paginate --slurp"));
         assertTrue(
                 scope.contains("repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100"));
@@ -162,11 +201,17 @@ class ReusableGateWorkflowContractTest {
                 scope.contains("map(select(type == \"string\"))"),
                 "malformed API metadata must never be silently discarded");
         assertTrue(scope.contains("bash gradle/classify-engine-gate-paths.sh"));
-        for (String failedCommand : new String[] {"if ! pages=\"$(", "if ! decision=\"$("}) {
+        for (String failedCommand :
+                new String[] {
+                    "if ! before_snapshot=\"$(",
+                    "if ! pages=\"$(",
+                    "if ! after_snapshot=\"$(",
+                    "if ! decision=\"$("
+                }) {
             assertTrue(scope.contains(failedCommand), failedCommand + " must fail closed");
         }
         assertEquals(
-                2,
+                4,
                 occurrences(
                         scope,
                         ")\"; then\n"
@@ -175,9 +220,9 @@ class ReusableGateWorkflowContractTest {
                                 + "          fi"),
                 "every API, parse, and classifier command failure must fail closed");
         assertEquals(
-                4,
+                8,
                 occurrences(scope, "select_gate true classification-failed"),
-                "all four API, extractor, and classifier failures must run the engine gate");
+                "all snapshot, API, extractor, and classifier failures must run the engine gate");
         assertEquals(
                 1,
                 occurrences(scope, "select_gate true classification-incomplete"),

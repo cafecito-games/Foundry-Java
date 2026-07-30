@@ -188,6 +188,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EXPECTED_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           select_gate() {
@@ -202,6 +204,28 @@ jobs:
             exit 0
           fi
 
+          if ! before_snapshot="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq 'if (.head.sha | type) == "string" and
+                (.base.sha | type) == "string" and
+                (.head.sha | length) > 0 and
+                (.base.sha | length) > 0
+                then [.head.sha, .base.sha] | @tsv
+                else error("invalid pull request metadata")
+                end' 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          before_head=""
+          before_base=""
+          IFS=$'\t' read -r before_head before_base <<< "$before_snapshot"
+          if [[ "$before_head" != "$EXPECTED_HEAD_SHA" ||
+            "$before_base" != "$EXPECTED_BASE_SHA" ]]; then
+            select_gate true classification-failed
+            exit 0
+          fi
+
           if ! pages="$(
             gh api --paginate --slurp \
               "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null
@@ -209,6 +233,31 @@ jobs:
             select_gate true classification-failed
             exit 0
           fi
+
+          if ! after_snapshot="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq 'if (.head.sha | type) == "string" and
+                (.base.sha | type) == "string" and
+                (.head.sha | length) > 0 and
+                (.base.sha | length) > 0
+                then [.head.sha, .base.sha] | @tsv
+                else error("invalid pull request metadata")
+                end' 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          after_head=""
+          after_base=""
+          IFS=$'\t' read -r after_head after_base <<< "$after_snapshot"
+          if [[ "$after_head" != "$EXPECTED_HEAD_SHA" ||
+            "$after_base" != "$EXPECTED_BASE_SHA" ||
+            "$after_head" != "$before_head" ||
+            "$after_base" != "$before_base" ]]; then
+            select_gate true classification-failed
+            exit 0
+          fi
+
           set +e
           paths="$(
             printf '%s' "$pages" |

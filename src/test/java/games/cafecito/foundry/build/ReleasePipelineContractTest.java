@@ -90,9 +90,9 @@ class ReleasePipelineContractTest {
                 workflow.contains("pull_request"), "a release must never run for a pull request");
         assertTrue(workflow.contains("concurrency:"));
 
-        // Only `check` is a required status context on this repository, and require-branches-up-to-
-        // date is off, so branch protection cannot be the thing that orders publication after the
-        // gates. The release workflow runs the complete gate set itself.
+        // Only `check / check` is a required status context on this repository, and
+        // require-branches-up-to-date is off, so branch protection cannot be the thing that orders
+        // publication after the gates. The release workflow runs the complete gate set itself.
         for (String gateStep : GATE_STEPS) {
             assertTrue(gates.contains(gateStep), gateStep + " must run before publication");
         }

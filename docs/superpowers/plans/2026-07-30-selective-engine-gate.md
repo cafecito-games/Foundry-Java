@@ -6,9 +6,10 @@
 
 **Architecture:** Add a testable Bash/JQ extractor that validates the paginated GitHub API response
 and emits the complete current-and-previous path list, followed by a pure Bash/JQ classifier that
-emits a fixed `run`/`reason` decision. The shared device workflow fails closed on every collection,
-extraction, or classification error and applies the validated decision only to the engine-loaded
-step.
+emits a fixed `run`/`reason` decision. Bind collection to the workflow event by checking the pull
+request's head and base metadata before and after file pagination. The shared device workflow fails
+closed on snapshot drift and every collection, extraction, or classification error, and applies the
+validated decision only to the engine-loaded step.
 
 **Tech Stack:** GitHub Actions reusable workflows, Bash, GitHub CLI, JQ, Java 17, JUnit 5, Gradle, actionlint.
 
@@ -19,10 +20,12 @@ step.
 - Create `gradle/classify-engine-gate-paths.sh`: pure deterministic changed-path classifier; it has no GitHub dependency and never prints an untrusted path.
 - Create `src/test/java/games/cafecito/foundry/build/EngineGateChangeClassifierTest.java`: executes the classifier against the safe, relevant, mixed, unknown, empty, and malformed cases.
 - Create `gradle/extract-engine-gate-paths.sh`: validates the complete paginated API response and
-  emits current and previous paths without leaking malformed metadata.
+  emits current and previous paths without leaking malformed metadata; duplicate current filenames
+  are rejected before exact-count acceptance.
 - Create `src/test/java/games/cafecito/foundry/build/EngineGateApiResponseExtractorTest.java`:
   exercises API schema, count, status, path, and silent-failure behavior independently of GitHub.
-- Modify `.github/workflows/gates.yml`: collect PR files, validate completeness, expose the decision, and condition only the engine-loaded step.
+- Modify `.github/workflows/gates.yml`: bind PR file collection to the event head/base snapshot,
+  validate completeness, expose only a fixed decision, and condition only the engine-loaded step.
 - Modify `.github/workflows/ci.yml`: grant the reusable workflow read-only access to PR file metadata.
 - Modify `.github/workflows/release.yml`: grant the same read-only permission so the called workflow's declared permission never exceeds either caller.
 - Modify `src/test/java/games/cafecito/foundry/build/ReusableGateWorkflowContractTest.java`: protect pagination, count validation, fail-closed handling, permissions, and step scoping.
@@ -254,6 +257,17 @@ void engineGateScopeIsReadOnlyPaginatedCompleteAndFailClosed() throws IOExceptio
     assertTrue(classifier.contains("GH_TOKEN: ${{ github.token }}"));
     assertTrue(classifier.contains("github.event.pull_request.number"));
     assertTrue(classifier.contains("github.event.pull_request.changed_files"));
+    assertTrue(classifier.contains("github.event.pull_request.head.sha"));
+    assertTrue(classifier.contains("github.event.pull_request.base.sha"));
+    assertEquals(
+            2,
+            occurrences(
+                    classifier,
+                    "\"repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}\""));
+    int beforeSnapshot = classifier.indexOf("if ! before_snapshot=\"$(");
+    int files = classifier.indexOf("if ! pages=\"$(");
+    int afterSnapshot = classifier.indexOf("if ! after_snapshot=\"$(");
+    assertTrue(beforeSnapshot >= 0 && files > beforeSnapshot && afterSnapshot > files);
     assertTrue(classifier.contains("gh api --paginate --slurp"));
     assertTrue(classifier.contains("pulls/${PR_NUMBER}/files?per_page=100"));
     assertTrue(classifier.contains("EXPECTED_CHANGED_FILES"));
@@ -263,6 +277,10 @@ void engineGateScopeIsReadOnlyPaginatedCompleteAndFailClosed() throws IOExceptio
     assertTrue(classifier.contains("bash gradle/classify-engine-gate-paths.sh"));
     assertTrue(classifier.contains("run=true"));
     assertTrue(classifier.contains("classification-failed"));
+    assertTrue(classifier.contains("\"$before_head\" != \"$EXPECTED_HEAD_SHA\""));
+    assertTrue(classifier.contains("\"$before_base\" != \"$EXPECTED_BASE_SHA\""));
+    assertTrue(classifier.contains("\"$after_head\" != \"$before_head\""));
+    assertTrue(classifier.contains("\"$after_base\" != \"$before_base\""));
 
     String condition = "if: steps.engine-gate-scope.outputs.run == 'true'";
     assertEquals(1, occurrences(deviceGate, condition));
@@ -349,6 +367,8 @@ final form immediately after the device job's checkout step in `.github/workflow
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           EXPECTED_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           select_gate() {
@@ -363,6 +383,28 @@ final form immediately after the device job's checkout step in `.github/workflow
             exit 0
           fi
 
+          if ! before_snapshot="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq 'if (.head.sha | type) == "string" and
+                (.base.sha | type) == "string" and
+                (.head.sha | length) > 0 and
+                (.base.sha | length) > 0
+                then [.head.sha, .base.sha] | @tsv
+                else error("invalid pull request metadata")
+                end' 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          before_head=""
+          before_base=""
+          IFS=$'\t' read -r before_head before_base <<< "$before_snapshot"
+          if [[ "$before_head" != "$EXPECTED_HEAD_SHA" ||
+            "$before_base" != "$EXPECTED_BASE_SHA" ]]; then
+            select_gate true classification-failed
+            exit 0
+          fi
+
           if ! pages="$(
             gh api --paginate --slurp \
               "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" 2>/dev/null
@@ -370,6 +412,31 @@ final form immediately after the device job's checkout step in `.github/workflow
             select_gate true classification-failed
             exit 0
           fi
+
+          if ! after_snapshot="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq 'if (.head.sha | type) == "string" and
+                (.base.sha | type) == "string" and
+                (.head.sha | length) > 0 and
+                (.base.sha | length) > 0
+                then [.head.sha, .base.sha] | @tsv
+                else error("invalid pull request metadata")
+                end' 2>/dev/null
+          )"; then
+            select_gate true classification-failed
+            exit 0
+          fi
+          after_head=""
+          after_base=""
+          IFS=$'\t' read -r after_head after_base <<< "$after_snapshot"
+          if [[ "$after_head" != "$EXPECTED_HEAD_SHA" ||
+            "$after_base" != "$EXPECTED_BASE_SHA" ||
+            "$after_head" != "$before_head" ||
+            "$after_base" != "$before_base" ]]; then
+            select_gate true classification-failed
+            exit 0
+          fi
+
           set +e
           paths="$(
             printf '%s' "$pages" |
@@ -413,11 +480,14 @@ final form immediately after the device job's checkout step in `.github/workflow
           esac
 ```
 
-This step never writes a changed filename to `GITHUB_OUTPUT` or the log. Both names of a renamed
-file are classified. Extractor status `2` maps to `classification-incomplete`; every other
-nonzero extractor status maps to `classification-failed`. API failure, malformed metadata,
-pagination truncation, an empty list, classifier execution failure, and an unexpected classifier
-decision all select the gate. Only a fixed decision is copied to the workflow output.
+This step never writes a changed filename or API error to `GITHUB_OUTPUT` or the log. It accepts the
+files response only when pull-request metadata before and after pagination matches the event head
+and base and both snapshots match each other, so a same-count replacement cannot be classified.
+Both names of a renamed file are classified. Extractor status `2` maps to
+`classification-incomplete`; every other nonzero extractor status maps to
+`classification-failed`. API failure, snapshot drift, duplicate current filenames, malformed
+metadata, pagination truncation, an empty list, classifier execution failure, and an unexpected
+classifier decision all select the gate. Only a fixed decision is copied to the workflow output.
 
 - [ ] **Step 5: Condition only the engine-loaded step**
 
@@ -459,7 +529,7 @@ git add .github/workflows/gates.yml \
 git commit -m "ci: run the engine gate only for relevant pull requests"
 ```
 
-### Review hardening after Task 2: Validate API metadata before classification
+### Review hardening after Task 2: Bind and validate API metadata before classification
 
 This review-hardening work records the extractor introduced after the initial workflow wiring; it
 does not change Task 1's path-policy contract.
@@ -481,6 +551,7 @@ does not change Task 1's path-policy contract.
   and `unchanged`;
 - a nonempty string current filename for every item, a nonempty string for any present previous
   filename, and a required previous filename for every renamed item;
+- no duplicate current filename records, checked before exact-count acceptance;
 - current and previous paths emitted in API order;
 - exit `2` for count mismatch, exit `1` for malformed metadata or invalid invocation, and no stdout
   or stderr on either failure path.
@@ -497,7 +568,9 @@ Expected: FAIL because `gradle/extract-engine-gate-paths.sh` does not exist.
 
 - [ ] **Step 2: Route only validated paths and fixed decisions**
 
-The workflow pipes the single `gh api --paginate --slurp` response through
+The workflow passes the event head and base SHA into the classification step, queries pull-request
+metadata before and after the single `gh api --paginate --slurp` files request, and proceeds only
+when both API snapshots match the event and each other. It then pipes the files response through
 `gradle/extract-engine-gate-paths.sh`. Extractor exit `2` selects
 `run=true reason=classification-incomplete`; exit `1` or any other nonzero status selects
 `run=true reason=classification-failed`. Status `0` is the only path to
@@ -506,7 +579,9 @@ The workflow pipes the single `gh api --paginate --slurp` response through
 The workflow accepts only `run=false/reason=safe-only`, `run=true/reason=relevant`, or
 `run=true/reason=fail-closed` from the classifier and maps any other output to
 `run=true/reason=classification-failed`. It never exposes raw API metadata or unchecked classifier
-output.
+output. Metadata API failure, head/base drift before or after pagination, and before/after mismatch
+also map to the same fixed `classification-failed` reason. This remains fail-closed even if a
+different file set has the same changed-file count.
 
 - [ ] **Step 3: Verify extractor, classifier, and workflow behavior**
 
@@ -591,13 +666,17 @@ the engine-loaded step is skipped, and only when all changed files belong to the
 safe-to-skip set: documentation or Markdown, branding assets, issue or pull-request templates, and
 sources under `src/test`, `src/testFixtures`, or `gradle/testFixtures`.
 
-A mixed change or unknown path runs the gate. Collection or classification errors, an incomplete
-API response, malformed metadata, and an unknown GitHub file status fail closed by running it.
-Renamed files are classified by both their current and previous paths.
+A mixed change or unknown path runs the gate. Before and after file pagination, the workflow
+requires the pull request's API metadata to match the event head and base and requires both API
+snapshots to match each other. This snapshot binding rejects file-list replacement even when the
+changed-file count stays the same. Collection or classification errors, an incomplete API response,
+malformed metadata, an unknown GitHub file status, and duplicate current filenames fail closed by
+running the gate. Renamed files are classified by both their current and previous paths.
 
-`gradle/extract-engine-gate-paths.sh` validates the paginated GitHub API response schema, the exact
-changed-file count, and all seven documented statuses. `gradle/classify-engine-gate-paths.sh` then
-applies the safe path policy.
+`gradle/extract-engine-gate-paths.sh` validates the paginated GitHub API response schema, rejects
+duplicate current filenames before count acceptance, validates the exact changed-file count, and
+accepts only the seven documented statuses. `gradle/classify-engine-gate-paths.sh` then applies the
+safe path policy.
 ```
 
 Add this sentence after the release device-gate description in `docs/releasing.md`:

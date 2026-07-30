@@ -65,6 +65,45 @@ class EngineGateApiResponseExtractorTest {
     }
 
     @Test
+    void duplicateCurrentFilenamesAreRejectedSilently() throws Exception {
+        Map<String, String> duplicates =
+                Map.of(
+                        "duplicate file records",
+                        """
+                        [[
+                          {"filename":"private/duplicate.java","status":"modified"},
+                          {"filename":"private/duplicate.java","status":"modified"}
+                        ]]
+                        """,
+                        "same current filename with different metadata",
+                        """
+                        [[
+                          {"filename":"private/replaced.java","status":"added"},
+                          {"filename":"private/replaced.java","status":"modified"}
+                        ]]
+                        """);
+
+        for (Map.Entry<String, String> fixture : duplicates.entrySet()) {
+            assertSilentFailure(extract("2", fixture.getValue()), 1, fixture.getKey());
+        }
+    }
+
+    @Test
+    void duplicateCurrentFilenameIsRejectedBeforeCountMismatchClassification() throws Exception {
+        Result result =
+                extract(
+                        "3",
+                        """
+                        [[
+                          {"filename":"private/duplicate-count.java","status":"modified"},
+                          {"filename":"private/duplicate-count.java","status":"modified"}
+                        ]]
+                        """);
+
+        assertSilentFailure(result, 1);
+    }
+
+    @Test
     void malformedApiResponsesAreRejectedWithoutLeakingPaths() throws Exception {
         Map<String, String> malformed =
                 Map.ofEntries(

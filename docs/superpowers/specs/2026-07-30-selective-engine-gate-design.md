@@ -26,6 +26,7 @@ workflow.
 - Run the engine-loaded step for every push to `main` and every release invocation.
 - Default to running the engine gate when classification is unavailable or encounters an unfamiliar
   path.
+- Bind the files response to the pull-request head and base recorded by the workflow event.
 - Make the classification policy explicit and covered by repository contract tests.
 
 ## Non-goals
@@ -59,19 +60,23 @@ both safe-to-skip and relevant paths runs the gate. A renamed file is classified
 new path, so moving a production file into a safe-to-skip tree still runs the gate.
 
 The classification pipeline fails closed: an API error, an empty or malformed changed-file
-response, or any path outside the explicit safe-to-skip set produces `run=true`. A newly introduced
-directory therefore cannot silently escape the gate.
+response, duplicate current filenames, pull-request snapshot drift, or any path outside the
+explicit safe-to-skip set produces `run=true`. A newly introduced directory therefore cannot
+silently escape the gate.
 
 ## Workflow design
 
-The shared device job gains one classification step after checkout. For pull requests, it obtains
-the complete changed-file list from GitHub's pull-request files API with pagination. Path
-collection is delegated to the testable `gradle/extract-engine-gate-paths.sh`, which validates one
-paginated response, the page and item shapes, an exact expected changed-file count, the documented
-status allowlist, every required current filename, and the required previous filename for a rename.
-Malformed metadata, unknown statuses, incomplete responses, and collection errors fail closed.
-For other events the workflow immediately selects the full gate. The workflow retains read-only
-permissions.
+The shared device job gains one classification step after checkout. For pull requests, it receives
+the event head SHA, base SHA, and changed-file count. It queries pull-request metadata before and
+after file pagination and proceeds only when both API snapshots match the event head and base and
+match each other. This prevents a same-count file-list replacement from being classified against a
+different revision. Path collection is delegated to the testable
+`gradle/extract-engine-gate-paths.sh`, which validates one paginated response, the page and item
+shapes, the documented status allowlist, every required current filename, and the required previous
+filename for a rename. It rejects duplicate current filenames before accepting the exact expected
+changed-file count. Malformed metadata, unknown statuses, incomplete responses, snapshot drift, and
+collection errors fail closed. For other events the workflow immediately selects the full gate.
+The workflow retains read-only permissions.
 
 The extractor emits both the current and previous paths for renamed files.
 `gradle/classify-engine-gate-paths.sh` then applies the safe path policy. The workflow accepts only
@@ -90,8 +95,9 @@ classification. It must not print credentials or request broader permissions.
 
 `EngineGateApiResponseExtractorTest` covers valid multi-page responses and all seven documented
 statuses, current and previous rename paths, page and item schema failures, invalid or missing
-filenames and statuses, unknown statuses, an exact positive expected count, distinct count-mismatch
-handling, and silent failures that do not leak paths.
+filenames and statuses, unknown statuses, duplicate current filenames, an exact positive expected
+count, duplicate rejection before count-mismatch classification, distinct count-mismatch handling,
+and silent failures that do not leak paths.
 
 `EngineGateChangeClassifierTest` covers:
 
@@ -108,7 +114,10 @@ Workflow contract tests prove that:
 - non-pull-request callers always select the engine gate;
 - the decision controls only the engine-loaded step;
 - the faster API 36 checks and evidence upload remain independent of the decision;
-- changed-file collection is paginated and failure selects the gate.
+- changed-file collection is paginated and failure selects the gate;
+- event head/base metadata matches API metadata before and after pagination;
+- before/after snapshot drift, including same-count replacement, selects the gate;
+- only fixed decision reasons reach logs and workflow outputs.
 
 Run the focused classifier and workflow contracts first, followed by `actionlint` and
 `./gradlew clean check`.

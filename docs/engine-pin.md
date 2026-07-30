@@ -86,13 +86,17 @@ the engine-loaded step is skipped, and only when all changed files belong to the
 safe-to-skip set: documentation or Markdown, branding assets, issue or pull-request templates, and
 sources under `src/test`, `src/testFixtures`, or `gradle/testFixtures`.
 
-A mixed change or unknown path runs the gate. Collection or classification errors, an incomplete
-API response, malformed metadata, and an unknown GitHub file status fail closed by running it.
-Renamed files are classified by both their current and previous paths.
+A mixed change or unknown path runs the gate. Before and after file pagination, the workflow
+requires the pull request's API metadata to match the event head and base and requires both API
+snapshots to match each other. This snapshot binding rejects file-list replacement even when the
+changed-file count stays the same. Collection or classification errors, an incomplete API response,
+malformed metadata, an unknown GitHub file status, and duplicate current filenames fail closed by
+running the gate. Renamed files are classified by both their current and previous paths.
 
 [`gradle/extract-engine-gate-paths.sh`](../gradle/extract-engine-gate-paths.sh) validates the
-paginated GitHub API response schema, the exact changed-file count, and the seven documented
-statuses (`added`, `removed`, `modified`, `renamed`, `copied`, `changed`, and `unchanged`).
+paginated GitHub API response schema, rejects duplicate current filenames before count acceptance,
+validates the exact changed-file count, and accepts only the seven documented statuses (`added`,
+`removed`, `modified`, `renamed`, `copied`, `changed`, and `unchanged`).
 [`gradle/classify-engine-gate-paths.sh`](../gradle/classify-engine-gate-paths.sh) then applies the
 safe path policy.
 
