@@ -22,9 +22,8 @@ class ReusableGateWorkflowContractTest {
         String release = read(".github/workflows/release.yml");
 
         assertTrue(shared.contains("on:\n  workflow_call:"));
-        assertTrue(shared.contains("      release:\n"));
-        assertTrue(shared.contains("        type: boolean"));
-        assertTrue(shared.contains("      dry_run:\n"));
+        assertBooleanInput(shared, "release");
+        assertBooleanInput(shared, "dry_run");
         assertTrue(shared.contains("  host-gate:\n"));
         assertTrue(shared.contains("  device-gate:\n"));
 
@@ -38,20 +37,40 @@ class ReusableGateWorkflowContractTest {
                                 + "      dry_run: ${{ inputs.dry_run }}"));
         assertTrue(release.contains("needs: [gates]"));
 
-        assertFalse(ci.contains("host-gate:"));
-        assertFalse(ci.contains("device-gate:"));
+        assertFalse(ci.contains("\n  host-gate:\n"));
+        assertFalse(ci.contains("\n  device-gate:\n"));
+        assertFalse(release.contains("\n  host-gate:\n"));
+        assertFalse(release.contains("\n  device-gate:\n"));
         assertFalse(ci.contains("android-actions/setup-android@"));
         int stage = release.indexOf("  stage:\n");
         assertTrue(stage > 0);
         String releaseBeforeStage = release.substring(0, stage);
-        assertFalse(releaseBeforeStage.contains("host-gate:"));
-        assertFalse(releaseBeforeStage.contains("device-gate:"));
         assertFalse(releaseBeforeStage.contains("android-actions/setup-android@"));
 
-        assertEquals(1, occurrences(shared, "bash gradle/verify-configuration-cache-reuse.sh"));
-        assertEquals(1, occurrences(shared, "bash gradle/run-samples-conformance-matrix.sh"));
-        assertEquals(1, occurrences(shared, "bash gradle/run-engine-loaded-conformance-gate.sh"));
-        assertEquals(1, occurrences(shared, "- name: Create and launch the API 36 emulator"));
+        assertOwnedOnlyByShared(
+                shared, ci, release, "bash gradle/verify-configuration-cache-reuse.sh");
+        assertOwnedOnlyByShared(
+                shared, ci, release, "bash gradle/run-samples-conformance-matrix.sh");
+        assertOwnedOnlyByShared(
+                shared, ci, release, "bash gradle/run-engine-loaded-conformance-gate.sh");
+        assertOwnedOnlyByShared(
+                shared, ci, release, "- name: Create and launch the API 36 emulator");
+    }
+
+    private static void assertBooleanInput(String workflow, String input) {
+        Pattern inputBlock =
+                Pattern.compile(
+                        "(?m)^      "
+                                + Pattern.quote(input)
+                                + ":\\n(?:        .*\\n)*        type: boolean$");
+        assertTrue(inputBlock.matcher(workflow).find(), input + " must be a boolean input");
+    }
+
+    private static void assertOwnedOnlyByShared(
+            String shared, String ci, String release, String marker) {
+        assertEquals(1, occurrences(shared, marker), marker + " must appear once in shared gates");
+        assertEquals(0, occurrences(ci, marker), marker + " must not remain in CI");
+        assertEquals(0, occurrences(release, marker), marker + " must not remain in release");
     }
 
     private static int occurrences(String value, String needle) {
