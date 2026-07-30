@@ -159,8 +159,12 @@ rather than a repair.
   completed record is a second, separate `foundry-java-release-upload-record-<tag>` artifact. If a
   re-run recovers an intent marker with no completed record, it refuses: this is ambiguous, not "safe
   to retry" — the bundle may already have been accepted. Check the Central Portal directly for a
-  deployment matching this version. Once you are certain nothing was
-  accepted, delete `upload-intent.json` from the staged release and re-run. Never resubmit while this
-  is unresolved.
+  deployment matching this version. Once you are certain nothing was accepted, delete the
+  `foundry-java-release-upload-intent-<tag>` artifact itself (`gh api -X DELETE
+  repos/<owner>/<repo>/actions/artifacts/<id>`, found by listing artifacts with that name), not just
+  the local `upload-intent.json` file: every re-run downloads that artifact back into the staging
+  directory, so leaving it in place makes any re-run refuse again regardless of the local file. Only
+  after the artifact itself is gone can a re-run generate a fresh attempt and proceed. Never resubmit
+  while this is unresolved.
 - **A published release turns out to be wrong.** Maven Central coordinates are immutable. Publish a
   new patch version; do not attempt to replace one.
