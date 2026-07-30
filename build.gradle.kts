@@ -336,6 +336,9 @@ abstract class VerifyPublications : DefaultTask() {
     abstract val repositoryDirectory: DirectoryProperty
 
     @get:Input
+    abstract val publicationVersion: Property<String>
+
+    @get:Input
     abstract val expectedPoms: MapProperty<String, String>
 
     @get:Input
@@ -356,6 +359,8 @@ abstract class VerifyPublications : DefaultTask() {
     @TaskAction
     fun verifyPublishedFiles() {
         val repository = repositoryDirectory.get().asFile
+        val version = publicationVersion.get()
+        val versionDirectorySuffix = "/$version"
         val poms = expectedPoms.get()
         val modules = expectedModules.get()
         val pomDependencies = expectedPomDependencies.get()
@@ -380,11 +385,16 @@ abstract class VerifyPublications : DefaultTask() {
             "Every expected Gradle module must declare exact logical artifact names."
         }
 
+        // build/repository can accumulate publications for other Foundry versions across
+        // successive invocations with different -PfoundryVersion values. Scoping every
+        // comparison to versionDirectorySuffix keeps this an exact check of the topology under
+        // test without being tripped up by unrelated versions already staged on disk.
         fun publishedDirectories(extension: String) =
             repository
                 .walkTopDown()
                 .filter { it.isFile && it.extension == extension }
                 .map { it.parentFile.relativeTo(repository).invariantSeparatorsPath }
+                .filter { it.endsWith(versionDirectorySuffix) }
                 .toSet()
 
         check(publishedDirectories("pom") == poms.keys) {
@@ -405,7 +415,8 @@ abstract class VerifyPublications : DefaultTask() {
                 .filter { it.isFile && it.extension in setOf("jar", "aar") }
                 .map {
                     "${it.parentFile.relativeTo(repository).invariantSeparatorsPath}|${it.extension}"
-                }.toSet()
+                }.filter { it.substringBeforeLast('|').endsWith(versionDirectorySuffix) }
+                .toSet()
         check(actualArchiveDirectories == expectedArchiveDirectories) {
             "Published archive coordinates differ from the exact bootstrap topology."
         }
@@ -1069,6 +1080,7 @@ val verifyPublications =
         group = "verification"
         description = "Publishes and validates every configured bootstrap Maven publication."
         repositoryDirectory.set(layout.buildDirectory.dir("repository"))
+        publicationVersion.set(requiredPublicationVersion)
         expectedPoms.set(requiredPublicationCoordinates)
         expectedModules.set(
             requiredPublicationCoordinates.filterKeys { it != pluginMarkerPublicationDirectory },
