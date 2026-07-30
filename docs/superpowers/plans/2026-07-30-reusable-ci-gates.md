@@ -408,7 +408,35 @@ co-location:
 
 ```java
 assertEquals(4, occurrences(workflow, UPLOAD_ARTIFACT_COMMIT));
-assertEquals(4, occurrences(workflow, "if: always() &&"));
+assertEquals(2, occurrences(workflow, "if: ${{ always() && !inputs.release }}"));
+assertEquals(2, occurrences(workflow, "if: always() && inputs.release"));
+String ciHostEvidence =
+        namedWorkflowStep(workflow, "Upload build and native verification evidence");
+String releaseHostEvidence = namedWorkflowStep(workflow, "Upload host gate evidence");
+String ciDeviceEvidence =
+        namedWorkflowStep(workflow, "Upload API 36 production startup evidence");
+String releaseDeviceEvidence = namedWorkflowStep(workflow, "Upload device gate evidence");
+for (String ciEvidence : List.of(ciHostEvidence, ciDeviceEvidence)) {
+    assertTrue(ciEvidence.contains("if: ${{ always() && !inputs.release }}"));
+    assertTrue(ciEvidence.contains("uses: " + UPLOAD_ARTIFACT_COMMIT));
+}
+for (String releaseEvidence : List.of(releaseHostEvidence, releaseDeviceEvidence)) {
+    assertTrue(releaseEvidence.contains("if: always() && inputs.release"));
+    assertTrue(releaseEvidence.contains("uses: " + UPLOAD_ARTIFACT_COMMIT));
+}
+assertTrue(ciHostEvidence.contains("name: foundry-java-check-evidence"));
+assertTrue(ciHostEvidence.contains("${{ runner.temp }}/foundry-java-check.log"));
+assertTrue(
+        releaseHostEvidence.contains("name: foundry-java-release-host-gate-evidence"));
+assertTrue(
+        releaseHostEvidence.contains("${{ runner.temp }}/foundry-java-release-check.log"));
+assertTrue(
+        ciDeviceEvidence.contains("name: foundry-java-api36-production-startup-evidence"));
+assertTrue(ciDeviceEvidence.contains("${{ runner.temp }}/foundry-java-engine-gate/**"));
+assertTrue(
+        releaseDeviceEvidence.contains("name: foundry-java-release-device-gate-evidence"));
+assertTrue(
+        releaseDeviceEvidence.contains("${{ runner.temp }}/foundry-java-engine-gate/**"));
 ```
 
 When extracting the CI build step in `ciPublishesImmutableCheckAndProductionStartupEvidence`, find
@@ -416,7 +444,8 @@ the first `Build, test, and inspect` step, which is the non-release step, and re
 command/log assertions.
 
 Change `NativeBridgeContractTest.androidBuildAndVerifierRequireTheExactFourAbiBridge` and
-`EngineLoadedConformanceGateContractTest.engineLoadedConformanceIsAMandatoryCachedCiGate` to read
+`EngineLoadedConformanceGateContractTest.continuousIntegrationRunsTheGateOnTheApi36EmulatorAndKeepsItsEvidence`
+to read
 `.github/workflows/gates.yml`. Do not remove any native, KVM, emulator, cache, evidence, or ordering
 assertion.
 
@@ -471,7 +500,7 @@ assertions continue to read `release.yml`.
 Run:
 
 ```bash
-./gradlew test
+./gradlew :test
 ```
 
 Expected: all root repository, native bridge, engine gate, release pipeline, release script, and
@@ -483,7 +512,7 @@ Run:
 
 ```bash
 ./gradlew spotlessApply
-./gradlew test
+./gradlew :test
 ```
 
 Expected: formatting succeeds and root tests remain green.

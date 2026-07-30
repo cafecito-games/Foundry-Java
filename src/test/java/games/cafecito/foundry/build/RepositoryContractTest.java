@@ -700,6 +700,79 @@ class RepositoryContractTest {
         assertTrue(workflow.contains("name: foundry-java-api36-production-startup-evidence"));
         assertEquals(2, occurrences(workflow, "if: ${{ always() && !inputs.release }}"));
         assertEquals(2, occurrences(workflow, "if: always() && inputs.release"));
+        String ciHostEvidence =
+                namedWorkflowStep(workflow, "Upload build and native verification evidence");
+        assertTrue(ciHostEvidence.contains("\n        if: ${{ always() && !inputs.release }}\n"));
+        assertTrue(ciHostEvidence.contains("\n        uses: " + UPLOAD_ARTIFACT_COMMIT + "\n"));
+        assertTrue(ciHostEvidence.contains("\n          name: foundry-java-check-evidence\n"));
+        assertTrue(ciHostEvidence.contains("${{ runner.temp }}/foundry-java-check.log"));
+        assertTrue(ciHostEvidence.contains("${{ runner.temp }}/foundry-java-native-verifier.log"));
+        assertTrue(ciHostEvidence.contains("foundry-java-android/build/native-host/**"));
+        assertTrue(ciHostEvidence.contains("foundry-java-android/build/native-host-sanitized/**"));
+        assertTrue(ciHostEvidence.contains("foundry-java-android/build/outputs/aar/**"));
+
+        String releaseHostEvidence = namedWorkflowStep(workflow, "Upload host gate evidence");
+        assertTrue(releaseHostEvidence.contains("\n        if: always() && inputs.release\n"));
+        assertTrue(
+                releaseHostEvidence.contains("\n        uses: " + UPLOAD_ARTIFACT_COMMIT + "\n"));
+        assertTrue(
+                releaseHostEvidence.contains(
+                        "\n          name: foundry-java-release-host-gate-evidence\n"));
+        assertTrue(
+                releaseHostEvidence.contains("${{ runner.temp }}/foundry-java-release-check.log"));
+        assertTrue(
+                releaseHostEvidence.contains(
+                        "${{ runner.temp }}/foundry-java-release-native-verifier.log"));
+        assertTrue(releaseHostEvidence.contains("foundry-java-android/build/native-host/**"));
+        assertTrue(
+                releaseHostEvidence.contains(
+                        "foundry-java-android/build/native-host-sanitized/**"));
+        assertTrue(releaseHostEvidence.contains("foundry-java-android/build/outputs/aar/**"));
+
+        String ciDeviceEvidence =
+                namedWorkflowStep(workflow, "Upload API 36 production startup evidence");
+        assertTrue(ciDeviceEvidence.contains("\n        if: ${{ always() && !inputs.release }}\n"));
+        assertTrue(ciDeviceEvidence.contains("\n        uses: " + UPLOAD_ARTIFACT_COMMIT + "\n"));
+        assertTrue(
+                ciDeviceEvidence.contains(
+                        "\n          name: foundry-java-api36-production-startup-evidence\n"));
+        for (String path :
+                List.of(
+                        "${{ runner.temp }}/foundry-java-production-startup/**",
+                        "${{ runner.temp }}/foundry-java-emulator.log",
+                        "foundry-java-android/build/outputs/apk/androidTest/debug/**",
+                        "foundry-java-android/build/intermediates/merged_manifest/debug/**",
+                        "foundry-java-android/build/intermediates/packaged_manifests/"
+                                + "debugAndroidTest/**",
+                        "foundry-java-android/build/outputs/androidTest-results/**",
+                        "foundry-java-android/build/reports/androidTests/**",
+                        "${{ runner.temp }}/foundry-java-conformance-matrix/**",
+                        "samples/*/build/reports/**",
+                        "samples/*/build/test-results/**",
+                        "samples/*/build/outputs/androidTest-results/**",
+                        "${{ runner.temp }}/foundry-java-engine-gate/**",
+                        "acceptance/*/build/reports/**")) {
+            assertTrue(ciDeviceEvidence.contains(path), path + " must be CI device evidence");
+        }
+
+        String releaseDeviceEvidence = namedWorkflowStep(workflow, "Upload device gate evidence");
+        assertTrue(releaseDeviceEvidence.contains("\n        if: always() && inputs.release\n"));
+        assertTrue(
+                releaseDeviceEvidence.contains("\n        uses: " + UPLOAD_ARTIFACT_COMMIT + "\n"));
+        assertTrue(
+                releaseDeviceEvidence.contains(
+                        "\n          name: foundry-java-release-device-gate-evidence\n"));
+        for (String path :
+                List.of(
+                        "${{ runner.temp }}/foundry-java-production-startup/**",
+                        "${{ runner.temp }}/foundry-java-conformance-matrix/**",
+                        "${{ runner.temp }}/foundry-java-engine-gate/**",
+                        "${{ runner.temp }}/foundry-java-emulator.log",
+                        "samples/*/build/reports/**",
+                        "acceptance/*/build/reports/**")) {
+            assertTrue(releaseDeviceEvidence.contains(path), path + " must be release evidence");
+        }
+
         int buildStepStart = workflow.indexOf("- name: Build, test, and inspect the native bridge");
         assertTrue(buildStepStart >= 0);
         int buildStepEnd = workflow.indexOf("\n      - ", buildStepStart + 1);
@@ -918,6 +991,14 @@ class RepositoryContractTest {
 
     private static int occurrences(String value, String needle) {
         return value.split(Pattern.quote(needle), -1).length - 1;
+    }
+
+    private static String namedWorkflowStep(String workflow, String name) {
+        String marker = "- name: " + name + "\n";
+        assertEquals(1, occurrences(workflow, marker), name + " must identify one workflow step");
+        int start = workflow.indexOf(marker);
+        int end = workflow.indexOf("\n      - ", start + marker.length());
+        return workflow.substring(start, end >= 0 ? end : workflow.length());
     }
 
     private static boolean containsAndroidSourceDeclaration(String relativePath)

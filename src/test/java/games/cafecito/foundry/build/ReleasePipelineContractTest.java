@@ -98,6 +98,56 @@ class ReleasePipelineContractTest {
         }
         assertTrue(gates.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
 
+        assertEquals(2, occurrences(gates, "- name: Build, test, and inspect the native bridge\n"));
+        String releaseBuild =
+                namedWorkflowStep(gates, "Build, test, and inspect the native bridge", 2);
+        assertTrue(releaseBuild.contains("\n        if: inputs.release\n"));
+        for (String releaseGate :
+                List.of(
+                        ":foundry-java-runtime:verifyRuntimeApi",
+                        ":foundry-java-runtime:verifyGeneratedRealization",
+                        ":foundry-java-android:nativeAbiLayoutTest",
+                        ":foundry-java-android:nativeHostTest",
+                        ":foundry-java-android:nativeSanitizerTest",
+                        "bash gradle/verify-native-bridge.sh",
+                        "${RUNNER_TEMP}/foundry-java-release-check.log",
+                        "${RUNNER_TEMP}/foundry-java-release-native-verifier.log")) {
+            assertTrue(
+                    releaseBuild.contains(releaseGate),
+                    releaseGate + " must run in the release build step");
+        }
+
+        String releasePreconditions =
+                namedWorkflowStep(
+                        gates,
+                        "Verify the release preconditions with regenerated dependency locks");
+        assertTrue(
+                releasePreconditions.contains(
+                        "\n        if: inputs.release && github.event_name == 'push'\n"));
+        assertTrue(
+                releasePreconditions.contains(
+                        "./gradlew --no-daemon --write-locks resolveAndLockAll"));
+        assertTrue(releasePreconditions.contains("bash gradle/verify-release-preconditions.sh"));
+
+        String nonPushLockDrift =
+                namedWorkflowStep(gates, "Regenerate dependency locks and reject drift");
+        assertTrue(
+                nonPushLockDrift.contains(
+                        "\n        if: inputs.release && github.event_name != 'push'\n"));
+        assertTrue(
+                nonPushLockDrift.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
+        assertTrue(nonPushLockDrift.contains("git status --porcelain --untracked-files=all --"));
+
+        for (String commonGate :
+                List.of(
+                        "Prove configuration cache reuse from clean outputs",
+                        "Run the Java and Kotlin conformance matrix as consumer samples",
+                        "Run the engine-loaded API 36 conformance gate")) {
+            String commonStep = namedWorkflowStep(gates, commonGate);
+            assertFalse(
+                    commonStep.contains("\n        if:"), commonGate + " must run in every mode");
+        }
+
         int gateCall = workflow.indexOf("  gates:\n");
         int stage = workflow.indexOf("  stage:\n");
         int publish = workflow.indexOf("  publish:\n");
@@ -545,6 +595,25 @@ class ReleasePipelineContractTest {
 
     private static int occurrences(String value, String needle) {
         return value.split(Pattern.quote(needle), -1).length - 1;
+    }
+
+    private static String namedWorkflowStep(String workflow, String name) {
+        assertEquals(
+                1,
+                occurrences(workflow, "- name: " + name + "\n"),
+                name + " must identify one workflow step");
+        return namedWorkflowStep(workflow, name, 1);
+    }
+
+    private static String namedWorkflowStep(String workflow, String name, int occurrence) {
+        String marker = "- name: " + name + "\n";
+        int start = -1;
+        for (int found = 0; found < occurrence; found++) {
+            start = workflow.indexOf(marker, start + 1);
+            assertTrue(start >= 0, name + " occurrence " + occurrence + " must exist");
+        }
+        int end = workflow.indexOf("\n      - ", start + marker.length());
+        return workflow.substring(start, end >= 0 ? end : workflow.length());
     }
 
     private static String read(String relativePath) throws IOException {

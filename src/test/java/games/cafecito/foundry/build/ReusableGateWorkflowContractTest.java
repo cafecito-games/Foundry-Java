@@ -26,7 +26,22 @@ class ReusableGateWorkflowContractTest {
         assertBooleanInput(shared, "dry_run");
         assertTrue(shared.contains("  host-gate:\n"));
         assertTrue(shared.contains("  device-gate:\n"));
-        assertTrue(shared.contains("fetch-depth: ${{ inputs.release && '0' || '1' }}"));
+        int hostGateStart = shared.indexOf("  host-gate:\n");
+        int deviceGateStart = shared.indexOf("  device-gate:\n", hostGateStart);
+        assertTrue(hostGateStart > 0 && deviceGateStart > hostGateStart);
+        String hostGate = shared.substring(hostGateStart, deviceGateStart);
+        String checkoutMarker = "- uses: actions/checkout@";
+        int checkoutStart = hostGate.indexOf(checkoutMarker);
+        int checkoutEnd = hostGate.indexOf("\n      - ", checkoutStart + checkoutMarker.length());
+        assertTrue(checkoutStart >= 0 && checkoutEnd > checkoutStart);
+        String checkoutStep = hostGate.substring(checkoutStart, checkoutEnd);
+        assertTrue(
+                checkoutStep.startsWith(
+                        "- uses: actions/checkout@"
+                                + "11d5960a326750d5838078e36cf38b85af677262 # v4\n"));
+        String releaseFetchDepth = "fetch-depth: ${{ inputs.release && '0' || '1' }}";
+        assertTrue(checkoutStep.contains("with:\n          " + releaseFetchDepth));
+        assertEquals(1, occurrences(shared, releaseFetchDepth));
 
         assertEquals(1, occurrences(ci, CALL));
         assertEquals(1, occurrences(release, CALL));
