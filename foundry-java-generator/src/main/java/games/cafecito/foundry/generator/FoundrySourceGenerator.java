@@ -19,6 +19,7 @@ import java.util.Base64;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -147,6 +148,7 @@ public final class FoundrySourceGenerator {
         }
         String manifestSha256 = sha256(manifest.canonicalJson());
         List<PublicRoot> publicRoots = publicRoots(descriptors);
+        Map<String, Set<String>> inheritedMethodNames = inheritedMethodNames(publicRoots);
         List<NativeDispatchRow> nativeDispatchRows = nativeDispatchRows(api);
 
         Realizations realizations = new Realizations();
@@ -196,7 +198,8 @@ public final class FoundrySourceGenerator {
                                     metadata,
                                     manifestSha256,
                                     List.copyOf(entry.getValue()),
-                                    realizations))
+                                    realizations,
+                                    inheritedMethodNames))
                     != null) {
                 throw new ApiInputException(
                         "Generated public source path collision: " + path + ".");
@@ -1054,7 +1057,8 @@ public final class FoundrySourceGenerator {
             Metadata metadata,
             String manifestSha256,
             List<PublicRoot> roots,
-            Realizations realizations) {
+            Realizations realizations,
+            Map<String, Set<String>> inheritedMethodNames) {
         PublicRoot root = roots.get(0);
         if (root.descriptor().category().equals("utility_functions")) {
             return utilitiesSource(metadata, manifestSha256, roots, realizations);
@@ -1064,7 +1068,9 @@ public final class FoundrySourceGenerator {
                     "Multiple public roots unexpectedly share " + root.sourcePath() + ".");
         }
         return switch (root.descriptor().category()) {
-            case "classes" -> classRootSource(metadata, manifestSha256, root, realizations);
+            case "classes" ->
+                    classRootSource(
+                            metadata, manifestSha256, root, realizations, inheritedMethodNames);
             case "singletons" -> singletonRootSource(metadata, manifestSha256, root, realizations);
             case "builtin_classes" ->
                     builtinRootSource(metadata, manifestSha256, root, realizations);
@@ -1149,7 +1155,11 @@ public final class FoundrySourceGenerator {
     }
 
     private static String classRootSource(
-            Metadata metadata, String manifestSha256, PublicRoot root, Realizations realizations) {
+            Metadata metadata,
+            String manifestSha256,
+            PublicRoot root,
+            Realizations realizations,
+            Map<String, Set<String>> inheritedMethodNames) {
         StringBuilder source = publicRootHeader(metadata, manifestSha256, root);
         realizations.realize(root.descriptor().rootIdentity(), JavaMember.ofType(ownerName(root)));
         source.append("public class ").append(root.className());
@@ -1230,7 +1240,11 @@ public final class FoundrySourceGenerator {
                 .append("    }\n\n");
         appendPublicIdentityMarkers(source, root.descriptor().entities());
         appendClassMembers(
-                source, root.descriptor().entities().get(0), realizations, ownerName(root));
+                source,
+                classEntity,
+                realizations,
+                ownerName(root),
+                inheritedMethodNames.getOrDefault(classEntity.identity(), Set.of()));
         return source.append("}\n").toString();
     }
 
@@ -1483,20 +1497,143 @@ public final class FoundrySourceGenerator {
         source.append('\n');
     }
 
+    /** Returns the Java method names a single class entity declares for its own engine methods. */
+    private static Set<String> declaredMethodNames(FoundryApi.Entity classEntity) {
+        return classEntity.children().stream()
+                .filter(child -> child.edge().equals("methods"))
+                .map(
+                        child ->
+                                javaMethodName(
+                                        requiredString(child.source(), "name", child.identity()),
+                                        optionalBoolean(child.source(), "is_virtual")))
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * Decides whether a property accessor is generated for {@code property}.
+     *
+     * <p>An accessor is suppressed when the engine already exports it on the declaring class, and
+     * when the accessor the generator would emit is already reachable on an ancestor. The inherited
+     * comparison uses the accessor name this generator would emit — {@code get}/{@code set} plus
+     * the PascalCase property name — rather than the engine accessor name, because indexed
+     * properties share one parameterized engine accessor (for example {@code get_param}) whose
+     * inherited name says nothing about the property-bound accessor being emitted.
+     */
+    private static boolean generatesPropertyAccessor(
+            FoundryApi.Entity property,
+            String accessorPrefix,
+            Set<String> declaredMethodNames,
+            Set<String> inheritedMethodNames) {
+        String engineAccessor =
+                optionalString(
+                        property.source(),
+                        accessorPrefix.equals("get") ? "getter" : "setter",
+                        property.identity());
+        if (engineAccessor == null) {
+            return false;
+        }
+        String emitted =
+                accessorPrefix
+                        + pascalCase(
+                                requiredString(property.source(), "name", property.identity()));
+        return !declaredMethodNames.contains(javaMethodName(engineAccessor, false))
+                && !inheritedMethodNames.contains(emitted);
+    }
+
+    /**
+     * Returns, per class root identity, every Java method name the class inherits from an ancestor.
+     *
+     * <p>A class inherits both the engine methods its ancestors declare and the property accessors
+     * those ancestors generate, so the sets resolve parent-first and reuse the same suppression
+     * decision the emitter applies.
+     */
+    private static Map<String, Set<String>> inheritedMethodNames(List<PublicRoot> roots) {
+        Map<String, FoundryApi.Entity> classEntitiesByName = new LinkedHashMap<>();
+        for (PublicRoot root : roots) {
+            if (root.descriptor().category().equals("classes")) {
+                FoundryApi.Entity entity = root.descriptor().entities().get(0);
+                classEntitiesByName.put(sourceName(entity), entity);
+            }
+        }
+        Map<String, Set<String>> generatedByClassName = new LinkedHashMap<>();
+        Map<String, Set<String>> inheritedByClassName = new LinkedHashMap<>();
+        for (String className : classEntitiesByName.keySet()) {
+            resolveGeneratedMethodNames(
+                    className,
+                    classEntitiesByName,
+                    generatedByClassName,
+                    inheritedByClassName,
+                    new LinkedHashSet<>());
+        }
+        Map<String, Set<String>> inheritedByRootIdentity = new LinkedHashMap<>();
+        classEntitiesByName.forEach(
+                (className, entity) ->
+                        inheritedByRootIdentity.put(
+                                entity.identity(), inheritedByClassName.get(className)));
+        return Map.copyOf(inheritedByRootIdentity);
+    }
+
+    /** Resolves and memoizes every Java method name the named class generates on itself. */
+    private static Set<String> resolveGeneratedMethodNames(
+            String className,
+            Map<String, FoundryApi.Entity> classEntitiesByName,
+            Map<String, Set<String>> generatedByClassName,
+            Map<String, Set<String>> inheritedByClassName,
+            Set<String> resolving) {
+        Set<String> memoized = generatedByClassName.get(className);
+        if (memoized != null) {
+            return memoized;
+        }
+        if (!resolving.add(className)) {
+            throw new ApiInputException(
+                    "Generated class inheritance is cyclic at classes/" + className + ".");
+        }
+        FoundryApi.Entity entity = classEntitiesByName.get(className);
+        if (entity == null) {
+            throw new ApiInputException("Generated class parent is absent: classes/" + className);
+        }
+        Set<String> inherited = new LinkedHashSet<>();
+        JsonValue inherits = entity.source().optional("inherits");
+        if (inherits != null) {
+            String parentName = inherits.requireString(entity.identity() + ".inherits");
+            if (!parentName.isBlank()) {
+                inherited.addAll(
+                        resolveGeneratedMethodNames(
+                                parentName,
+                                classEntitiesByName,
+                                generatedByClassName,
+                                inheritedByClassName,
+                                resolving));
+                inherited.addAll(inheritedByClassName.get(parentName));
+            }
+        }
+        Set<String> declared = declaredMethodNames(entity);
+        Set<String> generated = new LinkedHashSet<>(declared);
+        for (FoundryApi.Entity child : entity.children()) {
+            if (!child.edge().equals("properties")) {
+                continue;
+            }
+            String suffix = pascalCase(requiredString(child.source(), "name", child.identity()));
+            if (generatesPropertyAccessor(child, "get", declared, inherited)) {
+                generated.add("get" + suffix);
+            }
+            if (generatesPropertyAccessor(child, "set", declared, inherited)) {
+                generated.add("set" + suffix);
+            }
+        }
+        resolving.remove(className);
+        inheritedByClassName.put(className, Set.copyOf(inherited));
+        generatedByClassName.put(className, Set.copyOf(generated));
+        return generatedByClassName.get(className);
+    }
+
     private static void appendClassMembers(
-            StringBuilder source, FoundryApi.Entity root, Realizations realizations, String owner) {
-        Set<String> generatedMethodNames =
-                root.children().stream()
-                        .filter(child -> child.edge().equals("methods"))
-                        .map(
-                                child -> {
-                                    String name =
-                                            requiredString(
-                                                    child.source(), "name", child.identity());
-                                    return javaMethodName(
-                                            name, optionalBoolean(child.source(), "is_virtual"));
-                                })
-                        .collect(Collectors.toSet());
+            StringBuilder source,
+            FoundryApi.Entity root,
+            Realizations realizations,
+            String owner,
+            Set<String> inheritedMethodNames) {
+        Set<String> generatedMethodNames = declaredMethodNames(root);
         for (FoundryApi.Entity child : root.children()) {
             switch (child.edge()) {
                 case "methods" -> {
@@ -1510,21 +1647,16 @@ public final class FoundrySourceGenerator {
                             realizations,
                             owner);
                 }
-                case "properties" -> {
-                    String getter = optionalString(child.source(), "getter", child.identity());
-                    String setter = optionalString(child.source(), "setter", child.identity());
-                    appendProperty(
-                            source,
-                            child,
-                            realizations,
-                            owner,
-                            getter != null
-                                    && !generatedMethodNames.contains(
-                                            javaMethodName(getter, false)),
-                            setter != null
-                                    && !generatedMethodNames.contains(
-                                            javaMethodName(setter, false)));
-                }
+                case "properties" ->
+                        appendProperty(
+                                source,
+                                child,
+                                realizations,
+                                owner,
+                                generatesPropertyAccessor(
+                                        child, "get", generatedMethodNames, inheritedMethodNames),
+                                generatesPropertyAccessor(
+                                        child, "set", generatedMethodNames, inheritedMethodNames));
                 case "signals" -> appendSignal(source, child, realizations, owner);
                 case "constants" -> appendConstant(source, child, realizations, owner);
                 case "enums" -> appendNestedEnum(source, child, realizations, owner);

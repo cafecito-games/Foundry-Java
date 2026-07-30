@@ -45,6 +45,9 @@ class FoundrySourceGeneratorTest {
                     "1",
                     "1");
     private static final String BINDING_VERSION = "0.1.0-SNAPSHOT";
+    private static final Pattern METHOD_DECLARATION =
+            Pattern.compile(
+                    "^ {4}public (?:static )?[\\w.<>\\[\\], ?]+ (\\w+)\\(", Pattern.MULTILINE);
     private static final Pattern MANIFEST_HASH =
             Pattern.compile(
                     "[0-9a-f]{64}(?=\";\\n    public static final String GENERATOR_VERSION)");
@@ -874,6 +877,116 @@ class FoundrySourceGeneratorTest {
                         ApiInputException.class,
                         () -> new FoundrySourceGenerator().generate(api, METADATA, mismatch));
         assertTrue(failure.getMessage().contains("api_sha256"));
+    }
+
+    @Test
+    void generatedPropertyAccessorsNeverOverrideAnInheritedMethod() throws IOException {
+        GeneratedTree generated = generateAcceptedApi();
+        Map<String, String> classSources = generatedClassSources(generated);
+        Map<String, String> parentByClassName = new LinkedHashMap<>();
+        Map<String, Set<String>> declaredMethodNames = new LinkedHashMap<>();
+        Map<String, Set<String>> propertyAccessorNames = new LinkedHashMap<>();
+        classSources.forEach(
+                (className, source) -> {
+                    parentByClassName.put(className, declaredParentClassName(source));
+                    declaredMethodNames.put(className, declaredMethodNames(source));
+                    propertyAccessorNames.put(className, propertyAccessorNames(source));
+                });
+
+        List<String> accidentalOverrides = new java.util.ArrayList<>();
+        int propertyAccessorSlots = 0;
+        for (var entry : propertyAccessorNames.entrySet()) {
+            propertyAccessorSlots += entry.getValue().size();
+            for (String accessor : entry.getValue()) {
+                for (String ancestor = parentByClassName.get(entry.getKey());
+                        ancestor != null && !ancestor.isEmpty();
+                        ancestor = parentByClassName.get(ancestor)) {
+                    if (declaredMethodNames.getOrDefault(ancestor, Set.of()).contains(accessor)) {
+                        accidentalOverrides.add(
+                                entry.getKey() + "." + accessor + "() overrides " + ancestor);
+                    }
+                }
+            }
+        }
+
+        assertEquals(List.of(), accidentalOverrides.stream().sorted().toList());
+        // Indexed properties whose engine accessor is a shared parameterized method must keep
+        // their property-bound accessor: get_param(10) is the only other way to reach them.
+        assertTrue(
+                propertyAccessorNames
+                        .get("DirectionalLight3D")
+                        .contains("getDirectionalShadowSplit1"),
+                "indexed property accessors must keep being generated");
+        assertTrue(
+                propertyAccessorNames
+                        .get("DirectionalLight3D")
+                        .contains("setDirectionalShadowSplit1"),
+                "indexed property accessors must keep being generated");
+        // Engine-private accessors with no exported method must keep being generated.
+        assertTrue(
+                propertyAccessorNames.get("AnimationNode").contains("getFilters"),
+                "engine-private property accessors must keep being generated");
+        assertTrue(
+                propertyAccessorNames.get("AnimationNode").contains("setFilters"),
+                "engine-private property accessors must keep being generated");
+        assertEquals(80, propertyAccessorSlots, "37 indexed plus 43 engine-private accessor slots");
+        assertFalse(
+                declaredMethodNames.get("FontFile").contains("getFontStyle"),
+                "FontFile must not redeclare the inherited Font.getFontStyle()");
+    }
+
+    private static Map<String, String> generatedClassSources(GeneratedTree generated) {
+        Pattern classPath =
+                Pattern.compile("games/cafecito/foundry/generated/classes/(\\w+)\\.java");
+        Map<String, String> sources = new LinkedHashMap<>();
+        generated
+                .sources()
+                .forEach(
+                        (path, source) -> {
+                            var matcher = classPath.matcher(path);
+                            if (matcher.matches()) {
+                                sources.put(matcher.group(1), source);
+                            }
+                        });
+        assertFalse(sources.isEmpty(), "accepted generation must produce class sources");
+        return sources;
+    }
+
+    /** Returns the generated simple superclass name, or empty when the root extends the runtime. */
+    private static String declaredParentClassName(String source) {
+        var matcher =
+                Pattern.compile("(?m)^public class (\\w+) extends (\\S+) \\{$").matcher(source);
+        if (!matcher.find()) {
+            return "";
+        }
+        String parent = matcher.group(2);
+        return parent.contains(".") ? "" : parent;
+    }
+
+    private static Set<String> declaredMethodNames(String source) {
+        Set<String> names = new java.util.LinkedHashSet<>();
+        var matcher = METHOD_DECLARATION.matcher(source);
+        while (matcher.find()) {
+            names.add(matcher.group(1));
+        }
+        return names;
+    }
+
+    /** Returns the names of generated methods whose body dispatches a property identity. */
+    private static Set<String> propertyAccessorNames(String source) {
+        Set<String> names = new java.util.LinkedHashSet<>();
+        String current = null;
+        for (String line : source.split("\n", -1)) {
+            var matcher = METHOD_DECLARATION.matcher(line);
+            if (matcher.lookingAt()) {
+                current = matcher.group(1);
+            } else if (current != null
+                    && line.contains("call(\"")
+                    && line.contains("/properties/")) {
+                names.add(current);
+            }
+        }
+        return names;
     }
 
     @Test

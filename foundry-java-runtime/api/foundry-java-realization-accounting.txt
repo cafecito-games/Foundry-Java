@@ -1,10 +1,10 @@
 foundry-java-realization-summary/1
-realization-map-sha256 e6b91e3c28ff53dc5d48c49407098872fd276c822aa903361dcf102917073723
+realization-map-sha256 07ac58bb348f5bb5ae10110f6520ef52d088534b629672756d046383efbb0a67
 source-entities 57899
-realized-entities 26671
-non-realized-entities 31228
-realized-members 30023
-generated-surface-members 37162
+realized-entities 26635
+non-realized-entities 31264
+realized-members 29978
+generated-surface-members 37117
 structural-surface-members 7139
 category builtin_class_member_offsets 252
 category builtin_class_sizes 164
@@ -18,6 +18,6 @@ category utility_functions 309
 reason ARGUMENT_REALIZED_IN_MEMBER_SIGNATURE 17377
 reason BUILTIN_MEMBER_REALIZED_BY_ENGINE_METHOD 1
 reason LAYOUT_TABLE_ENTRY_REALIZED_BY_QUERY_API 408
-reason PROPERTY_REALIZED_BY_ENGINE_METHOD 4024
+reason PROPERTY_REALIZED_BY_ENGINE_METHOD 4060
 reason RETURN_VALUE_REALIZED_IN_MEMBER_SIGNATURE 9021
 reason SIGNAL_ARGUMENT_REALIZED_IN_SIGNAL_TYPE 397
