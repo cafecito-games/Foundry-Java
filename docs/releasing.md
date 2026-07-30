@@ -148,7 +148,9 @@ rather than a repair.
   `foundry-java-release-upload-record-<tag>` artifact carries its deployment identifier and the re-run
   refuses rather than submitting a second bundle. That artifact is version-scoped and searched for
   across the whole repository, not just the current run, so a fresh tag-push run also refuses instead
-  of re-uploading; delete that artifact only after dropping the deployment.
+  of re-uploading; delete that artifact only after dropping the deployment. An artifact name alone is
+  not trusted: only one produced by this workflow file, triggered by a tag push for the exact tag being
+  released, is ever recovered, so an unrelated workflow run cannot forge a record or a marker.
 - **The runner died between the upload and the record being written.** The upload record is written
   before the irreversible Central call as a pre-upload intent marker (`upload-intent.json`), and the
   completed record (`upload-summary.json`) is written once the upload finishes. The `publish` job

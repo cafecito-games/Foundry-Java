@@ -308,13 +308,32 @@ jobs:
       # again, so it always survives even if the later, completed-record artifact never gets uploaded.
       # `gh api --jq` takes one jq program, not additional jq CLI flags, so the artifact name is
       # embedded directly in the program; it is a git ref name, never attacker-controlled input.
+      #
+      # The artifact name alone is not enough: any workflow in this repository, including one
+      # triggered by a pull request, can upload an artifact under a name it does not own. Trusting
+      # that would let an unrelated run supply a forged completed record (blocking a real release) or
+      # a forged intent marker (silently defeating the durability guarantee, since a caller-recovered
+      # marker is never rewritten). Every candidate is therefore checked against the run that actually
+      # produced it: only this workflow file, triggered by a tag push for this exact tag, is trusted.
       - name: Recover any record of a completed upload
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          find_latest_run_with_artifact() {
+          run_is_trusted() {
+            local run_id="$1"
+            local info path event head_branch
+            info="$(
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
+                --jq '[.path, .event, .head_branch] | @tsv'
+            )"
+            IFS=$'\t' read -r path event head_branch <<< "$info"
+            [[ "$path" == '.github/workflows/release.yml' ]] &&
+              [[ "$event" == 'push' ]] &&
+              [[ "$head_branch" == "$GITHUB_REF_NAME" ]]
+          }
+          find_latest_trusted_run_with_artifact() {
             local name="$1"
             local matches
             matches="$(
@@ -329,15 +348,27 @@ jobs:
             if [[ -z "$matches" ]]; then
               return 1
             fi
-            printf '%s\n' "$matches" | sort -r | awk -F'\t' 'NR == 1 { print $2 }'
+            local created_at run_id
+            while IFS=$'\t' read -r created_at run_id; do
+              if [[ -z "$run_id" ]]; then
+                continue
+              fi
+              if run_is_trusted "$run_id"; then
+                printf '%s\n' "$run_id"
+                return 0
+              fi
+              printf 'Ignoring artifact %s from untrusted run %s: not this workflow on a tag push for this tag.\n' \
+                "$name" "$run_id" >&2
+            done <<< "$(printf '%s\n' "$matches" | sort -r)"
+            return 1
           }
           record_name="foundry-java-release-upload-record-${GITHUB_REF_NAME}"
           intent_name="foundry-java-release-upload-intent-${GITHUB_REF_NAME}"
-          if run_id="$(find_latest_run_with_artifact "$record_name")"; then
+          if run_id="$(find_latest_trusted_run_with_artifact "$record_name")"; then
             gh run download "$run_id" \
               --name "$record_name" \
               --dir "${RUNNER_TEMP}/foundry-java-release/first"
-          elif run_id="$(find_latest_run_with_artifact "$intent_name")"; then
+          elif run_id="$(find_latest_trusted_run_with_artifact "$intent_name")"; then
             gh run download "$run_id" \
               --name "$intent_name" \
               --dir "${RUNNER_TEMP}/foundry-java-release/first"

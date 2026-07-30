@@ -473,6 +473,13 @@ class ReleasePipelineContractTest {
         // gh api --jq takes one jq program, not additional jq CLI flags such as --arg, so the query
         // must not rely on one.
         assertFalse(workflow.contains("--jq --arg"));
+        // The artifact name alone is not proof of origin: any workflow in the repository could
+        // upload an artifact under the same name. A recovered artifact is trusted only if the run
+        // that produced it is this workflow file, triggered by a tag push for this exact tag.
+        assertTrue(workflow.contains("run_is_trusted"));
+        assertTrue(workflow.contains("\"$path\" == '.github/workflows/release.yml'"));
+        assertTrue(workflow.contains("\"$event\" == 'push'"));
+        assertTrue(workflow.contains("\"$head_branch\" == \"$GITHUB_REF_NAME\""));
         // A hard runner loss leaves no later step able to run, so the intent marker is durably
         // persisted, as its own artifact upload, strictly before the irreversible Central call is
         // even attempted — not only after the publish step finishes or fails.
