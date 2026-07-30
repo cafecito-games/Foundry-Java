@@ -30,8 +30,7 @@ class EngineLoadedConformanceGateContractTest {
             "6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f";
     private static final String RUNTIME_MARKER = "FOUNDRY_JAVA_ENGINE_LOADED_ACCEPTANCE_READY";
     private static final String LOAD_FAILED_TOKEN = "FOUNDRY_JAVA_PLATFORM_EXTENSION_LOAD_FAILED";
-    private static final List<String> ABIS =
-            List.of("arm64-v8a", "armeabi-v7a", "x86", "x86_64");
+    private static final List<String> ABIS = List.of("arm64-v8a", "armeabi-v7a", "x86", "x86_64");
     private static final List<String> SCENARIOS =
             List.of("default-debug", "custom-debug", "default-release", "custom-release");
 
@@ -95,8 +94,7 @@ class EngineLoadedConformanceGateContractTest {
     }
 
     @Test
-    void theExportedPayloadInspectorCoversEveryAbiAndTheForbiddenHostLibrary()
-            throws IOException {
+    void theExportedPayloadInspectorCoversEveryAbiAndTheForbiddenHostLibrary() throws IOException {
         String inspector = read("gradle/verify-exported-abi-payloads.sh");
         String symbols = read("gradle/foundry-java-bridge-symbols.txt");
         String bridgeVerifier = read("gradle/verify-native-bridge.sh");
@@ -150,7 +148,8 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(gate.contains("games.cafecito.foundry.game"), "the default application ID");
         assertTrue(gate.contains("dev.example.foundryjava"), "a custom application ID");
         assertTrue(gate.contains("--mode"), "the export mode must be explicit");
-        assertTrue(gate.contains("\"$mode\" == \"release\""), "a minified release must be exported");
+        assertTrue(
+                gate.contains("\"$mode\" == \"release\""), "a minified release must be exported");
         assertTrue(gate.contains("mapping.txt"), "minified releases must be checked");
         // Artifacts under test are always built here, never resolved from a published release of
         // this repository.

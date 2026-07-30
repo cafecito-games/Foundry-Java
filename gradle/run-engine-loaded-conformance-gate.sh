@@ -120,8 +120,10 @@ for artifact in "$plugin_jar" "$binding_aar" "$runtime_jar" "$annotations_jar"; 
   fi
 done
 
-# The generated and consumer keep rules must name exact classes. A wildcard class pattern or a
-# disabled optimization would keep everything and hide a real minification failure.
+# Minification keep rules must stay narrow. A rule may name one exact class, or it may match a
+# wildcard only when the same rule also constrains the match by supertype; anything broader keeps
+# most of the application and would hide a real minification failure. Disabling shrinking,
+# obfuscation, or optimization outright is never acceptable.
 assert_narrow_keep_rules() {
   local archive="$1"
   local entry="$2"
@@ -131,17 +133,38 @@ assert_narrow_keep_rules() {
     printf 'Keep rules %s are missing from %s.\n' "$entry" "$archive" >&2
     exit 1
   fi
-  if grep -Eq '^-(dontobfuscate|dontshrink|dontoptimize)\b' "$rules"; then
+  if grep -Eq '^-(dontobfuscate|dontshrink|dontoptimize)([[:space:]]|$)' "$rules"; then
     printf 'Keep rules %s must not disable minification wholesale.\n' "$entry" >&2
     exit 1
   fi
-  if grep -Eo '^-keep[a-z]*[[:space:]]+(class|interface|enum)[[:space:]]+[^[:space:]{]+' "$rules" |
-    awk '{ print $NF }' | grep -q '[*?]'; then
-    printf 'Keep rules %s must name exact classes, never a wildcard pattern.\n' "$entry" >&2
+  if ! awk '
+      /^-keep/ {
+        specification = ""
+        count = split($0, tokens, /[[:space:]]+/)
+        for (index_of_token = 1; index_of_token < count; index_of_token++) {
+          if (tokens[index_of_token] == "class" ||
+              tokens[index_of_token] == "interface" ||
+              tokens[index_of_token] == "enum") {
+            specification = tokens[index_of_token + 1]
+            break
+          }
+        }
+        if (specification ~ /[*?]/ && $0 !~ / implements / && $0 !~ / extends /) {
+          printf "%s\n", $0 > "/dev/stderr"
+          broad = 1
+        }
+      }
+      END { exit broad }
+    ' "$rules"; then
+    printf 'Keep rules %s contain an unconstrained wildcard class pattern.\n' "$entry" >&2
     exit 1
   fi
 }
 
+# Builds one variant of the acceptance module and leaves its path in acceptance_module_jar. The
+# result is returned through a variable rather than standard output so the build log can stream and
+# so the harness never runs a leg inside a command substitution subshell.
+acceptance_module_jar=""
 build_acceptance_module() {
   local variant="$1"
   local disabled="false"
@@ -152,13 +175,12 @@ build_acceptance_module() {
     "-PfoundryVersion=${acceptance_version}" \
     "-PfoundryJavaRegistrationDisabled=${disabled}" \
     clean :extension:jar \
-    2>&1 | tee "${artifact_root}/acceptance-module-${variant}.log" >&2
-  local module_jar="${repo_root}/acceptance/extension/build/libs/extension-${acceptance_version}.jar"
-  if [[ ! -f "$module_jar" ]]; then
-    printf 'The acceptance module JAR does not exist: %s\n' "$module_jar" >&2
+    2>&1 | tee "${artifact_root}/acceptance-module-${variant}.log"
+  acceptance_module_jar="${repo_root}/acceptance/extension/build/libs/extension-${acceptance_version}.jar"
+  if [[ ! -f "$acceptance_module_jar" ]]; then
+    printf 'The acceptance module JAR does not exist: %s\n' "$acceptance_module_jar" >&2
     exit 1
   fi
-  printf '%s\n' "$module_jar"
 }
 
 keystore="${artifact_root}/foundry-java-engine-gate.jks"
@@ -225,6 +247,8 @@ write_acceptance_project() {
   } >"$project/export_presets.cfg"
 }
 
+# Exports one scenario and leaves the exported application path in exported_apk.
+exported_apk=""
 export_scenario() {
   local scenario="$1"
   local application_id="$2"
@@ -239,15 +263,16 @@ export_scenario() {
   mkdir -p "$scenario_root" "$scenario_work"
   write_acceptance_project "$project" "$application_id" "$module_jar" "${requested_abis[@]}"
   cp "$project/export_presets.cfg" "${scenario_root}/export_presets.cfg"
-  (
-    cd "$project"
-    "$editor" --headless project export \
-      --project "$project" \
-      --preset Android \
-      --output "$apk" \
-      --mode "$mode" \
-      --install-android-build-template
-  ) 2>&1 | tee "${scenario_root}/export.log" >&2
+  local previous_directory="$PWD"
+  cd "$project"
+  "$editor" --headless project export \
+    --project "$project" \
+    --preset Android \
+    --output "$apk" \
+    --mode "$mode" \
+    --install-android-build-template \
+    2>&1 | tee "${scenario_root}/export.log"
+  cd "$previous_directory"
   if [[ ! -f "$apk" ]]; then
     printf 'Scenario %s did not produce an exported application.\n' "$scenario" >&2
     exit 1
@@ -263,14 +288,14 @@ export_scenario() {
     )
   fi
   bash gradle/verify-exported-abi-payloads.sh "${inspection[@]}" \
-    2>&1 | tee "${scenario_root}/payload-inspection.log" >&2
+    2>&1 | tee "${scenario_root}/payload-inspection.log"
   "$apkanalyzer" manifest application-id "$apk" >"${scenario_root}/application-id.txt"
   if [[ "$(tr -d '\r\n' <"${scenario_root}/application-id.txt")" != "$application_id" ]]; then
     printf 'Scenario %s exported the wrong application ID.\n' "$scenario" >&2
     exit 1
   fi
   "$apkanalyzer" manifest print "$apk" >"${scenario_root}/manifest.txt"
-  printf '%s\n' "$apk"
+  exported_apk="$apk"
 }
 
 run_device_acceptance() {
@@ -299,11 +324,10 @@ run_device_acceptance() {
 # here means the gate is asserting packaging instead of engine-loaded behaviour.
 self_test_root="${artifact_root}/self-test"
 mkdir -p "$self_test_root"
-unregistered_module="$(build_acceptance_module unregistered)"
-self_test_apk="$(
-  export_scenario self-test-default-debug "$default_application_id" debug \
-    "$unregistered_module" x86_64
-)"
+build_acceptance_module unregistered
+export_scenario self-test-default-debug "$default_application_id" debug \
+  "$acceptance_module_jar" x86_64
+self_test_apk="$exported_apk"
 set +e
 run_device_acceptance "${self_test_root}/device-evidence" 45 \
   "${default_application_id}=${self_test_apk}" \
@@ -315,7 +339,7 @@ if [[ "$self_test_status" -eq 0 ]]; then
   printf 'The gate self-test unexpectedly passed against a binding whose registration is disabled.\n' >&2
   exit 1
 fi
-if ! grep -Fq "$runtime_marker" "${self_test_root}/device.log"; then
+if ! grep -Fq "did not log required runtime marker" "${self_test_root}/device.log"; then
   printf 'The gate self-test failed for a reason unrelated to the missing runtime marker.\n' >&2
   cat "${self_test_root}/device.log" >&2
   exit 1
@@ -325,26 +349,23 @@ if grep -Fq "$runtime_marker" "${self_test_root}/logcat.txt"; then
   exit 1
 fi
 
-registered_module="$(build_acceptance_module registered)"
+build_acceptance_module registered
+registered_module="$acceptance_module_jar"
 assert_narrow_keep_rules "$registered_module" 'META-INF/proguard/foundry-java-acceptance.pro'
 assert_narrow_keep_rules "$binding_aar" 'proguard.txt'
 
 # Four combinations: debug and minified release, each with the default and a custom application ID.
 # The first also requests every supported ABI so all four exported bridge payloads are statically
 # inspected, while the device leg executes on the emulator's x86_64 ABI.
-default_debug_apk="$(
-  export_scenario default-debug "$default_application_id" debug "$registered_module" \
-    arm64-v8a armeabi-v7a x86 x86_64
-)"
-custom_debug_apk="$(
-  export_scenario custom-debug "$custom_application_id" debug "$registered_module" x86_64
-)"
-default_release_apk="$(
-  export_scenario default-release "$default_application_id" release "$registered_module" x86_64
-)"
-custom_release_apk="$(
-  export_scenario custom-release "$custom_application_id" release "$registered_module" x86_64
-)"
+export_scenario default-debug "$default_application_id" debug "$registered_module" \
+  arm64-v8a armeabi-v7a x86 x86_64
+default_debug_apk="$exported_apk"
+export_scenario custom-debug "$custom_application_id" debug "$registered_module" x86_64
+custom_debug_apk="$exported_apk"
+export_scenario default-release "$default_application_id" release "$registered_module" x86_64
+default_release_apk="$exported_apk"
+export_scenario custom-release "$custom_application_id" release "$registered_module" x86_64
+custom_release_apk="$exported_apk"
 
 set +e
 run_device_acceptance "${artifact_root}/device-evidence" 120 \
