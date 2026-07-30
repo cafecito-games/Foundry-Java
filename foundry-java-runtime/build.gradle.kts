@@ -72,6 +72,12 @@ tasks.named("javadoc") {
     dependsOn(generateFoundryApi)
 }
 
+// The published sources archive carries the generated API, so it is produced from the same generated
+// sources the compiler and Javadoc consume.
+tasks.named("sourcesJar") {
+    dependsOn(generateFoundryApi)
+}
+
 val runtimeApiBaseline =
     layout.projectDirectory.file("api/foundry-java-runtime.api")
 val runtimeApiVerifier =

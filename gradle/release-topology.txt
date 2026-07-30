@@ -1,0 +1,21 @@
+# The exact published topology, as groupId:artifactId:packaging:gradle-module-variants. Ten
+# coordinates: nine modules and the Gradle plugin marker, which is published as a POM only.
+#
+# Every module publishes sources and Javadoc archives in the Maven layout.
+# foundry-java-android publishes its Javadoc as a Maven artifact rather than a Gradle variant,
+# because the Android library plugin's own Javadoc generation cannot read Java records in a
+# dependency, so its Gradle module metadata declares sourcesElements only.
+#
+# gradle/verify-staged-release.sh accepts a staged repository only when it contains exactly these
+# coordinates, and src/test/java/games/cafecito/foundry/build/ReleasePipelineContractTest.java
+# requires every line to agree with the publication topology in build.gradle.kts.
+games.cafecito.foundry:foundry-java-android:aar:sourcesElements
+games.cafecito.foundry:foundry-java-annotations:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-api-model:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-generator:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-gradle-plugin:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-kotlin:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-processor:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-runtime:jar:sourcesElements+javadocElements
+games.cafecito.foundry:foundry-java-test:jar:sourcesElements+javadocElements
+games.cafecito.foundry.java:games.cafecito.foundry.java.gradle.plugin:pom:none
