@@ -282,6 +282,11 @@ jobs:
     # The Central Portal token is an encrypted secret scoped to this environment alone, so staging and
     # the gates can never read it, and it is only ever handed to curl on standard input.
     environment: maven-central
+    permissions:
+      contents: read
+      # Listing and downloading this run's own artifacts is how a re-run learns that an upload already
+      # happened.
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
@@ -291,13 +296,29 @@ jobs:
       # A Central Portal deployment stays USER_MANAGED until a human publishes it, so it is invisible
       # to the public coordinate probe. The record of a completed upload therefore has to survive the
       # runner: it is recovered here so a re-run of this job refuses instead of submitting the bundle
-      # again. It is absent on a first run, which is the only reason this step may fail.
+      # again. Absence is established by listing the run's artifacts, so a failing artifact service
+      # stops the release instead of being read as "no upload has happened yet".
       - name: Recover any record of a completed upload
-        continue-on-error: true
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: foundry-java-release-upload-record
-          path: ${{ runner.temp }}/foundry-java-release/first
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          recorded="$(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+              --jq '.artifacts[]
+                | select(.name == "foundry-java-release-upload-record")
+                | select(.expired == false)
+                | .name'
+          )"
+          if [[ -z "$recorded" ]]; then
+            printf 'No upload record exists for this run yet.\n'
+            exit 0
+          fi
+          gh run download "${GITHUB_RUN_ID}" \
+            --name foundry-java-release-upload-record \
+            --dir "${RUNNER_TEMP}/foundry-java-release/first"
       - name: Publish the verified staged release
         shell: bash
         env:

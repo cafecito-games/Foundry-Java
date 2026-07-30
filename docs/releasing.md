@@ -111,9 +111,11 @@ no target other than `staging` and never contacts Maven Central. It exercises th
 so the declared version has to be tagged locally first:
 
 ```sh
-git tag -f "v$(sed -n 's/^foundryVersion=//p' gradle.properties)"
 bash gradle/run-release-staging-dry-run.sh
 ```
+
+It exercises the real preconditions, so it creates the release tag at `HEAD` itself and deletes it
+again; it never pushes one. A tag that already exists somewhere else is reported rather than moved.
 
 A release requires its commit to be contained in `origin/main`. To dry-run from a branch that is not
 merged yet, point the containment check at that branch with

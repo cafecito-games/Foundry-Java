@@ -77,6 +77,28 @@ FOUNDRY_RELEASE_SIGNING_FINGERPRINT="$(
 )"
 export FOUNDRY_RELEASE_SIGNING_FINGERPRINT
 
+# The dry run exercises the real preconditions, which require the tag to exist at HEAD. A dry run is
+# not a release, so it supplies that tag itself — locally, never pushed, and removed again — rather
+# than asking a human to leave a stray tag behind. A tag that already exists elsewhere is a mistake
+# only a human can resolve, so it is reported instead of moved.
+created_tag=''
+if existing_tag_commit="$(git -C "$repo_root" rev-parse -q --verify "refs/tags/${tag}^{commit}")"; then
+  if [[ "$existing_tag_commit" != "$(git -C "$repo_root" rev-parse 'HEAD^{commit}')" ]]; then
+    printf 'The tag %s already exists at %s, not at HEAD. Resolve that before dry running.\n' \
+      "$tag" "$existing_tag_commit" >&2
+    exit 1
+  fi
+else
+  git -C "$repo_root" tag "$tag"
+  created_tag="$tag"
+fi
+remove_created_tag() {
+  if [[ -n "$created_tag" ]]; then
+    git -C "$repo_root" tag --delete "$created_tag" > /dev/null
+  fi
+}
+trap remove_created_tag EXIT
+
 bash "${repo_root}/gradle/verify-release-reproducibility.sh" "$tag" "${work}/reproducibility"
 staged="${work}/reproducibility/first"
 

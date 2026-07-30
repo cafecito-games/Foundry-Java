@@ -410,6 +410,9 @@ class ReleasePipelineContractTest {
         assertTrue(upload.contains("central"));
         assertTrue(upload.contains("staging"));
         assertTrue(upload.contains("repo1.maven.org"), "the Central release repository is queried");
+        // Only a 404 proves a coordinate is free; an inconclusive answer stops the release.
+        assertTrue(upload.contains("404) ;;"));
+        assertTrue(upload.contains("is published is unknown"));
         assertTrue(upload.contains("central.sonatype.com"));
         assertTrue(upload.contains("FOUNDRY_CENTRAL_PORTAL_TOKEN"));
         assertTrue(
@@ -425,6 +428,9 @@ class ReleasePipelineContractTest {
         // original staged release, see no record, and submit the bundle a second time.
         String workflow = read(WORKFLOW);
         assertTrue(workflow.contains("name: foundry-java-release-upload-record"));
+        // Recovery must fail closed: only an empty artifact listing may be read as "not uploaded".
+        assertFalse(workflow.contains("continue-on-error"));
+        assertTrue(workflow.contains("actions/runs/${GITHUB_RUN_ID}/artifacts"));
         int recover = workflow.indexOf("- name: Recover any record of a completed upload");
         int publish = workflow.indexOf("- name: Publish the verified staged release");
         int record = workflow.indexOf("- name: Record the completed upload so a re-run cannot");

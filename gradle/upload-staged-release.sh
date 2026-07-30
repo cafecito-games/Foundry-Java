@@ -100,9 +100,18 @@ while IFS= read -r coordinate; do
         curl --silent --show-error --location --head --output /dev/null \
           --write-out '%{http_code}' "${central_release_repository}/${probe}"
       )"
-      if [[ "$status" == "200" ]]; then
-        already_published="${already_published}${coordinate}"$'\n'
-      fi
+      # Only 404 proves a coordinate is free. Anything else — a throttling or server response — leaves
+      # the question unanswered, and an unanswered question must stop the release rather than be read
+      # as permission to upload.
+      case "$status" in
+        200) already_published="${already_published}${coordinate}"$'\n' ;;
+        404) ;;
+        *)
+          printf 'Upload refused: %s answered HTTP %s, so whether %s is published is unknown.\n' \
+            "$central_release_repository" "$status" "$coordinate" >&2
+          exit 1
+          ;;
+      esac
       ;;
   esac
 done <<< "$coordinate_paths"
