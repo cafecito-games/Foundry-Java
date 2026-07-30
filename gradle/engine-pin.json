@@ -3,7 +3,7 @@
   "release_tag": "v0.1.0-alpha.14",
   "release_url": "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.14",
   "download_url_prefix": "https://github.com/cafecito-games/Foundry/releases/download/v0.1.0-alpha.14",
-  "raw_url_prefix": "https://raw.githubusercontent.com/cafecito-games/Foundry/b9a5e66c21f8f7b707a9e526ca20557485c53227",
+  "source_repository": "https://github.com/cafecito-games/Foundry.git",
   "producer_commit": "b9a5e66c21f8f7b707a9e526ca20557485c53227",
   "api_version": "0.1.0-alpha.14",
   "assets": {
@@ -24,7 +24,9 @@
     }
   },
   "device_acceptance": {
+    "sparse_directory": "platform/android",
     "path": "platform/android/android_device_acceptance.py",
+    "size": 61042,
     "sha256": "7a0da109d91a6bd02d6018207a225528b92b6c72a823303d2fbaeac756c7ba7c"
   }
 }

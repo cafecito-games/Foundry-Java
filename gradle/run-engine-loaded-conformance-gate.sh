@@ -17,6 +17,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 acceptance_version="0.1.0"
 runtime_marker="FOUNDRY_JAVA_ENGINE_LOADED_ACCEPTANCE_READY"
+failure_marker="FOUNDRY_JAVA_ENGINE_LOADED_ACCEPTANCE_FAILED"
 load_failed_token="FOUNDRY_JAVA_PLATFORM_EXTENSION_LOAD_FAILED"
 default_application_id="games.cafecito.foundry.game"
 custom_application_id="dev.example.foundryjava"
@@ -339,13 +340,27 @@ if [[ "$self_test_status" -eq 0 ]]; then
   printf 'The gate self-test unexpectedly passed against a binding whose registration is disabled.\n' >&2
   exit 1
 fi
-if ! grep -Fq "did not log required runtime marker" "${self_test_root}/device.log"; then
+# The self-test must fail for the one reason it exists to demonstrate. Upstream reports a live
+# process that never emitted the marker as a marker wait that timed out, and a process that emitted
+# nothing at all as a marker the package did not log; anything else -- a forbidden runtime failure, a
+# failed install, an unstable process -- means the run proved something other than a disabled
+# registration and is not accepted as the negative proof.
+if ! grep -Eq \
+  "(did not log required runtime marker|waiting for required runtime marker .* timed out)" \
+  "${self_test_root}/device.log"; then
   printf 'The gate self-test failed for a reason unrelated to the missing runtime marker.\n' >&2
   cat "${self_test_root}/device.log" >&2
   exit 1
 fi
 if grep -Fq "$runtime_marker" "${self_test_root}/logcat.txt"; then
   printf 'A binding whose registration is disabled produced the runtime marker.\n' >&2
+  exit 1
+fi
+# The engine still had to load the binding and run the acceptance script for the class lookup to be
+# the thing that failed. Without this the self-test would also accept a binding the engine never
+# loaded, which is a weaker proof than the gate claims to make.
+if ! grep -Fq "${failure_marker} class_missing" "${self_test_root}/logcat.txt"; then
+  printf 'The gate self-test did not observe the acceptance script rejecting the missing class.\n' >&2
   exit 1
 fi
 

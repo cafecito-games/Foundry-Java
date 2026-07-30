@@ -12,7 +12,7 @@ pin="${repo_root}/gradle/engine-pin.json"
 cache_root="${FOUNDRY_ENGINE_CACHE:-${HOME}/.cache/foundry-engine}"
 output_root="${1:?usage: fetch-pinned-engine.sh OUTPUT_DIRECTORY}"
 
-for tool in jq curl unzip shasum; do
+for tool in git jq curl unzip shasum; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     printf 'Required tool is unavailable: %s\n' "$tool" >&2
     exit 1
@@ -22,7 +22,7 @@ done
 release_tag="$(jq -r '.release_tag' "$pin")"
 producer_commit="$(jq -r '.producer_commit' "$pin")"
 download_prefix="$(jq -r '.download_url_prefix' "$pin")"
-raw_prefix="$(jq -r '.raw_url_prefix' "$pin")"
+source_repository="$(jq -r '.source_repository' "$pin")"
 
 # The pinned release must be the release the vendored API identity was generated from. Asserting it
 # here means a pin bump that forgets to re-vendor the API cannot reach the export.
@@ -100,19 +100,38 @@ editor_archive="$(resolve_asset editor)"
 templates_archive="$(resolve_asset export_templates)"
 api_archive="$(resolve_asset api)"
 
-# The deep device assertions are upstream property. The harness fetches the pinned revision of the
-# upstream tool and verifies it; it never forks or vendors it.
+# The deep device assertions are upstream property, and the upstream tool is not one file: its
+# verify-apks path loads its sibling host-contract module and derives the expected dex members from
+# the engine's own native sources. So the harness materializes the pinned upstream directory at the
+# pinned commit through a blobless sparse checkout, which keeps the tool at its real repository path
+# with every companion file it reads. It is never forked or vendored, and the commit is the integrity
+# anchor: git object names are content addresses, and the checked-out revision is asserted to be the
+# pinned commit before the digest of the tool itself is checked.
 acceptance_path="$(jq -r '.device_acceptance.path' "$pin")"
 acceptance_digest="$(jq -r '.device_acceptance.sha256' "$pin")"
-acceptance_tool="${cache_directory}/${acceptance_digest}-android_device_acceptance.py"
+acceptance_size="$(jq -r '.device_acceptance.size' "$pin")"
+sparse_directory="$(jq -r '.device_acceptance.sparse_directory' "$pin")"
+engine_checkout="${cache_directory}/${producer_commit}-upstream"
+acceptance_tool="${engine_checkout}/${acceptance_path}"
 if [[ ! -f "$acceptance_tool" ]]; then
-  curl --fail --location --silent --show-error --retry 3 --retry-delay 5 \
-    --output "${acceptance_tool}.partial" "${raw_prefix}/${acceptance_path}"
-  mv "${acceptance_tool}.partial" "$acceptance_tool"
+  rm -rf "$engine_checkout"
+  mkdir -p "$engine_checkout"
+  git -C "$engine_checkout" init --quiet
+  git -C "$engine_checkout" remote add origin "$source_repository"
+  git -C "$engine_checkout" sparse-checkout init --cone
+  git -C "$engine_checkout" sparse-checkout set "$sparse_directory"
+  git -C "$engine_checkout" fetch --quiet --depth 1 --filter=blob:none origin "$producer_commit"
+  git -C "$engine_checkout" checkout --quiet FETCH_HEAD
 fi
-acceptance_size="$(wc -c <"$acceptance_tool" | tr -d ' ')"
+checked_out_commit="$(git -C "$engine_checkout" rev-parse HEAD)"
+if [[ "$checked_out_commit" != "$producer_commit" ]]; then
+  rm -rf "$engine_checkout"
+  printf 'Upstream checkout is at %s, expected the pinned commit %s.\n' \
+    "$checked_out_commit" "$producer_commit" >&2
+  exit 1
+fi
 if ! verify_digest "$acceptance_tool" "$acceptance_digest" "$acceptance_size"; then
-  rm -f "$acceptance_tool"
+  rm -rf "$engine_checkout"
   exit 1
 fi
 

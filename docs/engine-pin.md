@@ -20,10 +20,15 @@ was cut before #1338 merged.
 | `Foundry_v0.1.0-alpha.14_export_templates.tpz` | 1,147,349,658 | `6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f` |
 | `Foundry_v0.1.0-alpha.14_api.zip` | 1,216,523 | `b6f44138e71e2b7c0a863457a26734fb2af812f080845fbc1d8a2fca3d2c1c44` |
 
-The pin also records the pinned revision and digest of the upstream device acceptance tool,
+The pin also records the pinned path, size, and digest of the upstream device acceptance tool,
 `platform/android/android_device_acceptance.py`. Foundry-Java owns a thin harness only: the deep
-device assertions are upstream property, fetched at the pinned revision and verified, never forked
-or vendored.
+device assertions are upstream property, never forked or vendored. That tool is not one file — its
+`verify-apks` path loads its sibling host-contract module and derives the Java members the native
+host resolves through JNI from the engine's own native sources — so the harness materializes the
+pinned `platform/android` directory at the pinned commit through a blobless sparse checkout, which
+keeps the tool at its real repository path with every companion file it reads. The commit is the
+integrity anchor, because git object names are content addresses; the checked-out revision is still
+asserted to be the pinned commit, and the tool's own size and digest are still verified.
 
 [`gradle/fetch-pinned-engine.sh`](../gradle/fetch-pinned-engine.sh) resolves the pin. It first
 requires the pinned release, producer commit, and API archive digest to equal the vendored API
@@ -80,9 +85,9 @@ failure alike.
    and the vendored identity disagree.
 2. Read the new release's published asset digests with
    `gh release view <tag> --repo cafecito-games/Foundry --json assets`, and update `release_tag`,
-   `release_url`, `download_url_prefix`, `raw_url_prefix`, `producer_commit`, `api_version`, and
-   every asset `name`, `size`, and `sha256` in `gradle/engine-pin.json`.
-3. Update `device_acceptance.sha256` to the SHA-256 of
+   `release_url`, `download_url_prefix`, `producer_commit`, `api_version`, and every asset `name`,
+   `size`, and `sha256` in `gradle/engine-pin.json`.
+3. Update `device_acceptance.size` and `device_acceptance.sha256` to the size and SHA-256 of
    `platform/android/android_device_acceptance.py` at the new producer commit.
 4. Update the cache key in `.github/workflows/ci.yml`, this page, and the constants in
    `src/test/java/games/cafecito/foundry/build/EngineLoadedConformanceGateContractTest.java`. The

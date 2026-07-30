@@ -50,8 +50,10 @@ class EngineLoadedConformanceGateContractTest {
                 pin.contains(jsonString(provenance, "archive_sha256")),
                 "the pin must record the vendored API archive digest");
         assertTrue(pin.contains(TEMPLATE_DIGEST), "the export template digest must be pinned");
-        assertTrue(pin.contains("\"raw_url_prefix\": \"https://raw.githubusercontent.com/"));
+        assertTrue(
+                pin.contains("\"source_repository\": \"https://github.com/cafecito-games/Foundry"));
         assertTrue(pin.contains(PRODUCER_COMMIT + "\""));
+        assertTrue(pin.contains("\"sparse_directory\": \"platform/android\""));
         for (String asset : List.of("editor", "export_templates", "api")) {
             assertTrue(pin.contains("\"" + asset + "\": {"), asset + " must be pinned");
         }
@@ -86,7 +88,16 @@ class EngineLoadedConformanceGateContractTest {
                 fetcher.contains("expected_size"),
                 "a pinned size must be checked alongside the digest");
         assertTrue(fetcher.contains("android_source.zip"));
-        assertTrue(fetcher.contains("android_device_acceptance.py"));
+        // The upstream device tool is not one file: its verify-apks path loads a sibling module and
+        // reads the engine's own native sources, so the whole pinned upstream directory has to be
+        // materialized at its real repository paths.
+        assertTrue(read("gradle/engine-pin.json").contains("android_device_acceptance.py"));
+        assertTrue(fetcher.contains("${engine_checkout}/${acceptance_path}"));
+        assertTrue(fetcher.contains("sparse-checkout"));
+        assertTrue(fetcher.contains("$sparse_directory"));
+        assertTrue(
+                fetcher.contains("rev-parse HEAD"),
+                "the checked-out revision must be asserted to be the pinned commit");
         assertFalse(
                 fetcher.contains("--insecure") || fetcher.contains("-k "),
                 "downloads must not weaken transport verification");
@@ -185,6 +196,13 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(
                 gate.contains("unexpectedly passed"),
                 "a passing self-test run must be reported as a gate failure");
+        // Upstream reports a live process that never emitted the marker as a timed-out marker wait,
+        // so accepting only the other diagnostic would reject the negative proof it exists to make.
+        assertTrue(gate.contains("did not log required runtime marker"));
+        assertTrue(gate.contains("waiting for required runtime marker .* timed out"));
+        assertTrue(
+                gate.contains("${failure_marker} class_missing"),
+                "the self-test must observe the engine-loaded script rejecting the missing class");
         assertTrue(acceptanceBuild.contains("foundryJavaRegistrationDisabled"));
         assertTrue(acceptanceBuild.contains("src/registered/java"));
         assertTrue(acceptanceBuild.contains("src/unregistered/java"));
