@@ -938,9 +938,7 @@ final class ExtensionValidator {
      */
     private String baseFoundryName(TypeMirror base) {
         Element baseElement = types.asElement(base);
-        return baseElement == null
-                ? base.toString()
-                : baseElement.getSimpleName().toString();
+        return baseElement == null ? base.toString() : baseElement.getSimpleName().toString();
     }
 
     private Optional<String> baseVirtualIdentity(TypeMirror base, ExecutableElement override) {

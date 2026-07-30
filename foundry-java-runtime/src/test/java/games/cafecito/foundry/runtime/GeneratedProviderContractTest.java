@@ -122,8 +122,8 @@ class GeneratedProviderContractTest {
 
     /**
      * The engine resolves a parent class through {@code ClassDB}, whose names are never qualified.
-     * A descriptor carrying the Java binding type's qualified name registers nothing, so the runtime
-     * refuses it at descriptor construction instead of letting the engine reject the class.
+     * A descriptor carrying the Java binding type's qualified name registers nothing, so the
+     * runtime refuses it at descriptor construction instead of letting the engine reject the class.
      */
     @Test
     void classDescriptorRejectsAQualifiedJavaNameAsTheEngineParent() {
@@ -141,8 +141,7 @@ class GeneratedProviderContractTest {
                                         List.of()));
 
         assertTrue(
-                failure.getMessage()
-                        .contains("games.cafecito.foundry.generated.classes.Node"),
+                failure.getMessage().contains("games.cafecito.foundry.generated.classes.Node"),
                 failure::getMessage);
         assertTrue(failure.getMessage().contains("engine class name"), failure::getMessage);
     }

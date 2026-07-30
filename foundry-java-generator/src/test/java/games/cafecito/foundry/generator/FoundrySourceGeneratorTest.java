@@ -499,7 +499,8 @@ class FoundrySourceGeneratorTest {
                 engineClassNames.stream()
                         .filter(
                                 name ->
-                                        !generated.sources()
+                                        !generated
+                                                .sources()
                                                 .containsKey(
                                                         "games/cafecito/foundry/generated/classes/"
                                                                 + name

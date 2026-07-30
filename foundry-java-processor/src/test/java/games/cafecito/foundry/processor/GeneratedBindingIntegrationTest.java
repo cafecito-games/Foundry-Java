@@ -49,10 +49,10 @@ class GeneratedBindingIntegrationTest {
     }
 
     /**
-     * The engine resolves an extension class parent through {@code ClassDB}, which only knows engine
-     * class names. Registering the Java binding type name instead makes the engine reject the class
-     * outright, so this pins the exact string the engine requires against the real generated {@code
-     * Node} contract rather than against a hand-written stand-in.
+     * The engine resolves an extension class parent through {@code ClassDB}, which only knows
+     * engine class names. Registering the Java binding type name instead makes the engine reject
+     * the class outright, so this pins the exact string the engine requires against the real
+     * generated {@code Node} contract rather than against a hand-written stand-in.
      */
     @Test
     void registersTheEngineClassNameOfTheGeneratedBaseAsTheParent() throws Exception {
@@ -67,7 +67,8 @@ class GeneratedBindingIntegrationTest {
         URL classes = result.outputDirectory().resolve("classes").toUri().toURL();
         try (URLClassLoader loader =
                 new URLClassLoader(
-                        new URL[] {classes}, GeneratedBindingIntegrationTest.class.getClassLoader())) {
+                        new URL[] {classes},
+                        GeneratedBindingIntegrationTest.class.getClassLoader())) {
             Class<?> registry = loader.loadClass(ModuleEmitter.registryQualifiedName(MODULE));
             FoundryModuleProvider provider =
                     (FoundryModuleProvider) registry.getField("PROVIDER").get(null);

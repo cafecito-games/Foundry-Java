@@ -26,9 +26,10 @@ public record FoundryClassDescriptor(
     }
 
     /**
-     * The engine resolves an extension class parent through its own class database, which is keyed by
-     * unqualified engine class names. A qualified Java binding type name can never resolve there, so
-     * it is rejected here rather than at engine registration, where the class is silently dropped.
+     * The engine resolves an extension class parent through its own class database, which is keyed
+     * by unqualified engine class names. A qualified Java binding type name can never resolve
+     * there, so it is rejected here rather than at engine registration, where the class is silently
+     * dropped.
      */
     private static String requireEngineClassName(String baseName) {
         if (baseName.indexOf('.') >= 0) {
