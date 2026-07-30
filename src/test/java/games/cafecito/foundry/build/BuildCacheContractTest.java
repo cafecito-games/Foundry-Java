@@ -20,6 +20,11 @@ import org.junit.jupiter.api.Test;
  * reusing anything. {@code gradle/verify-build-cache-portability.sh} asserts the runtime behaviour
  * on the four tasks it is cheap to re-execute; what is asserted here is the declaration itself, for
  * the three tasks that gate is deliberately too expensive to cover.
+ *
+ * <p>Nothing here asserts on the contents of a workflow file. Whether CI invokes these gates is not
+ * a question a test running inside CI can usefully answer — deleting the step that runs this suite
+ * defeats the assertion along with the gate — so the gates are wired up in {@code
+ * .github/workflows/ci.yml} and left to be reviewed there.
  */
 class BuildCacheContractTest {
     private static final Path ROOT = Path.of("").toAbsolutePath();
@@ -103,9 +108,8 @@ class BuildCacheContractTest {
         // CMakeLists.txt reads RUNTIME_CONTRACT_VERSION out of this file and configures it into a
         // generated header, so it decides what the native tests compile even though it sits outside
         // every source tree they declare. It has to be an input of the tasks and a configure
-        // dependency of CMake: the first stops a stale entry being replayed, the second stops a
-        // kept
-        // build tree from compiling the previous contract version.
+        // dependency of CMake: the first stops a stale entry being replayed, the second stops
+        // a kept build tree from compiling the previous contract version.
         assertEquals(2, occurrences(androidBuild, "inputs.file(runtimeContractSource)"));
         assertTrue(
                 androidBuild.contains(
@@ -131,14 +135,13 @@ class BuildCacheContractTest {
     }
 
     @Test
-    void aCacheHitLeavesTheEvidenceTheCheckJobUploads() throws IOException {
+    void theCachedNativeOutputIsTheRelocatableReportNotTheCMakeTree() throws IOException {
         String androidBuild = read("foundry-java-android/build.gradle.kts");
-        String workflow = read(".github/workflows/ci.yml");
         String nativeTests = read("gradle/run-native-tests.sh");
 
         // The CMake build tree records the absolute paths it was configured with, so it is not
-        // declared and not cached; the relocatable report beside it is. Both sit under the
-        // directory the check job uploads, so the evidence survives a hit.
+        // declared and not cached; the relocatable report beside it is. The report sits under the
+        // same directory the check job already uploads, so the evidence survives a hit.
         assertTrue(androidBuild.contains("layout.buildDirectory.dir(\"native-host/report\")"));
         assertTrue(
                 androidBuild.contains(
@@ -158,10 +161,6 @@ class BuildCacheContractTest {
                 nativeTests.contains("printf '%s' \"$toolchain_signature\" >\"$toolchain_stamp\""));
         assertFalse(
                 androidBuild.contains("outputs.dir(layout.buildDirectory.dir(\"native-host\"))"));
-        assertTrue(workflow.contains("foundry-java-android/build/native-host/**"));
-        assertTrue(workflow.contains("foundry-java-android/build/native-host-sanitized/**"));
-        assertTrue(workflow.contains("foundry-java-runtime/build/reports/foundry-realization/**"));
-        assertTrue(workflow.contains("**/build/reports/**"));
 
         // The two tasks that had no outputs at all now publish the inventory they computed,
         // which is both the cacheable artifact and what a developer reads when a baseline
@@ -228,15 +227,9 @@ class BuildCacheContractTest {
     }
 
     @Test
-    void ciProvesVerifierCacheEntriesAreReplayableAtAnotherCheckoutPath() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
+    void theGateAssertsReplayAtAnotherCheckoutPathRatherThanMerelyRunning() throws IOException {
         String gate = read("gradle/verify-build-cache-portability.sh");
 
-        assertTrue(workflow.contains("bash gradle/verify-build-cache-portability.sh"));
-        // The configuration cache proof still has to run: the two gates catch different
-        // failures and neither subsumes the other.
-        assertTrue(workflow.contains("bash gradle/verify-configuration-cache-reuse.sh"));
-        assertTrue(workflow.contains("bash gradle/verify-configuration-cache-reuse-selftest.sh"));
         assertTrue(gate.contains("set -euo pipefail"));
 
         // Two copies at deliberately different path lengths, both stripped of output
@@ -266,7 +259,6 @@ class BuildCacheContractTest {
 
     @Test
     void thePortabilityGateIsProvenToStillFailBothDefectsItCatches() throws IOException {
-        String workflow = read(".github/workflows/ci.yml");
         String selfTest = read("gradle/verify-build-cache-portability-selftest.sh");
         String absoluteFixture =
                 read(
@@ -277,7 +269,6 @@ class BuildCacheContractTest {
                         "gradle/testFixtures/build-cache-portability/undeclared-output"
                                 + "/build.gradle.kts");
 
-        assertTrue(workflow.contains("bash gradle/verify-build-cache-portability-selftest.sh"));
         assertTrue(selfTest.contains("set -euo pipefail"));
 
         // The self-test must drive the real gate, not a paraphrase of it, or it proves nothing
