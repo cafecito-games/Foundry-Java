@@ -15,7 +15,7 @@ public record FoundryClassDescriptor(
     public FoundryClassDescriptor {
         javaName = requireText(javaName, "javaName");
         foundryName = requireText(foundryName, "foundryName");
-        baseName = requireText(baseName, "baseName");
+        baseName = requireEngineClassName(requireText(baseName, "baseName"));
         initializationLevel = requireText(initializationLevel, "initializationLevel");
         after = List.copyOf(Objects.requireNonNull(after, "after"));
         if (after.stream().anyMatch(value -> value == null || value.isBlank())) {
@@ -23,6 +23,22 @@ public record FoundryClassDescriptor(
         }
         access = Objects.requireNonNull(access, "access");
         members = List.copyOf(Objects.requireNonNull(members, "members"));
+    }
+
+    /**
+     * The engine resolves an extension class parent through its own class database, which is keyed
+     * by unqualified engine class names. A qualified Java binding type name can never resolve
+     * there, so it is rejected here rather than at engine registration, where the class is silently
+     * dropped.
+     */
+    private static String requireEngineClassName(String baseName) {
+        if (baseName.indexOf('.') >= 0) {
+            throw new IllegalArgumentException(
+                    "baseName "
+                            + baseName
+                            + " must be an engine class name, not a qualified Java type name.");
+        }
+        return baseName;
     }
 
     private static String requireText(String value, String name) {

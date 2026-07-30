@@ -236,6 +236,7 @@ final class ExtensionValidator {
                         extension.getSimpleName().toString(),
                         exportedClassName,
                         base.toString(),
+                        baseFoundryName(base),
                         initializationLevel,
                         bindingConstructor,
                         dependencies,
@@ -927,6 +928,17 @@ final class ExtensionValidator {
                 signal.getSimpleName().toString(),
                 exported,
                 method == null ? List.of() : parameters(method.element(), method.type()));
+    }
+
+    /**
+     * Resolves the engine class name the extension's parent is registered under. The engine looks a
+     * parent up through {@code ClassDB}, which only knows engine class names, so the Java binding
+     * type's qualified name would never resolve. The generator names every generated engine class
+     * root after the engine class it binds, which makes the simple name the engine name.
+     */
+    private String baseFoundryName(TypeMirror base) {
+        Element baseElement = types.asElement(base);
+        return baseElement == null ? base.toString() : baseElement.getSimpleName().toString();
     }
 
     private Optional<String> baseVirtualIdentity(TypeMirror base, ExecutableElement override) {

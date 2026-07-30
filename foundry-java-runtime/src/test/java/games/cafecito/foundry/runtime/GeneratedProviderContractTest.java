@@ -120,6 +120,32 @@ class GeneratedProviderContractTest {
         assertEquals("demo", bootstrap.descriptors().get(0).module());
     }
 
+    /**
+     * The engine resolves a parent class through {@code ClassDB}, whose names are never qualified.
+     * A descriptor carrying the Java binding type's qualified name registers nothing, so the
+     * runtime refuses it at descriptor construction instead of letting the engine reject the class.
+     */
+    @Test
+    void classDescriptorRejectsAQualifiedJavaNameAsTheEngineParent() {
+        IllegalArgumentException failure =
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () ->
+                                new FoundryClassDescriptor(
+                                        "example.Extension",
+                                        "Extension",
+                                        "games.cafecito.foundry.generated.classes.Node",
+                                        "SCENE",
+                                        List.of(),
+                                        classDescriptor().access(),
+                                        List.of()));
+
+        assertTrue(
+                failure.getMessage().contains("games.cafecito.foundry.generated.classes.Node"),
+                failure::getMessage);
+        assertTrue(failure.getMessage().contains("engine class name"), failure::getMessage);
+    }
+
     private static FoundryModuleProvider provider(String module, String registry) {
         FoundryModuleDescriptor descriptor = descriptor(module, registry);
         return () -> descriptor;

@@ -27,7 +27,7 @@ public final class DemoModuleRegistry
                             new games.cafecito.foundry.runtime.FoundryClassDescriptor(
                                     "demo.SpinningCube",
                                     "SpinningCube",
-                                    "demo.EngineNode",
+                                    "EngineNode",
                                     "SCENE",
                                     java.util.List.of(),
                                     new games.cafecito.foundry.runtime.FoundryExtensionAccess() {

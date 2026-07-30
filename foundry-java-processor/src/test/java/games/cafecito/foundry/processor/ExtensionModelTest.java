@@ -76,6 +76,7 @@ class ExtensionModelTest {
                 "Extension",
                 "Extension",
                 "demo.EngineNode",
+                "EngineNode",
                 "SCENE",
                 false,
                 List.of(),

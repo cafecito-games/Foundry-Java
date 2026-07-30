@@ -473,6 +473,41 @@ class FoundrySourceGeneratorTest {
         assertEquals(0, compile(output, temporaryDirectory.resolve("accepted-classes")));
     }
 
+    /**
+     * An extension declares its parent as the generated binding type, and the processor registers
+     * that parent under the binding's own name because the engine resolves parents by engine class
+     * name. Every generated engine class must therefore keep the engine's name in Java, or the
+     * engine would reject any extension that inherits from the renamed binding.
+     */
+    @Test
+    void everyGeneratedEngineClassKeepsItsEngineClassNameInJava() throws IOException {
+        Path acceptedDirectory =
+                Path.of(System.getProperty("user.dir")).resolve("../api/current").normalize();
+        ApiInputs inputs = ApiInputs.load(acceptedDirectory);
+        FoundryApi api = FoundryApiParser.parse(inputs);
+
+        GeneratedTree generated = generateAcceptedApi();
+
+        List<String> engineClassNames =
+                api.categories().getOrDefault("classes", List.of()).stream()
+                        .map(FoundryApi.Entity::identity)
+                        .map(identity -> identity.substring(identity.lastIndexOf('/') + 1))
+                        .toList();
+        assertFalse(engineClassNames.isEmpty());
+        assertEquals(
+                List.of(),
+                engineClassNames.stream()
+                        .filter(
+                                name ->
+                                        !generated
+                                                .sources()
+                                                .containsKey(
+                                                        "games/cafecito/foundry/generated/classes/"
+                                                                + name
+                                                                + ".java"))
+                        .toList());
+    }
+
     @Test
     void generatedNativeDispatchCoversEveryKindAndAcceptedInventoryDeterministically()
             throws IOException {
