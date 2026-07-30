@@ -134,26 +134,39 @@ class ReusableGateWorkflowContractTest {
         assertTrue(scope.contains("gh api --paginate --slurp"));
         assertTrue(
                 scope.contains("repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100"));
-        assertTrue(scope.contains("[.[][]] | length"));
         assertTrue(
                 scope.contains(
-                        "if [[ \"$observed_count\" != \"$EXPECTED_CHANGED_FILES\" ]]; then\n"
-                                + "            select_gate true classification-incomplete\n"
-                                + "            exit 0\n"
-                                + "          fi"));
-        assertTrue(scope.contains("(.filename, .previous_filename?)"));
+                        "set +e\n"
+                                + "          paths=\"$(\n"
+                                + "            printf '%s' \"$pages\" |\n"
+                                + "              bash gradle/extract-engine-gate-paths.sh"
+                                + " \"$EXPECTED_CHANGED_FILES\" 2>/dev/null\n"
+                                + "          )\"\n"
+                                + "          extract_status=\"$?\"\n"
+                                + "          set -e"));
+        assertTrue(
+                scope.contains(
+                        "case \"$extract_status\" in\n"
+                                + "            0)\n"
+                                + "              ;;\n"
+                                + "            2)\n"
+                                + "              select_gate true classification-incomplete\n"
+                                + "              exit 0\n"
+                                + "              ;;\n"
+                                + "            *)\n"
+                                + "              select_gate true classification-failed\n"
+                                + "              exit 0\n"
+                                + "              ;;\n"
+                                + "          esac"));
+        assertFalse(
+                scope.contains("map(select(type == \"string\"))"),
+                "malformed API metadata must never be silently discarded");
         assertTrue(scope.contains("bash gradle/classify-engine-gate-paths.sh"));
-        for (String failedCommand :
-                new String[] {
-                    "if ! pages=\"$(",
-                    "if ! observed_count=\"$(",
-                    "if ! paths=\"$(",
-                    "if ! decision=\"$("
-                }) {
+        for (String failedCommand : new String[] {"if ! pages=\"$(", "if ! decision=\"$("}) {
             assertTrue(scope.contains(failedCommand), failedCommand + " must fail closed");
         }
         assertEquals(
-                4,
+                2,
                 occurrences(
                         scope,
                         ")\"; then\n"
@@ -162,9 +175,9 @@ class ReusableGateWorkflowContractTest {
                                 + "          fi"),
                 "every API, parse, and classifier command failure must fail closed");
         assertEquals(
-                5,
+                4,
                 occurrences(scope, "select_gate true classification-failed"),
-                "all five classification failures must run the engine gate");
+                "all four API, extractor, and classifier failures must run the engine gate");
         assertEquals(
                 1,
                 occurrences(scope, "select_gate true classification-incomplete"),

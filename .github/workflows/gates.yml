@@ -209,22 +209,25 @@ jobs:
             select_gate true classification-failed
             exit 0
           fi
-          if ! observed_count="$(jq -er '[.[][]] | length' <<< "$pages" 2>/dev/null)"; then
-            select_gate true classification-failed
-            exit 0
-          fi
-          if [[ "$observed_count" != "$EXPECTED_CHANGED_FILES" ]]; then
-            select_gate true classification-incomplete
-            exit 0
-          fi
-          if ! paths="$(
-            jq -ec \
-              '[.[][] | (.filename, .previous_filename?)] | map(select(type == "string"))' \
-              <<< "$pages" 2>/dev/null
-          )"; then
-            select_gate true classification-failed
-            exit 0
-          fi
+          set +e
+          paths="$(
+            printf '%s' "$pages" |
+              bash gradle/extract-engine-gate-paths.sh "$EXPECTED_CHANGED_FILES" 2>/dev/null
+          )"
+          extract_status="$?"
+          set -e
+          case "$extract_status" in
+            0)
+              ;;
+            2)
+              select_gate true classification-incomplete
+              exit 0
+              ;;
+            *)
+              select_gate true classification-failed
+              exit 0
+              ;;
+          esac
           if ! decision="$(
             printf '%s' "$paths" |
               bash gradle/classify-engine-gate-paths.sh 2>/dev/null

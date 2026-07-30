@@ -1,0 +1,153 @@
+package games.cafecito.foundry.build;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.Test;
+
+class EngineGateApiResponseExtractorTest {
+    private static final Path ROOT = Path.of("").toAbsolutePath();
+
+    @Test
+    void extractsCurrentAndPreviousPathsFromEveryPageInApiOrder() throws Exception {
+        Result result =
+                extract(
+                        "4",
+                        """
+                        [
+                          [
+                            {"filename":"docs/guide.md","status":"added"},
+                            {
+                              "filename":"src/modified.java",
+                              "previous_filename":"src/prior-modified.java",
+                              "status":"modified"
+                            },
+                            {"filename":"src/removed.java","status":"removed"}
+                          ],
+                          [
+                            {
+                              "filename":"src/current.java",
+                              "previous_filename":"src/previous.java",
+                              "status":"renamed"
+                            }
+                          ]
+                        ]
+                        """);
+
+        assertEquals(0, result.status(), result.stderr());
+        assertEquals(
+                "[\"docs/guide.md\",\"src/modified.java\",\"src/prior-modified.java\","
+                        + "\"src/removed.java\",\"src/current.java\","
+                        + "\"src/previous.java\"]\n",
+                result.stdout());
+        assertEquals("", result.stderr());
+    }
+
+    @Test
+    void changedFileCountMismatchHasItsOwnSilentExitCode() throws Exception {
+        Result result =
+                extract(
+                        "2",
+                        """
+                        [[{"filename":"private/count-mismatch.java","status":"modified"}]]
+                        """);
+
+        assertSilentFailure(result, 2);
+    }
+
+    @Test
+    void malformedApiResponsesAreRejectedWithoutLeakingPaths() throws Exception {
+        Map<String, String> malformed =
+                Map.ofEntries(
+                        Map.entry("malformed JSON", "not-json"),
+                        Map.entry("non-array outer value", "{}"),
+                        Map.entry("non-array page", "[{}]"),
+                        Map.entry("empty response", "[]"),
+                        Map.entry("empty page", "[[]]"),
+                        Map.entry("non-object item", "[[42]]"),
+                        Map.entry(
+                                "missing filename",
+                                "[[{\"status\":\"modified\",\"marker\":\"private/missing\"}]]"),
+                        Map.entry(
+                                "non-string filename",
+                                "[[{\"filename\":7,\"status\":\"modified\"}]]"),
+                        Map.entry(
+                                "empty filename",
+                                "[[{\"filename\":\"\",\"status\":\"modified\"}]]"),
+                        Map.entry(
+                                "missing status",
+                                "[[{\"filename\":\"private/missing-status.java\"}]]"),
+                        Map.entry(
+                                "non-string status",
+                                "[[{\"filename\":\"private/status-type.java\",\"status\":7}]]"),
+                        Map.entry(
+                                "empty status",
+                                "[[{\"filename\":\"private/status-empty.java\",\"status\":\"\"}]]"),
+                        Map.entry(
+                                "non-string previous filename",
+                                "[[{\"filename\":\"private/current-type.java\","
+                                        + "\"previous_filename\":7,\"status\":\"modified\"}]]"),
+                        Map.entry(
+                                "empty previous filename",
+                                "[[{\"filename\":\"private/current-empty.java\","
+                                        + "\"previous_filename\":\"\",\"status\":\"modified\"}]]"),
+                        Map.entry(
+                                "renamed without previous filename",
+                                "[[{\"filename\":\"private/renamed-missing.java\","
+                                        + "\"status\":\"renamed\"}]]"),
+                        Map.entry(
+                                "renamed with null previous filename",
+                                "[[{\"filename\":\"private/renamed-null.java\","
+                                        + "\"previous_filename\":null,\"status\":\"renamed\"}]]"));
+
+        for (Map.Entry<String, String> fixture : malformed.entrySet()) {
+            assertSilentFailure(extract("1", fixture.getValue()), 1, fixture.getKey());
+        }
+    }
+
+    @Test
+    void expectedCountMustBeOnePositiveInteger() throws Exception {
+        for (String expected : new String[] {"", "invalid", "0", "-1", "1.5"}) {
+            assertSilentFailure(extract(expected, null), 1, "expected count " + expected);
+        }
+    }
+
+    private static void assertSilentFailure(Result result, int expectedStatus) {
+        assertSilentFailure(result, expectedStatus, "extractor result");
+    }
+
+    private static void assertSilentFailure(Result result, int expectedStatus, String message) {
+        assertEquals(expectedStatus, result.status(), message);
+        assertEquals("", result.stdout(), message);
+        assertEquals("", result.stderr(), message);
+    }
+
+    private static Result extract(String expectedCount, String input) throws Exception {
+        Process process =
+                new ProcessBuilder("bash", "gradle/extract-engine-gate-paths.sh", expectedCount)
+                        .directory(ROOT.toFile())
+                        .start();
+        if (input != null) {
+            try (var stdin = process.getOutputStream()) {
+                stdin.write(input.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+        if (!process.waitFor(10, TimeUnit.SECONDS)) {
+            process.destroyForcibly();
+            assertTrue(
+                    process.waitFor(10, TimeUnit.SECONDS),
+                    "extractor did not stop after forced destruction");
+            fail("extractor timed out");
+        }
+        String stdout = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        String stderr = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8);
+        return new Result(process.exitValue(), stdout, stderr);
+    }
+
+    private record Result(int status, String stdout, String stderr) {}
+}
