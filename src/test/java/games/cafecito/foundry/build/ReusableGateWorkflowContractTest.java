@@ -71,7 +71,7 @@ class ReusableGateWorkflowContractTest {
         assertTrue(
                 checkoutStep.startsWith(
                         "- uses: actions/checkout@"
-                                + "11d5960a326750d5838078e36cf38b85af677262 # v4\n"));
+                                + "3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"));
         String releaseFetchDepth = "fetch-depth: ${{ inputs.release && '0' || '1' }}";
         assertTrue(checkoutStep.contains("with:\n          " + releaseFetchDepth));
         assertEquals(1, occurrences(shared, releaseFetchDepth));
