@@ -73,7 +73,9 @@ jobs:
   device:
     name: JNI lifecycle on API 36
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
+    env:
+      FOUNDRY_ENGINE_CACHE: ${{ github.workspace }}/.foundry-engine-cache
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
@@ -131,6 +133,17 @@ jobs:
       - name: Run the Java and Kotlin conformance matrix as consumer samples
         shell: bash
         run: bash gradle/run-samples-conformance-matrix.sh emulator-5554
+      # The pinned export template archive is roughly 1.1 GB, so it is cached by release tag and
+      # asset digest. The key can never survive a pin bump, and gradle/fetch-pinned-engine.sh still
+      # verifies every digest before use, so a cache hit is never treated as evidence of integrity.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.FOUNDRY_ENGINE_CACHE }}
+          key: >-
+            foundry-engine-v0.1.0-alpha.14-6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f
+      - name: Run the engine-loaded API 36 conformance gate
+        shell: bash
+        run: bash gradle/run-engine-loaded-conformance-gate.sh emulator-5554
       - name: Upload API 36 production startup evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -149,3 +162,5 @@ jobs:
             samples/*/build/reports/**
             samples/*/build/test-results/**
             samples/*/build/outputs/androidTest-results/**
+            ${{ runner.temp }}/foundry-java-engine-gate/**
+            acceptance/*/build/reports/**
