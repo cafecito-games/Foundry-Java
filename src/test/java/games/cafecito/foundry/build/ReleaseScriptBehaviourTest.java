@@ -402,6 +402,46 @@ class ReleaseScriptBehaviourTest {
     }
 
     @Test
+    void uploadingRefusesToResubmitWhenAPriorAttemptLeftAnUnresolvedIntentMarker(
+            @TempDir Path directory) throws Exception {
+        // Simulates the crash the fix targets: a previous run wrote the pre-upload intent marker,
+        // then died before upload-summary.json could be written, so no completed record exists.
+        // Central uploads are not reversible, so this must refuse rather than assume it is safe to
+        // retry.
+        Path staging = newStagedRelease(directory);
+        assertEquals(0, verifyStaged(staging).exitCode());
+        Files.writeString(
+                staging.resolve("upload-intent.json"),
+                "{\n  \"target\": \"staging\",\n  \"version\": \"" + VERSION + "\"\n}\n");
+        Path target = directory.resolve("target");
+
+        Result result = uploadToStaging(staging, target);
+
+        assertNotEquals(0, result.exitCode(), result.output());
+        assertTrue(result.output().contains("ambiguous"), result.output());
+        assertTrue(result.output().contains("Never"), result.output());
+        assertTrue(
+                Files.notExists(target),
+                "an unresolved intent marker must refuse before any bytes are transferred");
+    }
+
+    @Test
+    void uploadingClearsTheIntentMarkerOnceTheCompletedRecordIsWritten(@TempDir Path directory)
+            throws Exception {
+        Path staging = newStagedRelease(directory);
+        assertEquals(0, verifyStaged(staging).exitCode());
+        Path target = directory.resolve("target");
+
+        Result result = uploadToStaging(staging, target);
+
+        assertEquals(0, result.exitCode(), result.output());
+        assertTrue(Files.isRegularFile(staging.resolve("upload-summary.json")));
+        assertTrue(
+                Files.notExists(staging.resolve("upload-intent.json")),
+                "the intent marker must not linger once the completed record is durable");
+    }
+
+    @Test
     void uploadingRefusesTheCentralTargetWithoutAPortalToken(@TempDir Path directory)
             throws Exception {
         Path staging = newStagedRelease(directory);

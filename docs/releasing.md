@@ -145,8 +145,16 @@ rather than a repair.
   `USER_MANAGED` until a human releases it. Drop the incomplete deployment in the Portal, then re-run
   the `publish` job for the same tag; the staged release is attached to the `stage` job as an artifact
   and is byte-identical to what was verified. If the upload had already been accepted, the
-  `foundry-java-release-upload-record` artifact carries its deployment identifier and the re-run
-  refuses rather than submitting a second bundle; delete that artifact only after dropping the
-  deployment.
+  `foundry-java-release-upload-record-<tag>` artifact carries its deployment identifier and the re-run
+  refuses rather than submitting a second bundle. That artifact is version-scoped and searched for
+  across the whole repository, not just the current run, so a fresh tag-push run also refuses instead
+  of re-uploading; delete that artifact only after dropping the deployment.
+- **The runner died between the upload and the record being written.** The upload record is written
+  before the irreversible Central call as a pre-upload intent marker (`upload-intent.json`), and the
+  completed record (`upload-summary.json`) replaces it once the upload finishes. If a re-run recovers
+  only the intent marker, it refuses: this is ambiguous, not "safe to retry" — the bundle may already
+  have been accepted. Check the Central Portal directly for a deployment matching this version. Once
+  you are certain nothing was accepted, delete `upload-intent.json` from the staged release and re-run.
+  Never resubmit while this is unresolved.
 - **A published release turns out to be wrong.** Maven Central coordinates are immutable. Publish a
   new patch version; do not attempt to replace one.

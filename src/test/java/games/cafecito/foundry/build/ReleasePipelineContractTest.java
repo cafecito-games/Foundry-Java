@@ -423,14 +423,32 @@ class ReleasePipelineContractTest {
         // bundle.
         assertTrue(upload.contains("deployment_id"));
         assertTrue(upload.contains("USER_MANAGED"));
+        // The intent marker is written before the irreversible call, so it survives a crash between
+        // the upload and the completed record being written, and recovery treats it as ambiguous
+        // rather than as permission to retry.
+        assertTrue(upload.contains("upload-intent.json"));
+        int intentWrite = upload.indexOf("\"result\": \"intent\"");
+        int uploadBundleCall = upload.lastIndexOf("upload_bundle");
+        assertTrue(intentWrite > 0 && uploadBundleCall > intentWrite);
+        assertTrue(upload.contains("ambiguous"));
 
         // The record has to survive the runner, or a re-run of the publish job would download the
         // original staged release, see no record, and submit the bundle a second time.
         String workflow = read(WORKFLOW);
-        assertTrue(workflow.contains("name: foundry-java-release-upload-record"));
+        assertTrue(workflow.contains("name: foundry-java-release-upload-record-${{ github.ref_name }}"));
+        assertTrue(
+                workflow.contains(
+                        "${{ runner.temp }}/foundry-java-release/first/upload-intent.json"),
+                "the intent marker must be captured as durable evidence too, not only the completed"
+                        + " record");
         // Recovery must fail closed: only an empty artifact listing may be read as "not uploaded".
         assertFalse(workflow.contains("continue-on-error"));
-        assertTrue(workflow.contains("actions/runs/${GITHUB_RUN_ID}/artifacts"));
+        // Dedup is scoped by the release version's artifact name across the whole repository, not by
+        // GITHUB_RUN_ID, so a fresh tag-push run can see a still-unpublished deployment left by a
+        // different, earlier run.
+        assertFalse(workflow.contains("actions/runs/${GITHUB_RUN_ID}/artifacts"));
+        assertTrue(workflow.contains("repos/${GITHUB_REPOSITORY}/actions/artifacts"));
+        assertTrue(workflow.contains("record_name=\"foundry-java-release-upload-record-${GITHUB_REF_NAME}\""));
         int recover = workflow.indexOf("- name: Recover any record of a completed upload");
         int publish = workflow.indexOf("- name: Publish the verified staged release");
         int record = workflow.indexOf("- name: Record the completed upload so a re-run cannot");

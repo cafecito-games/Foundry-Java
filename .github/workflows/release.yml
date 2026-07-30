@@ -294,30 +294,37 @@ jobs:
           name: foundry-java-staged-release
           path: ${{ runner.temp }}/foundry-java-release/first
       # A Central Portal deployment stays USER_MANAGED until a human publishes it, so it is invisible
-      # to the public coordinate probe. The record of a completed upload therefore has to survive the
-      # runner: it is recovered here so a re-run of this job refuses instead of submitting the bundle
-      # again. Absence is established by listing the run's artifacts, so a failing artifact service
-      # stops the release instead of being read as "no upload has happened yet".
+      # to the public coordinate probe. The record of a completed upload — and, short of that, the
+      # pre-upload intent marker — therefore has to survive the runner: it is recovered here so a
+      # re-run refuses instead of submitting the bundle again. The search is scoped by the release
+      # version's artifact name across the whole repository, not by GITHUB_RUN_ID: a fresh tag-push
+      # run must be able to see a still-unpublished deployment left by an earlier, different run, not
+      # only by a rerun of this same run. Absence is established by listing artifacts, so a failing
+      # artifact service stops the release instead of being read as "no upload has happened yet".
       - name: Recover any record of a completed upload
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          recorded="$(
+          record_name="foundry-java-release-upload-record-${GITHUB_REF_NAME}"
+          records="$(
             gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-              --jq '.artifacts[]
-                | select(.name == "foundry-java-release-upload-record")
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+              --jq --arg name "$record_name" '
+                .artifacts[]
+                | select(.name == $name)
                 | select(.expired == false)
-                | .name'
+                | [.created_at, (.workflow_run.id | tostring)]
+                | @tsv'
           )"
-          if [[ -z "$recorded" ]]; then
-            printf 'No upload record exists for this run yet.\n'
+          if [[ -z "$records" ]]; then
+            printf 'No upload record exists for version %s yet.\n' "${GITHUB_REF_NAME#v}"
             exit 0
           fi
-          gh run download "${GITHUB_RUN_ID}" \
-            --name foundry-java-release-upload-record \
+          recovered_run_id="$(printf '%s\n' "$records" | sort -r | awk -F'\t' 'NR == 1 { print $2 }')"
+          gh run download "$recovered_run_id" \
+            --name "$record_name" \
             --dir "${RUNNER_TEMP}/foundry-java-release/first"
       - name: Publish the verified staged release
         shell: bash
@@ -329,15 +336,20 @@ jobs:
             "${RUNNER_TEMP}/foundry-java-release/first" \
             "${GITHUB_REF_NAME#v}" \
             central
+      # Uploaded even when the publish step above fails or the job is cancelled, so the pre-upload
+      # intent marker written before the irreversible call — not only the completed record — survives
+      # the runner and is discoverable by the recovery step above on the next attempt.
       - name: Record the completed upload so a re-run cannot republish
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: foundry-java-release-upload-record
+          name: foundry-java-release-upload-record-${{ github.ref_name }}
           if-no-files-found: ignore
           overwrite: true
           retention-days: 90
-          path: ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
+          path: |
+            ${{ runner.temp }}/foundry-java-release/first/upload-intent.json
+            ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
       - name: Upload publication evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
