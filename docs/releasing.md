@@ -7,18 +7,20 @@ proves that release reproducible and completely verified, and only then uploads 
 
 ## What the pipeline does
 
-[`.github/workflows/release.yml`](../.github/workflows/release.yml) has four jobs, in order. Nothing
-is signed until both gate jobs pass, and nothing is uploaded until the staged release is verified.
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) calls the shared
+[`.github/workflows/gates.yml`](../.github/workflows/gates.yml) workflow before its stage and
+publish jobs. Nothing is signed until both called gate jobs pass, and nothing is uploaded until the
+staged release is verified.
 
-1. **`host-gate`** — configuration-cache reuse from clean outputs, which runs the full Gradle `check`
-   twice, plus `:foundry-java-runtime:verifyRuntimeApi`, the parity oracle
+1. **`gates / Host gate`** — configuration-cache reuse from clean outputs, which runs the full
+   Gradle `check` twice, plus `:foundry-java-runtime:verifyRuntimeApi`, the parity oracle
    `:foundry-java-runtime:verifyGeneratedRealization`, the native host and sanitizer tests, the
    native ABI layout test, the AAR native-bridge inspection, regenerated dependency locks, and
    [`gradle/verify-release-preconditions.sh`](../gradle/verify-release-preconditions.sh).
-2. **`device-gate`** — production startup twice in fresh processes on an API 36 emulator, the Java
-   and Kotlin conformance matrix as consumer samples, and the engine-loaded API 36 conformance gate.
-   It carries a 150-minute budget because the engine gate downloads a roughly 1.1 GB export template
-   and builds five exports.
+2. **`gates / Device gate on API 36`** — production startup twice in fresh processes on an API 36
+   emulator, the Java and Kotlin conformance matrix as consumer samples, and the engine-loaded API
+   36 conformance gate. It carries a 150-minute budget because the engine gate downloads a roughly
+   1.1 GB export template and builds five exports.
 3. **`stage`** — [`gradle/verify-release-reproducibility.sh`](../gradle/verify-release-reproducibility.sh)
    stages the tag twice through [`gradle/stage-release.sh`](../gradle/stage-release.sh) and compares
    the results byte for byte, then
