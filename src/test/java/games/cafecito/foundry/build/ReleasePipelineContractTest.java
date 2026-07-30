@@ -420,6 +420,15 @@ class ReleasePipelineContractTest {
         // bundle.
         assertTrue(upload.contains("deployment_id"));
         assertTrue(upload.contains("USER_MANAGED"));
+
+        // The record has to survive the runner, or a re-run of the publish job would download the
+        // original staged release, see no record, and submit the bundle a second time.
+        String workflow = read(WORKFLOW);
+        assertTrue(workflow.contains("name: foundry-java-release-upload-record"));
+        int recover = workflow.indexOf("- name: Recover any record of a completed upload");
+        int publish = workflow.indexOf("- name: Publish the verified staged release");
+        int record = workflow.indexOf("- name: Record the completed upload so a re-run cannot");
+        assertTrue(recover > 0 && publish > recover && record > publish);
     }
 
     @Test

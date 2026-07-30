@@ -288,6 +288,16 @@ jobs:
         with:
           name: foundry-java-staged-release
           path: ${{ runner.temp }}/foundry-java-release/first
+      # A Central Portal deployment stays USER_MANAGED until a human publishes it, so it is invisible
+      # to the public coordinate probe. The record of a completed upload therefore has to survive the
+      # runner: it is recovered here so a re-run of this job refuses instead of submitting the bundle
+      # again. It is absent on a first run, which is the only reason this step may fail.
+      - name: Recover any record of a completed upload
+        continue-on-error: true
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: foundry-java-release-upload-record
+          path: ${{ runner.temp }}/foundry-java-release/first
       - name: Publish the verified staged release
         shell: bash
         env:
@@ -298,6 +308,15 @@ jobs:
             "${RUNNER_TEMP}/foundry-java-release/first" \
             "${GITHUB_REF_NAME#v}" \
             central
+      - name: Record the completed upload so a re-run cannot republish
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: foundry-java-release-upload-record
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 90
+          path: ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
       - name: Upload publication evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

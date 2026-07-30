@@ -142,6 +142,9 @@ rather than a repair.
 - **The upload failed during transfer.** The Central Portal deployment is one bundle and stays
   `USER_MANAGED` until a human releases it. Drop the incomplete deployment in the Portal, then re-run
   the `publish` job for the same tag; the staged release is attached to the `stage` job as an artifact
-  and is byte-identical to what was verified.
+  and is byte-identical to what was verified. If the upload had already been accepted, the
+  `foundry-java-release-upload-record` artifact carries its deployment identifier and the re-run
+  refuses rather than submitting a second bundle; delete that artifact only after dropping the
+  deployment.
 - **A published release turns out to be wrong.** Maven Central coordinates are immutable. Publish a
   new patch version; do not attempt to replace one.
