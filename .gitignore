@@ -6,6 +6,8 @@
 /*/build/
 samples/build/
 samples/*/build/
+acceptance/build/
+acceptance/*/build/
 /foundry-java-android/.cxx/
 local.properties
 .idea/

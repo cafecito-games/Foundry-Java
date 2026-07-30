@@ -1,9 +1,0 @@
-format=2
-module=acceptance
-registry=games.cafecito.foundry.generated.acceptance.AcceptanceRegistry
-api_sha256=48af7d0e8fbbbc615d985db39c135402e5120649865cc21e43676da5ee65332b
-generator_version=1
-runtime_contract_version=1
-bridge_contract_version=1
-class=games.cafecito.foundry.acceptance.EngineProbe|FoundryJavaEngineProbeDisabled|games.cafecito.foundry.generated.classes.Node|SCENE|
-method=games.cafecito.foundry.acceptance.EngineProbe|engine_probe|engineProbe|long(long)
