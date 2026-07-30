@@ -20,7 +20,9 @@ import java.util.TreeMap;
  * Runs the engine-API parity oracle over a generated realization map and writes its evidence.
  *
  * <p>Evidence is written before any failure is raised, so continuous integration can upload the
- * realization map, the per-entity accounting, and any diff on success and on failure alike.
+ * realization map, the per-entity accounting, the surface manifest, and any diff on success and on
+ * failure alike. The manifest is copied before it is parsed, because a manifest that fails to parse
+ * is exactly the one a reviewer needs to see.
  */
 public final class RealizationVerifier {
     /** Format marker of the pinned per-entity accounting, bumped when its grammar changes. */
@@ -102,6 +104,10 @@ public final class RealizationVerifier {
         CompatibilityManifest manifest = CompatibilityManifest.parse(api, inputs);
         RealizationMap map = RealizationMap.parse(read(realizationMapPath));
         GeneratedSurface surface = GeneratedSurface.fromCompiledClasses(classesDirectory);
+        // Published before parsing, so a manifest that fails to parse is still the manifest the
+        // evidence carries. Every other report is derived from inputs already accepted by this
+        // point.
+        copy(surfaceManifestPath, reportDirectory.resolve(SURFACE_MANIFEST_FILE_NAME));
         SurfaceManifest surfaceManifest = SurfaceManifest.parse(read(surfaceManifestPath));
 
         List<RealizationOracle.Violation> violations =
@@ -130,7 +136,6 @@ public final class RealizationVerifier {
         }
         write(reportDirectory.resolve("realization-map.tsv"), map.render());
         write(reportDirectory.resolve("realization-accounting.txt"), accounting);
-        copy(surfaceManifestPath, reportDirectory.resolve(SURFACE_MANIFEST_FILE_NAME));
         write(reportDirectory.resolve("realization-diff.txt"), diff.isEmpty() ? "" : diff);
         write(
                 reportDirectory.resolve("realization-violations.txt"),
@@ -260,9 +265,10 @@ public final class RealizationVerifier {
     }
 
     /**
-     * Publishes the accepted manifest as evidence by copying its bytes. Re-rendering the parsed
-     * model would allocate the whole document a second time to produce the same bytes; the
-     * parse-then-render round trip is frozen by the generator's own tests instead.
+     * Publishes the manifest as evidence by copying its bytes. Re-rendering the parsed model would
+     * allocate the whole document a second time to produce the same bytes, and would only be
+     * possible once parsing had succeeded; the parse-then-render round trip is frozen by the
+     * generator's own tests instead.
      */
     private static void copy(Path source, Path target) {
         try {
