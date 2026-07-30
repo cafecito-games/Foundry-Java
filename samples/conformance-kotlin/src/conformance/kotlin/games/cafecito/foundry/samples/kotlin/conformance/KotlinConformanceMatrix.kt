@@ -164,16 +164,28 @@ class KotlinApiSurfaceConformanceTest {
         assertEquals(listOf(child), observed)
     }
 
+    /**
+     * The engine resolves the virtual by its own name, `_process`, but the bridge dispatches into
+     * the access by the override's Java name. Only the second identity reaches this interface.
+     */
     @Test
     @Covers(ConformanceCategory.VIRTUAL_OVERRIDES)
     fun anEngineVirtualDispatchesToTheJavaOverrideFromKotlin() {
         val descriptor = classDescriptor(SCENE_CLASS)
         val spinner = bindSpinner(descriptor)
+        val javaName =
+            descriptor.members()
+                .first { it.kind() == "override" && it.foundryName() == "_process" }
+                .javaName()
 
-        descriptor.access().invoke(spinner, "_process", arrayOf<Any>(0.5))
+        assertEquals("onProcess", javaName)
+        descriptor.access().invoke(spinner, javaName, arrayOf<Any>(0.5))
 
         assertEquals(0.5, spinner.accumulatedDelta(), 1.0e-9)
         assertTrue(engine.calls().isEmpty())
+        assertThrows(IllegalArgumentException::class.java) {
+            descriptor.access().invoke(spinner, "_process", arrayOf<Any>(0.5))
+        }
     }
 
     @Test

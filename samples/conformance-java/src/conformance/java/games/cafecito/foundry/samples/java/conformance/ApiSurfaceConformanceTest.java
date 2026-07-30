@@ -33,7 +33,9 @@ import games.cafecito.foundry.runtime.FoundryCallError;
 import games.cafecito.foundry.runtime.FoundryCallException;
 import games.cafecito.foundry.runtime.FoundryCallable;
 import games.cafecito.foundry.runtime.FoundryClassDescriptor;
+import games.cafecito.foundry.runtime.FoundryMemberDescriptor;
 import games.cafecito.foundry.runtime.FoundryObject;
+import games.cafecito.foundry.runtime.FoundryPropertyDetails;
 import games.cafecito.foundry.runtime.FoundrySignal;
 import games.cafecito.foundry.runtime.FoundryTypedSignal;
 import games.cafecito.foundry.runtime.ObjectOwnership;
@@ -147,10 +149,21 @@ public class ApiSurfaceConformanceTest {
         FoundryClassDescriptor descriptor =
                 ConformanceFixture.classDescriptor(ConformanceFixture.SCENE_CLASS);
         ConformanceSpinner spinner = bindSpinner(descriptor);
+        FoundryPropertyDetails details =
+                (FoundryPropertyDetails)
+                        descriptor.members().stream()
+                                .filter(member -> "property".equals(member.kind()))
+                                .filter(member -> "speed".equals(member.foundryName()))
+                                .map(FoundryMemberDescriptor::details)
+                                .findFirst()
+                                .orElseThrow();
 
-        descriptor.access().setProperty(spinner, "speed", 12.5);
+        // The bridge dispatches property access by the declared accessor names, not by the exported
+        // property name; this class happens to name both accessors after the property.
+        descriptor.access().setProperty(spinner, details.setter(), 12.5);
 
-        assertEquals(12.5, (Double) descriptor.access().getProperty(spinner, "speed"), 0.0);
+        assertEquals(
+                12.5, (Double) descriptor.access().getProperty(spinner, details.getter()), 0.0);
         assertEquals(12.5, spinner.speed(), 0.0);
     }
 
@@ -175,18 +188,37 @@ public class ApiSurfaceConformanceTest {
         assertTrue(engine.onlyCallTo(CHILD_ENTERED_TREE).arguments().isEmpty());
     }
 
+    /**
+     * The engine resolves the virtual by its own name, {@code _process}, but the bridge dispatches
+     * into the access by the override's Java name. The engine-visible name and the dispatch key are
+     * two different identities of one member, and only the second one reaches this interface.
+     */
     @Test
     @Covers(VIRTUAL_OVERRIDES)
     public void anEngineVirtualDispatchesToTheJavaOverride() {
         FoundryClassDescriptor descriptor =
                 ConformanceFixture.classDescriptor(ConformanceFixture.SCENE_CLASS);
         ConformanceSpinner spinner = bindSpinner(descriptor);
+        String javaName =
+                descriptor.members().stream()
+                        .filter(member -> "override".equals(member.kind()))
+                        .filter(member -> "_process".equals(member.foundryName()))
+                        .map(FoundryMemberDescriptor::javaName)
+                        .findFirst()
+                        .orElseThrow();
 
-        descriptor.access().invoke(spinner, "_process", new java.lang.Object[] {0.25});
-        descriptor.access().invoke(spinner, "_process", new java.lang.Object[] {0.75});
+        assertEquals("onProcess", javaName);
+        descriptor.access().invoke(spinner, javaName, new java.lang.Object[] {0.25});
+        descriptor.access().invoke(spinner, javaName, new java.lang.Object[] {0.75});
 
         assertEquals(1.0, spinner.accumulatedDelta(), 1.0e-9);
         assertTrue(engine.calls().isEmpty());
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        descriptor
+                                .access()
+                                .invoke(spinner, "_process", new java.lang.Object[] {0.25}));
     }
 
     @Test

@@ -41,14 +41,14 @@ class FoundryEnumTrampolineGenerationTest {
             Class<?> trampoline = loader.loadClass("demo.EnumCallbacks_FoundryTrampoline");
             Object target = trampoline.getMethod("construct").invoke(null);
 
-            assertEquals(Long.MAX_VALUE, invoke(trampoline, target, "echo_user", Long.MIN_VALUE));
-            assertEquals(Long.MIN_VALUE, invoke(trampoline, target, "echo_user", Long.MAX_VALUE));
+            assertEquals(Long.MAX_VALUE, invoke(trampoline, target, "echoUser", Long.MIN_VALUE));
+            assertEquals(Long.MIN_VALUE, invoke(trampoline, target, "echoUser", Long.MAX_VALUE));
             assertEquals(
-                    Long.MAX_VALUE, invoke(trampoline, target, "echo_generated", Long.MIN_VALUE));
+                    Long.MAX_VALUE, invoke(trampoline, target, "echoGenerated", Long.MIN_VALUE));
             assertEquals(
-                    Long.MIN_VALUE, invoke(trampoline, target, "echo_generated", Long.MAX_VALUE));
-            assertEquals(Long.MIN_VALUE, invoke(trampoline, target, "_state", Long.MIN_VALUE));
-            assertEquals(Long.MAX_VALUE, invoke(trampoline, target, "_state", Long.MAX_VALUE));
+                    Long.MIN_VALUE, invoke(trampoline, target, "echoGenerated", Long.MAX_VALUE));
+            assertEquals(Long.MIN_VALUE, invoke(trampoline, target, "state", Long.MIN_VALUE));
+            assertEquals(Long.MAX_VALUE, invoke(trampoline, target, "state", Long.MAX_VALUE));
 
             trampoline
                     .getMethod("setProperty", Object.class, String.class, Object.class)
@@ -80,18 +80,16 @@ class FoundryEnumTrampolineGenerationTest {
 
             assertInvocationFailure(
                     "Expected boxed Long for enum demo.UserState",
-                    () -> invoke.invoke(null, target, "echo_user", (Object) new Object[] {1}));
+                    () -> invoke.invoke(null, target, "echoUser", (Object) new Object[] {1}));
             assertInvocationFailure(
                     "Expected boxed Long for enum demo.UserState",
-                    () -> invoke.invoke(null, target, "echo_user", (Object) new Object[] {null}));
+                    () -> invoke.invoke(null, target, "echoUser", (Object) new Object[] {null}));
             assertInvocationFailure(
                     "Unknown enum value 0 for demo.UserState",
-                    () -> invoke.invoke(null, target, "echo_user", (Object) new Object[] {0L}));
+                    () -> invoke.invoke(null, target, "echoUser", (Object) new Object[] {0L}));
             assertInvocationFailure(
                     "Unknown enum value 0 for demo.GeneratedState",
-                    () ->
-                            invoke.invoke(
-                                    null, target, "echo_generated", (Object) new Object[] {0L}));
+                    () -> invoke.invoke(null, target, "echoGenerated", (Object) new Object[] {0L}));
             assertEquals(0, intValue(target, "callCount"));
 
             for (Object invalid : new Object[] {1, null, 0L}) {
@@ -121,10 +119,10 @@ class FoundryEnumTrampolineGenerationTest {
 
             assertInvocationFailure(
                     "Cannot encode null enum demo.UserState",
-                    () -> invoke(trampoline, target, "null_user"));
+                    () -> invoke(trampoline, target, "nullUser"));
             assertInvocationFailure(
                     "Cannot encode null enum demo.GeneratedState",
-                    () -> invoke(trampoline, target, "null_generated"));
+                    () -> invoke(trampoline, target, "nullGenerated"));
         }
     }
 
@@ -219,21 +217,21 @@ class FoundryEnumTrampolineGenerationTest {
                     private UserState current = UserState.MAXIMUM;
                     private int calls;
                     private int mutations;
-                    @FoundryMethod(name = "echo_user")
+                    @FoundryMethod(name = "echoUser")
                     public UserState echoUser(UserState value) {
                         calls++;
                         return value == UserState.MINIMUM
                                 ? UserState.MAXIMUM : UserState.MINIMUM;
                     }
-                    @FoundryMethod(name = "echo_generated")
+                    @FoundryMethod(name = "echoGenerated")
                     public GeneratedState echoGenerated(GeneratedState value) {
                         calls++;
                         return value == GeneratedState.MINIMUM
                                 ? GeneratedState.MAXIMUM : GeneratedState.MINIMUM;
                     }
-                    @FoundryMethod(name = "null_user")
+                    @FoundryMethod(name = "nullUser")
                     public UserState nullUser() { return null; }
-                    @FoundryMethod(name = "null_generated")
+                    @FoundryMethod(name = "nullGenerated")
                     public GeneratedState nullGenerated() { return null; }
                     @FoundryOverride
                     public UserState state(UserState value) {

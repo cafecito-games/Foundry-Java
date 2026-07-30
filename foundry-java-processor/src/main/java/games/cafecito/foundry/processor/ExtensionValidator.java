@@ -109,6 +109,9 @@ final class ExtensionValidator {
         EnumInventory enumInventory = new EnumInventory();
         Map<String, Element> exportedNames = new LinkedHashMap<>();
         Map<String, VariableElement> propertyAccessors = new LinkedHashMap<>();
+        Map<String, Element> methodDispatchNames = new LinkedHashMap<>();
+        Map<String, Element> getterDispatchNames = new LinkedHashMap<>();
+        Map<String, Element> setterDispatchNames = new LinkedHashMap<>();
 
         for (Element member : extension.getEnclosedElements()) {
             annotation(member, CONSTANT)
@@ -131,6 +134,11 @@ final class ExtensionValidator {
                                 validateCallable(method, "exported method");
                                 validateMethodTypes(method, extension, enumInventory);
                                 checkDuplicate(exportedNames, exported, method);
+                                checkDispatchDuplicate(
+                                        methodDispatchNames,
+                                        method.getSimpleName().toString(),
+                                        method,
+                                        "method");
                                 methods.add(methodModel(method, exported));
                             });
             annotation(member, OVERRIDE)
@@ -164,6 +172,11 @@ final class ExtensionValidator {
                                                     + virtualIdentity.get());
                                 }
                                 checkDuplicate(exportedNames, exported, method);
+                                checkDispatchDuplicate(
+                                        methodDispatchNames,
+                                        method.getSimpleName().toString(),
+                                        method,
+                                        "method");
                                 overrides.add(methodModel(method, exported));
                             });
             annotation(member, PROPERTY)
@@ -176,6 +189,16 @@ final class ExtensionValidator {
                                 validateSupported(field.asType(), field, extension, enumInventory);
                                 validateProperty(extension, field, mirror, propertyAccessors);
                                 checkDuplicate(exportedNames, exported, field);
+                                checkAccessorDispatchDuplicate(
+                                        getterDispatchNames,
+                                        stringValue(mirror, "getter"),
+                                        field,
+                                        "property getter");
+                                checkAccessorDispatchDuplicate(
+                                        setterDispatchNames,
+                                        stringValue(mirror, "setter"),
+                                        field,
+                                        "property setter");
                                 properties.add(
                                         new ExtensionModel.PropertyModel(
                                                 field.getSimpleName().toString(),
@@ -1039,6 +1062,35 @@ final class ExtensionValidator {
     private static final class EnumInventory {
         private final Map<String, ExtensionModel.EnumModel> models = new LinkedHashMap<>();
         private boolean valid = true;
+    }
+
+    /**
+     * Rejects members that would share a generated dispatch key.
+     *
+     * <p>The native bridge resolves an exported name to a member descriptor and then dispatches
+     * into the generated trampoline by that descriptor's Java name, so two exported members of one
+     * class cannot share a Java name even when their exported names differ.
+     */
+    private void checkDispatchDuplicate(
+            Map<String, Element> names, String name, Element element, String kind) {
+        Element previous = names.putIfAbsent(name, element);
+        if (previous != null) {
+            error(
+                    element,
+                    "duplicate Java "
+                            + kind
+                            + " name "
+                            + name
+                            + "; exported members are dispatched by Java name and must not share one");
+        }
+    }
+
+    private void checkAccessorDispatchDuplicate(
+            Map<String, Element> names, String name, Element element, String kind) {
+        if (name.isEmpty()) {
+            return;
+        }
+        checkDispatchDuplicate(names, name, element, kind);
     }
 
     private void checkDuplicate(Map<String, Element> names, String name, Element element) {

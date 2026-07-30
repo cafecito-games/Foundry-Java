@@ -92,13 +92,14 @@ struct ScopedPropertyInfo {
 											 hint(services, "") {
 		info.type = type.abi_type;
 		info.name = name.mutable_get();
-		info.class_name =
-				type.class_name.empty() ? nullptr : class_name.mutable_get();
+		// The engine copies `class_name` unconditionally, so a type without an
+		// engine class must still be handed constructed (empty) StringName
+		// storage rather than a null pointer.
+		info.class_name = class_name.mutable_get();
 		info.hint = 0;
 		info.hint_string = hint.mutable_get();
 		info.usage = 6;
-		valid = name && hint &&
-				(type.class_name.empty() || static_cast<bool>(class_name));
+		valid = name && class_name && hint;
 	}
 
 	ScopedName name;
@@ -283,11 +284,13 @@ bool register_property_common(
 	ScopedName setter(*services, registration.setter);
 	ScopedName getter(*services, registration.getter);
 	ScopedPropertyInfo property(*services, registration.name, registration.type);
-	if (!class_name || !getter || !property.valid ||
-			(!registration.setter.empty() && !setter)) {
+	if (!class_name || !setter || !getter || !property.valid) {
 		return false;
 	}
-	const auto setter_name = registration.setter.empty() ? nullptr : setter.get();
+	// A read-only property has no setter, but the engine copies the setter name
+	// unconditionally and treats an empty StringName as absent, so pass the
+	// constructed empty storage instead of a null pointer.
+	const auto setter_name = setter.get();
 	if (indexed) {
 		services->classdb_register_extension_class_property_indexed(
 				library, class_name.get(), &property.info, setter_name, getter.get(),
