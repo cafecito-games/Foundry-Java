@@ -55,7 +55,8 @@ following conservative safe-to-skip set:
 All other paths run the gate. In particular, production module sources, samples, acceptance
 projects, generated API inputs, Gradle build logic, dependency declarations and locks, engine-pin
 files, shell verification scripts, and workflow definitions are relevant. A pull request containing
-both safe-to-skip and relevant paths runs the gate.
+both safe-to-skip and relevant paths runs the gate. A renamed file is classified by both its old and
+new path, so moving a production file into a safe-to-skip tree still runs the gate.
 
 The classifier fails closed: an API error, an empty or malformed changed-file response, or any path
 outside the explicit safe-to-skip set produces `run=true`. A newly introduced directory therefore
