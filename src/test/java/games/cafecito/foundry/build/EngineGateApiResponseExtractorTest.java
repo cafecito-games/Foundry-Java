@@ -14,36 +14,40 @@ class EngineGateApiResponseExtractorTest {
     private static final Path ROOT = Path.of("").toAbsolutePath();
 
     @Test
-    void extractsCurrentAndPreviousPathsFromEveryPageInApiOrder() throws Exception {
+    void extractsEveryDocumentedStatusAndPreviousPathInApiOrder() throws Exception {
         Result result =
                 extract(
-                        "4",
+                        "7",
                         """
                         [
                           [
-                            {"filename":"docs/guide.md","status":"added"},
-                            {
-                              "filename":"src/modified.java",
-                              "previous_filename":"src/prior-modified.java",
-                              "status":"modified"
-                            },
-                            {"filename":"src/removed.java","status":"removed"}
+                            {"filename":"src/added.java","status":"added"},
+                            {"filename":"src/removed.java","status":"removed"},
+                            {"filename":"src/modified.java","status":"modified"}
                           ],
                           [
                             {
-                              "filename":"src/current.java",
-                              "previous_filename":"src/previous.java",
+                              "filename":"src/renamed.java",
+                              "previous_filename":"src/prior-renamed.java",
                               "status":"renamed"
-                            }
+                            },
+                            {"filename":"src/copied.java","status":"copied"},
+                            {
+                              "filename":"src/changed.java",
+                              "previous_filename":"src/prior-changed.java",
+                              "status":"changed"
+                            },
+                            {"filename":"src/unchanged.java","status":"unchanged"}
                           ]
                         ]
                         """);
 
         assertEquals(0, result.status(), result.stderr());
         assertEquals(
-                "[\"docs/guide.md\",\"src/modified.java\",\"src/prior-modified.java\","
-                        + "\"src/removed.java\",\"src/current.java\","
-                        + "\"src/previous.java\"]\n",
+                "[\"src/added.java\",\"src/removed.java\",\"src/modified.java\","
+                        + "\"src/renamed.java\",\"src/prior-renamed.java\",\"src/copied.java\","
+                        + "\"src/changed.java\",\"src/prior-changed.java\","
+                        + "\"src/unchanged.java\"]\n",
                 result.stdout());
         assertEquals("", result.stderr());
     }
@@ -108,6 +112,36 @@ class EngineGateApiResponseExtractorTest {
         for (Map.Entry<String, String> fixture : malformed.entrySet()) {
             assertSilentFailure(extract("1", fixture.getValue()), 1, fixture.getKey());
         }
+    }
+
+    @Test
+    void unknownStatusIsRejectedSilently() throws Exception {
+        assertSilentFailure(
+                extract(
+                        "1",
+                        "[[{\"filename\":\"private/status-unknown.java\","
+                                + "\"status\":\"banana\"}]]"),
+                1);
+    }
+
+    @Test
+    void statusWithTrailingWhitespaceIsRejectedSilently() throws Exception {
+        assertSilentFailure(
+                extract(
+                        "1",
+                        "[[{\"filename\":\"private/status-whitespace.java\","
+                                + "\"status\":\"renamed \"}]]"),
+                1);
+    }
+
+    @Test
+    void presentNullPreviousFilenameIsRejectedSilently() throws Exception {
+        assertSilentFailure(
+                extract(
+                        "1",
+                        "[[{\"filename\":\"private/current-null.java\","
+                                + "\"previous_filename\":null,\"status\":\"modified\"}]]"),
+                1);
     }
 
     @Test

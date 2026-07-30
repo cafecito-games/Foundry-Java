@@ -14,6 +14,14 @@ paths="$(
   jq -cse --argjson expected "$expected_count" '
     def reject: null | halt_error(1);
     def nonempty_string: type == "string" and length > 0;
+    def valid_status:
+      . == "added" or
+      . == "removed" or
+      . == "modified" or
+      . == "renamed" or
+      . == "copied" or
+      . == "changed" or
+      . == "unchanged";
 
     if length != 1 then
       reject
@@ -32,10 +40,9 @@ paths="$(
             elif any(
               $items[];
               ((.filename | nonempty_string) | not) or
-              ((.status | nonempty_string) | not) or
+              ((.status | valid_status) | not) or
               (
                 has("previous_filename") and
-                .previous_filename != null and
                 ((.previous_filename | nonempty_string) | not)
               ) or
               (
@@ -52,7 +59,7 @@ paths="$(
                 $items[]
                 | .filename,
                   (
-                    if has("previous_filename") and .previous_filename != null then
+                    if has("previous_filename") then
                       .previous_filename
                     else
                       empty
