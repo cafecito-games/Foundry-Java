@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 class ReleasePipelineContractTest {
     private static final Path ROOT = Path.of("").toAbsolutePath();
     private static final String WORKFLOW = ".github/workflows/release.yml";
+    private static final String GATES_WORKFLOW = ".github/workflows/gates.yml";
     private static final String PRECONDITIONS = "gradle/verify-release-preconditions.sh";
     private static final String STAGE = "gradle/stage-release.sh";
     private static final String VERIFY_STAGED = "gradle/verify-staged-release.sh";
@@ -82,6 +83,7 @@ class ReleasePipelineContractTest {
     @Test
     void publicationIsTagDrivenAndOrderedAfterTheCompleteGateSet() throws IOException {
         String workflow = read(WORKFLOW);
+        String gates = read(GATES_WORKFLOW);
 
         assertTrue(workflow.contains("  push:\n    tags:\n      - 'v*'"));
         assertFalse(
@@ -92,29 +94,81 @@ class ReleasePipelineContractTest {
         // date is off, so branch protection cannot be the thing that orders publication after the
         // gates. The release workflow runs the complete gate set itself.
         for (String gateStep : GATE_STEPS) {
-            assertTrue(workflow.contains(gateStep), gateStep + " must run before publication");
+            assertTrue(gates.contains(gateStep), gateStep + " must run before publication");
         }
-        assertTrue(workflow.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
+        assertTrue(gates.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
 
-        int hostGate = workflow.indexOf("  host-gate:\n");
-        int deviceGate = workflow.indexOf("  device-gate:\n");
+        assertEquals(2, occurrences(gates, "- name: Build, test, and inspect the native bridge\n"));
+        String releaseBuild =
+                namedWorkflowStep(gates, "Build, test, and inspect the native bridge", 2);
+        assertTrue(releaseBuild.contains("\n        if: inputs.release\n"));
+        for (String releaseGate :
+                List.of(
+                        ":foundry-java-runtime:verifyRuntimeApi",
+                        ":foundry-java-runtime:verifyGeneratedRealization",
+                        ":foundry-java-android:nativeAbiLayoutTest",
+                        ":foundry-java-android:nativeHostTest",
+                        ":foundry-java-android:nativeSanitizerTest",
+                        "bash gradle/verify-native-bridge.sh",
+                        "${RUNNER_TEMP}/foundry-java-release-check.log",
+                        "${RUNNER_TEMP}/foundry-java-release-native-verifier.log")) {
+            assertTrue(
+                    releaseBuild.contains(releaseGate),
+                    releaseGate + " must run in the release build step");
+        }
+
+        String releasePreconditions =
+                namedWorkflowStep(
+                        gates,
+                        "Verify the release preconditions with regenerated dependency locks");
+        assertTrue(
+                releasePreconditions.contains(
+                        "\n        if: inputs.release && github.event_name == 'push'\n"));
+        assertTrue(
+                releasePreconditions.contains(
+                        "./gradlew --no-daemon --write-locks resolveAndLockAll"));
+        assertTrue(releasePreconditions.contains("bash gradle/verify-release-preconditions.sh"));
+
+        String nonPushLockDrift =
+                namedWorkflowStep(gates, "Regenerate dependency locks and reject drift");
+        assertTrue(
+                nonPushLockDrift.contains(
+                        "\n        if: inputs.release && github.event_name != 'push'\n"));
+        assertTrue(
+                nonPushLockDrift.contains("./gradlew --no-daemon --write-locks resolveAndLockAll"));
+        assertTrue(nonPushLockDrift.contains("git status --porcelain --untracked-files=all --"));
+
+        for (String commonGate :
+                List.of(
+                        "Prove configuration cache reuse from clean outputs",
+                        "Create and launch the API 36 emulator",
+                        "Wait for observable emulator boot",
+                        "Run production startup twice in fresh processes",
+                        "Run the Java and Kotlin conformance matrix as consumer samples",
+                        "Run the engine-loaded API 36 conformance gate")) {
+            String commonStep = namedWorkflowStep(gates, commonGate);
+            assertFalse(
+                    commonStep.contains("\n        if:"), commonGate + " must run in every mode");
+        }
+
+        int gateCall = workflow.indexOf("  gates:\n");
         int stage = workflow.indexOf("  stage:\n");
         int publish = workflow.indexOf("  publish:\n");
-        assertTrue(hostGate > 0 && deviceGate > 0 && stage > 0 && publish > 0);
-        assertTrue(stage > deviceGate && stage > hostGate, "staging follows both gate jobs");
+        assertTrue(gateCall > 0 && stage > gateCall, "staging follows the shared gate call");
         assertTrue(publish > stage, "publication follows staging");
-        assertTrue(workflow.contains("needs: [host-gate, device-gate]"));
+        assertTrue(workflow.contains("uses: ./.github/workflows/gates.yml"));
+        assertTrue(workflow.contains("release: true"));
+        assertTrue(workflow.contains("needs: [gates]"));
         assertTrue(workflow.contains("needs: [stage]"));
 
         // The engine-loaded gate downloads a roughly 1.1 GB export template and builds five
         // exports, so the device gate keeps the same budget the pull-request gate uses.
-        assertTrue(workflow.contains("timeout-minutes: 150"));
-        assertTrue(workflow.contains("FOUNDRY_ENGINE_CACHE"));
+        assertTrue(gates.contains("timeout-minutes: 150"));
+        assertTrue(gates.contains("FOUNDRY_ENGINE_CACHE"));
 
         // No publication task may appear in any gate job.
-        String gateSection = workflow.substring(hostGate, stage);
-        assertFalse(gateSection.contains("upload-staged-release"));
-        assertFalse(gateSection.contains("stage-release.sh"));
+        assertFalse(gates.contains("upload-staged-release"));
+        assertFalse(gates.contains("stage-release.sh"));
     }
 
     @Test
@@ -369,6 +423,7 @@ class ReleasePipelineContractTest {
             throws IOException {
         String dryRun = read(DRY_RUN);
         String workflow = read(WORKFLOW);
+        String gates = read(GATES_WORKFLOW);
 
         assertTrue(dryRun.contains("verify-release-reproducibility.sh"));
         assertTrue(dryRun.contains("verify-staged-release.sh"));
@@ -391,9 +446,10 @@ class ReleasePipelineContractTest {
         // A dispatch that opts out of the dry run cannot release anything, so it is refused rather
         // than reported as a successful run that did nothing.
         assertTrue(
-                workflow.contains(
-                        "if: github.event_name == 'workflow_dispatch' && !inputs.dry_run"));
-        assertTrue(workflow.contains("A real release is a tag push."));
+                gates.contains(
+                        "if: inputs.release && github.event_name == 'workflow_dispatch'"
+                                + " && !inputs.dry_run"));
+        assertTrue(gates.contains("A real release is a tag push."));
     }
 
     @Test
@@ -542,6 +598,25 @@ class ReleasePipelineContractTest {
 
     private static int occurrences(String value, String needle) {
         return value.split(Pattern.quote(needle), -1).length - 1;
+    }
+
+    private static String namedWorkflowStep(String workflow, String name) {
+        assertEquals(
+                1,
+                occurrences(workflow, "- name: " + name + "\n"),
+                name + " must identify one workflow step");
+        return namedWorkflowStep(workflow, name, 1);
+    }
+
+    private static String namedWorkflowStep(String workflow, String name, int occurrence) {
+        String marker = "- name: " + name + "\n";
+        int start = -1;
+        for (int found = 0; found < occurrence; found++) {
+            start = workflow.indexOf(marker, start + 1);
+            assertTrue(start >= 0, name + " occurrence " + occurrence + " must exist");
+        }
+        int end = workflow.indexOf("\n      - ", start + marker.length());
+        return workflow.substring(start, end >= 0 ? end : workflow.length());
     }
 
     private static String read(String relativePath) throws IOException {
