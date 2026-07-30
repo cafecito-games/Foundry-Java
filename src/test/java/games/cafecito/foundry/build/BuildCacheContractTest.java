@@ -99,6 +99,24 @@ class BuildCacheContractTest {
         assertEquals(2, occurrences(androidBuild, "toolchain.set(nativeToolchain)"));
         assertTrue(androidBuild.contains(": CommandLineArgumentProvider {"));
         assertTrue(androidBuild.contains("inputs.property(\"cmakeVersion\", cmakeVersion)"));
+
+        // CMakeLists.txt reads RUNTIME_CONTRACT_VERSION out of this file and configures it into a
+        // generated header, so it decides what the native tests compile even though it sits outside
+        // every source tree they declare. It has to be an input of the tasks and a configure
+        // dependency of CMake: the first stops a stale entry being replayed, the second stops a
+        // kept
+        // build tree from compiling the previous contract version.
+        assertEquals(2, occurrences(androidBuild, "inputs.file(runtimeContractSource)"));
+        assertTrue(
+                androidBuild.contains(
+                        "src/main/java/games/cafecito/foundry/runtime/FoundryRuntime.java"));
+        String cmakeLists = read("foundry-java-android/src/main/cpp/CMakeLists.txt");
+        int configureDepends = cmakeLists.indexOf("PROPERTY CMAKE_CONFIGURE_DEPENDS");
+        assertTrue(configureDepends > 0);
+        assertTrue(
+                cmakeLists
+                        .substring(configureDepends, cmakeLists.indexOf(")", configureDepends))
+                        .contains("${FOUNDRY_JAVA_RUNTIME_SOURCE}"));
         // providers.exec is what keeps the version probes compatible with
         // --configuration-cache-problems=fail.
         assertTrue(androidBuild.contains(".exec {"));

@@ -136,6 +136,15 @@ afterEvaluate {
 val nativeTestScript = rootProject.layout.projectDirectory.file("gradle/run-native-tests.sh")
 val nativeAbiLayoutScript = rootProject.layout.projectDirectory.file("gradle/verify-native-abi-layout.sh")
 
+// src/main/cpp/CMakeLists.txt reads RUNTIME_CONTRACT_VERSION out of this file and configures it into
+// foundry_java_contract.h, so the native tests' result depends on it. It sits outside every source
+// tree they declare, and without it a change to the contract version could replay an entry built
+// against the previous one — the tests would report success having compiled neither.
+val runtimeContractSource =
+    project(":foundry-java-runtime")
+        .layout.projectDirectory
+        .file("src/main/java/games/cafecito/foundry/runtime/FoundryRuntime.java")
+
 // Exec puts `executable` and `args` into the build cache key but not `workingDir`, so every path
 // these three tasks name is relative to the repository root. That is what makes an entry stored by
 // one checkout replayable by another; gradle/verify-build-cache-portability.sh proves it.
@@ -262,6 +271,7 @@ val nativeHostTest =
                 fileTree("src/androidTest/cpp"),
                 rootProject.fileTree("api/current"),
             ).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(runtimeContractSource).withPathSensitivity(PathSensitivity.NONE)
         inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
         argumentProviders.add(
@@ -289,6 +299,7 @@ val nativeSanitizerTest =
                 fileTree("src/androidTest/cpp"),
                 rootProject.fileTree("api/current"),
             ).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(runtimeContractSource).withPathSensitivity(PathSensitivity.NONE)
         inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
         argumentProviders.add(
