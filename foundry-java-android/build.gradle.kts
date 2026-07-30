@@ -187,7 +187,13 @@ val cmakeVersion = firstLineOf("cmake", "--version")
 // The compiler is whichever one CMake selects, and these variables are what steer that choice, so
 // their values belong in the key alongside the version strings: an entry built under a CXXFLAGS
 // override must not stand in for a default build.
+//
+// Everything CMake itself reads from the environment is captured by prefix rather than by name.
+// CMAKE_GENERATOR, CMAKE_TOOLCHAIN_FILE, CMAKE_PREFIX_PATH and their relatives all change what gets
+// configured and built, and a hand-maintained list of them is a list that falls behind — the same
+// reason the repository contract suites are excluded from replay rather than given an input list.
 val compilerVariables = listOf("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")
+val cmakeEnvironment = providers.environmentVariablesPrefixedBy("CMAKE_")
 
 val nativeToolchain =
     providers.provider {
@@ -211,7 +217,12 @@ val nativeToolchain =
             compilerVariables.map { name ->
                 "$name=" + providers.environmentVariable(name).getOrElse("")
             }
-        (probes + overrides).joinToString("\n")
+        val cmakeOverrides =
+            cmakeEnvironment
+                .getOrElse(emptyMap())
+                .toSortedMap()
+                .map { (name, value) -> "$name=$value" }
+        (probes + overrides + cmakeOverrides).joinToString("\n")
     }
 
 // The signature is handed to the script as well as declared in the key, so there is exactly one

@@ -120,6 +120,9 @@ class BuildCacheContractTest {
         // providers.exec is what keeps the version probes compatible with
         // --configuration-cache-problems=fail.
         assertTrue(androidBuild.contains(".exec {"));
+        // Everything CMake reads from the environment is captured by prefix, not by name. A list of
+        // names is a list that falls behind, and each omission is a silent false green.
+        assertTrue(androidBuild.contains("environmentVariablesPrefixedBy(\"CMAKE_\")"));
         for (String variable : List.of("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")) {
             assertTrue(
                     androidBuild.contains('"' + variable + '"'),
