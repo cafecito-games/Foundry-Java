@@ -89,13 +89,25 @@ class BuildCacheContractTest {
         assertTrue(
                 read("foundry-java-kotlin/verify-kotlin-api.sh").contains("${FOUNDRY_JDK_BIN:+"));
 
-        // The native tests run host compilers that are not declared inputs, so a result is only
-        // transferable to a machine of the same shape.
+        // The native tasks shell out to cmake, ctest and a host C++ compiler, none of which Gradle
+        // can see. Without the toolchain in the key an entry produced under one compiler would
+        // suppress the verification under another and the check would go green having run nothing,
+        // so the host platform on its own is not enough.
+        String androidBuild = read("foundry-java-android/build.gradle.kts");
         assertEquals(
-                3,
-                occurrences(
-                        read("foundry-java-android/build.gradle.kts"),
-                        "inputs.property(\"hostPlatform\", hostPlatform)"));
+                3, occurrences(androidBuild, "inputs.property(\"hostPlatform\", hostPlatform)"));
+        assertEquals(
+                2,
+                occurrences(androidBuild, "inputs.property(\"nativeToolchain\", nativeToolchain)"));
+        assertTrue(androidBuild.contains("inputs.property(\"cmakeVersion\", cmakeVersion)"));
+        // providers.exec is what keeps the version probes compatible with
+        // --configuration-cache-problems=fail.
+        assertTrue(androidBuild.contains(".exec {"));
+        for (String variable : List.of("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")) {
+            assertTrue(
+                    androidBuild.contains('"' + variable + '"'),
+                    variable + " steers the compiler CMake selects and must be in the key");
+        }
     }
 
     @Test

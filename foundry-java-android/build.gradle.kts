@@ -140,12 +140,49 @@ val nativeAbiLayoutScript = rootProject.layout.projectDirectory.file("gradle/ver
 // one checkout replayable by another; gradle/verify-build-cache-portability.sh proves it.
 fun rootRelative(path: File): String = path.relativeTo(rootDir).invariantSeparatorsPath
 
-// These three run host compilers, ctest and cmake, none of which is a declared input, so a result is
-// only transferable to a machine of the same shape. Naming the host platform in the key keeps a
-// macOS developer's entry from standing in for the Linux verification CI is there to perform. The
-// residual exposure is compiler-version drift within one platform; the verification report records
-// the exact toolchain so a surprising hit can be traced.
+// These three shell out to cmake, ctest and a host C++ compiler, none of which Gradle can see as a
+// declared input. Making them cacheable therefore requires naming the toolchain in the key: without
+// it, an entry produced under one compiler would suppress the verification under another, and the
+// check would go green having run nothing. The host platform alone is not sufficient — a compiler
+// upgrade, a sanitizer behaviour change or a CXXFLAGS override all change what these tasks prove
+// while leaving the platform identical.
+//
+// providers.exec is what keeps the version probes compatible with
+// --configuration-cache-problems=fail, and both probes emit a stable line, so they do not churn the
+// configuration cache between runs.
 val hostPlatform = "${System.getProperty("os.name")}/${System.getProperty("os.arch")}"
+
+fun firstLineOf(vararg command: String): Provider<String> =
+    providers
+        .exec {
+            commandLine(*command)
+            isIgnoreExitValue = true
+        }.standardOutput.asText
+        .map { output ->
+            output
+                .lineSequence()
+                .firstOrNull()
+                .orEmpty()
+                .trim()
+        }
+
+val cmakeVersion = firstLineOf("cmake", "--version")
+
+// The compiler is whichever one CMake selects, and these variables are what steer that choice, so
+// their values belong in the key alongside the version strings: an entry built under a CXXFLAGS
+// override must not stand in for a default build.
+val compilerVariables = listOf("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS")
+
+val nativeToolchain =
+    providers.provider {
+        val compiler = providers.environmentVariable("CXX").getOrElse("c++")
+        val probes = listOf(cmakeVersion.get(), firstLineOf(compiler, "--version").get())
+        val overrides =
+            compilerVariables.map { name ->
+                "$name=" + providers.environmentVariable(name).getOrElse("")
+            }
+        (probes + overrides).joinToString("\n")
+    }
 
 val nativeAbiLayoutReport =
     layout.buildDirectory.file("reports/native-abi-layout/verification.txt")
@@ -163,6 +200,8 @@ val nativeAbiLayoutTest =
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nativeAbiLayoutScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
+        // Script mode only: no compiler participates, so cmake is the whole toolchain here.
+        inputs.property("cmakeVersion", cmakeVersion)
         outputs.file(nativeAbiLayoutReport).withPropertyName("verificationReport")
         outputs.cacheIf("ABI layout generation and its rejections are deterministic") { true }
         workingDir = rootDir
@@ -192,6 +231,7 @@ val nativeHostTest =
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
+        inputs.property("nativeToolchain", nativeToolchain)
         outputs
             .dir(layout.buildDirectory.dir("native-host/report"))
             .withPropertyName("verificationReport")
@@ -214,6 +254,7 @@ val nativeSanitizerTest =
             ).withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
         inputs.property("hostPlatform", hostPlatform)
+        inputs.property("nativeToolchain", nativeToolchain)
         outputs
             .dir(layout.buildDirectory.dir("native-host-sanitized/report"))
             .withPropertyName("verificationReport")
