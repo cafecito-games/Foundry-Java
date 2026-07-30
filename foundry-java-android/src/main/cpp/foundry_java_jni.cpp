@@ -3111,7 +3111,13 @@ public:
 						decoded = false;
 						break;
 					}
+					// One property may expose a single overloaded Java accessor as both its
+					// getter and its setter, which is the documented authoring idiom. That
+					// name is already mapped to this property's type, so inserting it again
+					// is a no-op rather than the accessor collision this guards against: two
+					// different properties claiming one accessor name still conflict here.
 					if (native.property && !native.property->setter.empty() &&
+							native.property->setter != getter &&
 							!access->properties_by_name
 									.emplace(native.property->setter, type.type)
 									.second) {
