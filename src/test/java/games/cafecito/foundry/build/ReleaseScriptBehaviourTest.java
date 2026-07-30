@@ -196,9 +196,7 @@ class ReleaseScriptBehaviourTest {
             throws Exception {
         Path staging = newStagedRelease(directory);
         Path jar = artifact(staging, "foundry-java-runtime", "jar", "");
-        Files.writeString(
-                jar.resolveSibling(jar.getFileName() + ".sha256"),
-                "0".repeat(64) + "\n");
+        Files.writeString(jar.resolveSibling(jar.getFileName() + ".sha256"), "0".repeat(64) + "\n");
 
         Result result = verifyStaged(staging);
 
@@ -227,9 +225,7 @@ class ReleaseScriptBehaviourTest {
         Path staging = newStagedRelease(directory);
         Path pom = artifact(staging, "foundry-java-runtime", "pom", "");
         Files.writeString(
-                pom,
-                Files.readString(pom)
-                        .replaceAll("(?s)<developers>.*</developers>", ""));
+                pom, Files.readString(pom).replaceAll("(?s)<developers>.*</developers>", ""));
         sign(pom);
         writeChecksums(pom);
 
@@ -293,9 +289,7 @@ class ReleaseScriptBehaviourTest {
                         "central");
 
         assertNotEquals(0, result.exitCode(), result.output());
-        assertTrue(
-                result.output().contains("FOUNDRY_CENTRAL_PORTAL_TOKEN"),
-                result.output());
+        assertTrue(result.output().contains("FOUNDRY_CENTRAL_PORTAL_TOKEN"), result.output());
     }
 
     private Result preconditions(Path repository, String tag) throws Exception {
@@ -358,7 +352,8 @@ class ReleaseScriptBehaviourTest {
         Files.writeString(
                 repository.resolve("settings-gradle.lockfile"), "empty=incomingCatalog\n");
         assertEquals(0, git(repository, "init", "--initial-branch=main").exitCode());
-        assertEquals(0, git(repository, "config", "user.email", "release@cafecito.games").exitCode());
+        assertEquals(
+                0, git(repository, "config", "user.email", "release@cafecito.games").exitCode());
         assertEquals(0, git(repository, "config", "user.name", "Foundry Release").exitCode());
         assertEquals(0, git(repository, "add", "-A").exitCode());
         assertEquals(0, git(repository, "commit", "-m", "initial").exitCode());
@@ -554,7 +549,8 @@ class ReleaseScriptBehaviourTest {
                         packaging);
     }
 
-    private static Result run(Path workingDirectory, Map<String, String> environment, String... command)
+    private static Result run(
+            Path workingDirectory, Map<String, String> environment, String... command)
             throws Exception {
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(workingDirectory.toFile());

@@ -937,6 +937,7 @@ val requiredModuleDependencies =
         testPublicationDirectory to
             "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
     )
+
 // Every published module carries its main archive plus the sources and Javadoc archives Maven
 // Central requires, and Gradle module metadata names all three.
 fun moduleArtifactNames(

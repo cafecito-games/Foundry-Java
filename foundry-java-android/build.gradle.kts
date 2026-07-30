@@ -99,7 +99,12 @@ val releaseJavadoc =
         description = "Builds the published Javadoc for the release variant."
         source = fileTree("src/main/java") { include("**/*.java") }
         classpath = files(configurations.named("releaseCompileClasspath"), android.bootClasspath)
-        setDestinationDir(layout.buildDirectory.dir("docs/releaseJavadoc").get().asFile)
+        setDestinationDir(
+            layout.buildDirectory
+                .dir("docs/releaseJavadoc")
+                .get()
+                .asFile,
+        )
         (options as StandardJavadocDocletOptions).apply {
             // Javadoc stamps its generation date into every page, which would make the archive
             // differ between two builds of the same commit.

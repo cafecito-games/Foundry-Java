@@ -17,11 +17,11 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The legs that need real credentials — an upload to Maven Central, a Central Portal token, a
  * production signing key — cannot run here. This test therefore owns everything about the pipeline
- * that is verifiable from the repository itself: that publication is tag-driven and ordered strictly
- * after the complete gate set, that every refusal is implemented, that signing and verification
- * precede any upload, that secrets are scoped to the release workflow and never echoed, and that the
- * documented process matches the automation. {@link ReleaseScriptBehaviourTest} executes the
- * refusals and the staged-repository verifier for real.
+ * that is verifiable from the repository itself: that publication is tag-driven and ordered
+ * strictly after the complete gate set, that every refusal is implemented, that signing and
+ * verification precede any upload, that secrets are scoped to the release workflow and never
+ * echoed, and that the documented process matches the automation. {@link
+ * ReleaseScriptBehaviourTest} executes the refusals and the staged-repository verifier for real.
  */
 class ReleasePipelineContractTest {
     private static final Path ROOT = Path.of("").toAbsolutePath();
@@ -81,7 +81,8 @@ class ReleasePipelineContractTest {
         String workflow = read(WORKFLOW);
 
         assertTrue(workflow.contains("  push:\n    tags:\n      - 'v*'"));
-        assertFalse(workflow.contains("pull_request"), "a release must never run for a pull request");
+        assertFalse(
+                workflow.contains("pull_request"), "a release must never run for a pull request");
         assertTrue(workflow.contains("concurrency:"));
 
         // Only `check` is a required status context on this repository, and require-branches-up-to-
@@ -134,8 +135,7 @@ class ReleasePipelineContractTest {
 
         // The declared project version is checked in, so a tag can genuinely disagree with it.
         String properties = read("gradle.properties");
-        Matcher declared =
-                Pattern.compile("(?m)^foundryVersion=(\\S+)$").matcher(properties);
+        Matcher declared = Pattern.compile("(?m)^foundryVersion=(\\S+)$").matcher(properties);
         assertTrue(declared.find(), "gradle.properties must declare foundryVersion");
         assertFalse(declared.group(1).contains("SNAPSHOT"), "the declared version is a release");
 
@@ -220,7 +220,8 @@ class ReleasePipelineContractTest {
             assertTrue(rootBuild.contains(module + "|jar|javadoc|"), module + " javadoc");
         }
 
-        // The declared topology the staged-release verifier enforces and the publication topology the
+        // The declared topology the staged-release verifier enforces and the publication topology
+        // the
         // build configures are the same topology, so they are compared here and cannot drift.
         List<String> topology =
                 read("gradle/release-topology.txt")
@@ -232,10 +233,11 @@ class ReleasePipelineContractTest {
             String[] fields = coordinate.split(":");
             assertEquals(4, fields.length, coordinate);
             assertTrue(rootBuild.contains(fields[1]), fields[1] + " must be a published module");
-            assertTrue(
-                    List.of("jar", "aar", "pom").contains(fields[2]), coordinate + " packaging");
+            assertTrue(List.of("jar", "aar", "pom").contains(fields[2]), coordinate + " packaging");
         }
-        assertTrue(topology.contains("games.cafecito.foundry:foundry-java-runtime:jar:sourcesElements+javadocElements"));
+        assertTrue(
+                topology.contains(
+                        "games.cafecito.foundry:foundry-java-runtime:jar:sourcesElements+javadocElements"));
         // The Android library plugin's own Javadoc generation cannot read Java records in a
         // dependency, so that Javadoc is a Maven artifact rather than a Gradle variant.
         assertTrue(
@@ -307,7 +309,8 @@ class ReleasePipelineContractTest {
             assertFalse(workflow.contains("echo ${{ secrets." + secret), secret);
             assertFalse(workflow.contains("printf '%s' \"${" + secret), secret);
         }
-        assertFalse(workflow.contains("::add-mask::"), "masking is not a substitute for not printing");
+        assertFalse(
+                workflow.contains("::add-mask::"), "masking is not a substitute for not printing");
         assertFalse(workflow.contains("set -x"), "tracing would expose secret arguments");
         assertTrue(workflow.contains("permissions:\n  contents: read"));
 
@@ -326,7 +329,8 @@ class ReleasePipelineContractTest {
         assertTrue(read(STAGE).contains("ORG_GRADLE_PROJECT_signingKey"));
         assertFalse(read(STAGE).contains("-Psigning"), "signing material never becomes a -P value");
 
-        // Signing is configured from a Gradle property supplied by that environment value, and it is
+        // Signing is configured from a Gradle property supplied by that environment value, and it
+        // is
         // only applied when key material is actually present, so an ordinary `check` configures no
         // signing at all.
         String rootBuild = read("build.gradle.kts");
@@ -345,7 +349,8 @@ class ReleasePipelineContractTest {
         assertTrue(dryRun.contains("verify-release-reproducibility.sh"));
         assertTrue(dryRun.contains("verify-staged-release.sh"));
         assertTrue(dryRun.contains("upload-staged-release.sh"));
-        assertTrue(dryRun.contains("--quick-generate-key"), "an ephemeral signing key is generated");
+        assertTrue(
+                dryRun.contains("--quick-generate-key"), "an ephemeral signing key is generated");
         assertTrue(dryRun.contains("GNUPGHOME"));
         assertTrue(dryRun.contains("staging"));
         assertTrue(
