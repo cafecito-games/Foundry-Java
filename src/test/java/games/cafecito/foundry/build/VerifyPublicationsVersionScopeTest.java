@@ -19,8 +19,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The task walks {@code build/repository} for files with a given extension, relativizes each
  * file's parent directory, and compares the resulting set against an exact expected topology.
- * Without scoping by version, a repository holding publications for two versions (for example,
- * from running {@code ./gradlew check} and then {@code ./gradlew -PfoundryVersion=0.1.0
+ * Without scoping by version, a repository holding publications for two versions (for example, from
+ * running {@code ./gradlew check} and then {@code ./gradlew -PfoundryVersion=0.1.0
  * verifyPublications}) reports the union of both versions as a topology mismatch, even though
  * neither publication is actually wrong.
  */
@@ -45,7 +45,8 @@ class VerifyPublicationsVersionScopeTest {
     }
 
     @Test
-    void filteringByVersionSuffixIgnoresOtherVersionsStagedInTheSameRepository() throws IOException {
+    void filteringByVersionSuffixIgnoresOtherVersionsStagedInTheSameRepository()
+            throws IOException {
         Path repository = Files.createTempDirectory("verify-publications-version-scope-test");
         stagePom(repository, "games/cafecito/foundry/foundry-java-runtime/0.1.0");
         stagePom(repository, "games/cafecito/foundry/foundry-java-annotations/0.1.0");
