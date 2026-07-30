@@ -300,7 +300,12 @@ jobs:
       # version's artifact name across the whole repository, not by GITHUB_RUN_ID: a fresh tag-push
       # run must be able to see a still-unpublished deployment left by an earlier, different run, not
       # only by a rerun of this same run. Absence is established by listing artifacts, so a failing
-      # artifact service stops the release instead of being read as "no upload has happened yet".
+      # artifact service stops the release instead of being read as "no upload has happened yet". The
+      # completed record and the pre-upload intent marker are two distinct artifacts, never the same
+      # one overwritten in place: an overwrite is a delete followed by an upload, so if the runner is
+      # lost or that upload fails between the two, an overwritten artifact leaves neither the old nor
+      # the new record behind. The intent artifact is therefore written at most once and never touched
+      # again, so it always survives even if the later, completed-record artifact never gets uploaded.
       # `gh api --jq` takes one jq program, not additional jq CLI flags, so the artifact name is
       # embedded directly in the program; it is a git ref name, never attacker-controlled input.
       - name: Recover any record of a completed upload
@@ -309,24 +314,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          find_latest_run_with_artifact() {
+            local name="$1"
+            local matches
+            matches="$(
+              gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
+                --jq ".artifacts[]
+                  | select(.name == \"${name}\")
+                  | select(.expired == false)
+                  | [.created_at, (.workflow_run.id | tostring)]
+                  | @tsv"
+            )"
+            if [[ -z "$matches" ]]; then
+              return 1
+            fi
+            printf '%s\n' "$matches" | sort -r | awk -F'\t' 'NR == 1 { print $2 }'
+          }
           record_name="foundry-java-release-upload-record-${GITHUB_REF_NAME}"
-          records="$(
-            gh api --paginate \
-              "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
-              --jq ".artifacts[]
-                | select(.name == \"${record_name}\")
-                | select(.expired == false)
-                | [.created_at, (.workflow_run.id | tostring)]
-                | @tsv"
-          )"
-          if [[ -z "$records" ]]; then
-            printf 'No upload record exists for version %s yet.\n' "${GITHUB_REF_NAME#v}"
-            exit 0
+          intent_name="foundry-java-release-upload-intent-${GITHUB_REF_NAME}"
+          if run_id="$(find_latest_run_with_artifact "$record_name")"; then
+            gh run download "$run_id" \
+              --name "$record_name" \
+              --dir "${RUNNER_TEMP}/foundry-java-release/first"
+          elif run_id="$(find_latest_run_with_artifact "$intent_name")"; then
+            gh run download "$run_id" \
+              --name "$intent_name" \
+              --dir "${RUNNER_TEMP}/foundry-java-release/first"
+          else
+            printf 'No upload record or intent marker exists for version %s yet.\n' "${GITHUB_REF_NAME#v}"
           fi
-          recovered_run_id="$(printf '%s\n' "$records" | sort -r | awk -F'\t' 'NR == 1 { print $2 }')"
-          gh run download "$recovered_run_id" \
-            --name "$record_name" \
-            --dir "${RUNNER_TEMP}/foundry-java-release/first"
       # A unique token per attempt distinguishes "the intent marker on disk is the one this very
       # attempt just durably persisted" from "the intent marker on disk is a leftover from a different,
       # unresolved attempt" — the upload script refuses in the latter case, never assuming a stale
@@ -338,8 +355,11 @@ jobs:
       # A hard runner loss leaves no later step able to run, so the only way for the intent marker to
       # reliably survive that loss is to persist it durably, as its own artifact upload, strictly
       # before the irreversible Central call — not merely before the summary is written inside the
-      # same, potentially-killed step.
+      # same, potentially-killed step. Nothing is written if a record or marker was already recovered
+      # above: this step never overwrites an existing intent artifact, so that artifact stays a
+      # permanent, uncorrupted piece of evidence regardless of what happens afterward.
       - name: Persist the pre-upload intent marker before any irreversible call
+        id: persist_intent
         shell: bash
         env:
           FOUNDRY_RELEASE_UPLOAD_ATTEMPT: ${{ steps.attempt.outputs.id }}
@@ -348,6 +368,7 @@ jobs:
           staging="${RUNNER_TEMP}/foundry-java-release/first"
           if [[ -f "${staging}/upload-summary.json" || -f "${staging}/upload-intent.json" ]]; then
             printf 'A prior upload record or intent marker was recovered; leaving it for the publish step to evaluate.\n'
+            printf 'wrote=false\n' >> "$GITHUB_OUTPUT"
             exit 0
           fi
           {
@@ -359,17 +380,17 @@ jobs:
             printf '  "attempt": "%s"\n' "$FOUNDRY_RELEASE_UPLOAD_ATTEMPT"
             printf '}\n'
           } > "${staging}/upload-intent.json"
+          printf 'wrote=true\n' >> "$GITHUB_OUTPUT"
       - name: Record the pre-upload intent so a runner loss is still discoverable
-        if: always()
+        # Skipped when a prior record or marker was recovered instead, so this artifact is created at
+        # most once per version and is never overwritten afterward.
+        if: always() && steps.persist_intent.outputs.wrote == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: foundry-java-release-upload-record-${{ github.ref_name }}
-          if-no-files-found: ignore
-          overwrite: true
+          name: foundry-java-release-upload-intent-${{ github.ref_name }}
+          if-no-files-found: error
           retention-days: 90
-          path: |
-            ${{ runner.temp }}/foundry-java-release/first/upload-intent.json
-            ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
+          path: ${{ runner.temp }}/foundry-java-release/first/upload-intent.json
       - name: Publish the verified staged release
         shell: bash
         env:
@@ -381,8 +402,12 @@ jobs:
             "${RUNNER_TEMP}/foundry-java-release/first" \
             "${GITHUB_REF_NAME#v}" \
             central
-      # Uploaded again once the publish step above finishes, failed or not, so the completed record —
-      # or an intent marker the publish step itself refreshed — reaches its final state here too.
+      # A distinct artifact from the intent marker above, so completing the upload never has to
+      # overwrite — and therefore never has to delete — the durable evidence that an attempt began.
+      # This artifact may still legitimately need overwriting, for a rerun of this same job within one
+      # run, but that is safe now: the permanent, never-overwritten intent artifact above is the
+      # fallback evidence if that overwrite is ever interrupted, so no window is left where losing the
+      # runner leaves zero durable evidence that an attempt happened.
       - name: Record the completed upload so a re-run cannot republish
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -391,9 +416,7 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
           retention-days: 90
-          path: |
-            ${{ runner.temp }}/foundry-java-release/first/upload-intent.json
-            ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
+          path: ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
       - name: Upload publication evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

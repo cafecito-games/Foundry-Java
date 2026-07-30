@@ -440,9 +440,22 @@ class ReleasePipelineContractTest {
                         "name: foundry-java-release-upload-record-${{ github.ref_name }}"));
         assertTrue(
                 workflow.contains(
-                        "${{ runner.temp }}/foundry-java-release/first/upload-intent.json"),
-                "the intent marker must be captured as durable evidence too, not only the completed"
-                        + " record");
+                        "name: foundry-java-release-upload-intent-${{ github.ref_name }}"),
+                "the intent marker must be its own artifact, distinct from the completed record");
+        // The intent artifact must never be overwritten: an overwrite is a delete followed by an
+        // upload, and if the runner is lost between the two, the artifact is gone entirely, leaving
+        // no
+        // durable evidence at all that an attempt happened.
+        int intentArtifactUpload =
+                workflow.indexOf("name: foundry-java-release-upload-intent-${{ github.ref_name }}");
+        int recordArtifactUpload =
+                workflow.indexOf("name: foundry-java-release-upload-record-${{ github.ref_name }}");
+        String intentArtifactStep =
+                workflow.substring(intentArtifactUpload, intentArtifactUpload + 200);
+        assertFalse(intentArtifactStep.contains("overwrite"));
+        String recordArtifactStep =
+                workflow.substring(recordArtifactUpload, recordArtifactUpload + 200);
+        assertTrue(recordArtifactStep.contains("overwrite: true"));
         // Recovery must fail closed: only an empty artifact listing may be read as "not uploaded".
         assertFalse(workflow.contains("continue-on-error"));
         // Dedup is scoped by the release version's artifact name across the whole repository, not
@@ -454,6 +467,9 @@ class ReleasePipelineContractTest {
         assertTrue(
                 workflow.contains(
                         "record_name=\"foundry-java-release-upload-record-${GITHUB_REF_NAME}\""));
+        assertTrue(
+                workflow.contains(
+                        "intent_name=\"foundry-java-release-upload-intent-${GITHUB_REF_NAME}\""));
         // gh api --jq takes one jq program, not additional jq CLI flags such as --arg, so the query
         // must not rely on one.
         assertFalse(workflow.contains("--jq --arg"));
