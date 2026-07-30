@@ -245,6 +245,8 @@ class EngineLoadedConformanceGateContractTest {
     void continuousIntegrationRunsTheGateOnTheApi36EmulatorAndKeepsItsEvidence()
             throws IOException {
         String workflow = read(".github/workflows/gates.yml");
+        String ci = read(".github/workflows/ci.yml");
+        String release = read(".github/workflows/release.yml");
 
         assertTrue(workflow.contains("bash gradle/run-engine-loaded-conformance-gate.sh"));
         // The 1.1 GB export template archive is cached by release tag and digest, so the key must
@@ -258,6 +260,47 @@ class EngineLoadedConformanceGateContractTest {
                 workflow.indexOf("- name: Run the Java and Kotlin conformance matrix as consumer");
         assertTrue(gateStep > 0 && matrixStep > 0);
         assertTrue(gateStep > matrixStep, "the engine gate runs after the cheaper device legs");
+
+        int deviceJob = workflow.indexOf("  device-gate:\n");
+        assertTrue(deviceJob > 0);
+        String checkoutMarker = "      - uses: actions/checkout@";
+        int checkoutStart = workflow.indexOf(checkoutMarker, deviceJob);
+        int checkoutEnd = workflow.indexOf("\n      - ", checkoutStart + checkoutMarker.length());
+        assertTrue(checkoutStart > deviceJob && checkoutEnd > checkoutStart);
+        String scopeMarker =
+                "      - name: Classify whether this change needs the engine-loaded gate\n";
+        int scopeStart = workflow.indexOf(scopeMarker);
+        assertTrue(scopeStart > 0, "the device job must classify the pull request scope");
+        assertEquals(
+                checkoutEnd + 1,
+                scopeStart,
+                "the classifier must be the immediate next device step after checkout");
+        int scopeEnd = workflow.indexOf("\n      - ", scopeStart + scopeMarker.length());
+        String scopeStep = workflow.substring(scopeStart, scopeEnd);
+        assertTrue(scopeStep.contains("\n        id: engine-gate-scope\n"));
+        assertTrue(
+                scopeStep.contains(
+                        "if [[ \"${GITHUB_EVENT_NAME}\" != \"pull_request\" ]]; then\n"
+                                + "            select_gate true non-pull-request\n"
+                                + "            exit 0\n"
+                                + "          fi"));
+
+        int gateStepEnd = workflow.indexOf("\n      - ", gateStep + 1);
+        String engineStep = workflow.substring(gateStep, gateStepEnd);
+        assertTrue(
+                engineStep.startsWith(
+                        "- name: Run the engine-loaded API 36 conformance gate\n"
+                                + "        if: steps.engine-gate-scope.outputs.run == 'true'\n"
+                                + "        shell: bash\n"
+                                + "        run: bash"
+                                + " gradle/run-engine-loaded-conformance-gate.sh"),
+                "the engine step condition must immediately precede its shell and run command");
+
+        assertTrue(ci.contains("  push:\n    branches: [main]\n"));
+        assertTrue(ci.contains("  pull_request:\n"));
+        assertTrue(release.contains("  push:\n    tags:\n"));
+        assertTrue(release.contains("  workflow_dispatch:\n"));
+        assertFalse(release.contains("  pull_request:\n"));
     }
 
     @Test
@@ -276,6 +319,97 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(documentation.contains(RUNTIME_MARKER));
         assertTrue(documentation.contains("libfoundry_android.so"));
         assertTrue(compatibility.contains("engine-pin.md"));
+    }
+
+    @Test
+    void selectiveEngineGateCadenceIsDocumented() throws IOException {
+        String documentation = read("docs/engine-pin.md");
+        String cadence =
+                markdownSection(documentation, "## When the gate runs", "## Bumping the pin");
+        String normalizedCadence = cadence.replaceAll("\\s+", " ");
+        String normalizedReleasing = read("docs/releasing.md").replaceAll("\\s+", " ");
+
+        assertTrue(normalizedCadence.contains("## When the gate runs"));
+        assertTrue(normalizedCadence.contains("safe-to-skip"));
+        assertTrue(normalizedCadence.contains("all changed files"));
+        assertTrue(normalizedCadence.contains("Every push to `main`"));
+        assertTrue(normalizedCadence.contains("every release"));
+        assertTrue(normalizedCadence.contains("release dry-run"));
+        assertTrue(normalizedCadence.contains("unknown path"));
+        assertTrue(normalizedCadence.contains("gradle/extract-engine-gate-paths.sh"));
+        assertTrue(normalizedCadence.contains("gradle/classify-engine-gate-paths.sh"));
+        assertTrue(
+                normalizedCadence.contains("current and previous paths"),
+                "renames must be documented as checking both path identities");
+        for (String safeCategory :
+                List.of(
+                        "documentation",
+                        "Markdown",
+                        "branding assets",
+                        "issue or pull-request templates",
+                        "`src/test`",
+                        "`src/testFixtures`",
+                        "`gradle/testFixtures`")) {
+            assertTrue(
+                    normalizedCadence.contains(safeCategory),
+                    safeCategory + " must remain in the documented safe-to-skip set");
+        }
+        for (String alwaysOn :
+                List.of(
+                        "API 36 emulator",
+                        "production startup",
+                        "Java/Kotlin consumer matrix",
+                        "engine-loaded step is skipped")) {
+            assertTrue(
+                    normalizedCadence.contains(alwaysOn),
+                    alwaysOn + " must remain in the documented selective cadence");
+        }
+        assertTrue(normalizedCadence.contains("mixed change"));
+        assertTrue(normalizedCadence.contains("runs the gate"));
+        for (String failClosedDetail :
+                List.of(
+                        "Collection",
+                        "classification errors",
+                        "incomplete API response",
+                        "malformed metadata",
+                        "unknown GitHub file status",
+                        "event head and base",
+                        "Before and after file pagination",
+                        "duplicate current filenames",
+                        "fail closed")) {
+            assertTrue(
+                    normalizedCadence.contains(failClosedDetail),
+                    failClosedDetail + " must remain in the documented fail-closed policy");
+        }
+        assertTrue(
+                normalizedCadence.contains("exact changed-file count"),
+                "the extractor's exact count validation must be documented");
+        for (String status :
+                List.of(
+                        "added",
+                        "removed",
+                        "modified",
+                        "renamed",
+                        "copied",
+                        "changed",
+                        "unchanged")) {
+            assertTrue(
+                    normalizedCadence.contains("`" + status + "`"),
+                    status + " must remain in the documented GitHub status allowlist");
+        }
+        assertTrue(normalizedReleasing.contains("always selects the engine-loaded gate"));
+        assertTrue(normalizedReleasing.contains("pull-request-only optimization"));
+        assertTrue(normalizedReleasing.contains("cannot skip release verification"));
+    }
+
+    private static String markdownSection(
+            String documentation, String startHeading, String endHeading) {
+        int start = documentation.indexOf(startHeading);
+        int end = documentation.indexOf(endHeading);
+        assertTrue(start >= 0, startHeading + " must be present");
+        assertTrue(end >= 0, endHeading + " must be present");
+        assertTrue(end > start, endHeading + " must follow " + startHeading);
+        return documentation.substring(start, end);
     }
 
     private static List<String> quotedSymbols(String script) {

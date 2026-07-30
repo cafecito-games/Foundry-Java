@@ -78,6 +78,28 @@ Every manifest, diff, symbol dump, report, application-ID and manifest print, bo
 logcat is written under `${RUNNER_TEMP}/foundry-java-engine-gate` and uploaded on success and on
 failure alike.
 
+## When the gate runs
+
+Every push to `main` runs the engine-loaded gate, as does every release and release dry-run. A pull
+request always runs the API 36 emulator, production startup, and Java/Kotlin consumer matrix. Only
+the engine-loaded step is skipped, and only when all changed files belong to the explicit
+safe-to-skip set: documentation or Markdown, branding assets, issue or pull-request templates, and
+sources under `src/test`, `src/testFixtures`, or `gradle/testFixtures`.
+
+A mixed change or unknown path runs the gate. Before and after file pagination, the workflow
+requires the pull request's API metadata to match the event head and base and requires both API
+snapshots to match each other. This snapshot binding rejects file-list replacement even when the
+changed-file count stays the same. Collection or classification errors, an incomplete API response,
+malformed metadata, an unknown GitHub file status, and duplicate current filenames fail closed by
+running the gate. Renamed files are classified by both their current and previous paths.
+
+[`gradle/extract-engine-gate-paths.sh`](../gradle/extract-engine-gate-paths.sh) validates the
+paginated GitHub API response schema, rejects duplicate current filenames before count acceptance,
+validates the exact changed-file count, and accepts only the seven documented statuses (`added`,
+`removed`, `modified`, `renamed`, `copied`, `changed`, and `unchanged`).
+[`gradle/classify-engine-gate-paths.sh`](../gradle/classify-engine-gate-paths.sh) then applies the
+safe path policy.
+
 ## Bumping the pin
 
 1. Re-vendor the engine API for the new release first, so `api/current/provenance.json` records the

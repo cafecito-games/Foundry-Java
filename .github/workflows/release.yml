@@ -1,6 +1,6 @@
 name: Release
 
-# Publication is tag-driven. Only `check` is a required status context on this repository and
+# Publication is tag-driven. Only `check / check` is a required status context on this repository and
 # require-branches-up-to-date is off, so branch protection cannot be what orders publication after
 # the gates: this workflow calls the shared complete gate set and stages nothing until every gate job
 # has succeeded.
@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: release-${{ github.ref }}

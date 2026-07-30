@@ -90,9 +90,9 @@ class ReleasePipelineContractTest {
                 workflow.contains("pull_request"), "a release must never run for a pull request");
         assertTrue(workflow.contains("concurrency:"));
 
-        // Only `check` is a required status context on this repository, and require-branches-up-to-
-        // date is off, so branch protection cannot be the thing that orders publication after the
-        // gates. The release workflow runs the complete gate set itself.
+        // Only `check / check` is a required status context on this repository, and
+        // require-branches-up-to-date is off, so branch protection cannot be the thing that orders
+        // publication after the gates. The release workflow runs the complete gate set itself.
         for (String gateStep : GATE_STEPS) {
             assertTrue(gates.contains(gateStep), gateStep + " must run before publication");
         }
@@ -144,12 +144,31 @@ class ReleasePipelineContractTest {
                         "Create and launch the API 36 emulator",
                         "Wait for observable emulator boot",
                         "Run production startup twice in fresh processes",
-                        "Run the Java and Kotlin conformance matrix as consumer samples",
-                        "Run the engine-loaded API 36 conformance gate")) {
+                        "Run the Java and Kotlin conformance matrix as consumer samples")) {
             String commonStep = namedWorkflowStep(gates, commonGate);
             assertFalse(
                     commonStep.contains("\n        if:"), commonGate + " must run in every mode");
         }
+
+        String engineScope =
+                namedWorkflowStep(
+                        gates, "Classify whether this change needs the engine-loaded gate");
+        assertTrue(
+                engineScope.contains(
+                        "if [[ \"${GITHUB_EVENT_NAME}\" != \"pull_request\" ]]; then"));
+        assertTrue(
+                engineScope.contains("select_gate true non-pull-request"),
+                "a release event must always select the engine-loaded gate");
+        String engineGate =
+                namedWorkflowStep(gates, "Run the engine-loaded API 36 conformance gate");
+        assertEquals(
+                1,
+                occurrences(engineGate, "\n        if:"),
+                "the release engine gate must have only its scope condition");
+        assertTrue(
+                engineGate.contains(
+                        "\n        if: steps.engine-gate-scope.outputs.run == 'true'\n"),
+                "the release engine gate must depend only on the fail-closed scope decision");
 
         int gateCall = workflow.indexOf("  gates:\n");
         int stage = workflow.indexOf("  stage:\n");
