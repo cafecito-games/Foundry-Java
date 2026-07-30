@@ -49,11 +49,27 @@ if [[ -z "$public_key" || ! -f "$public_key" ]]; then
   printf 'A signing public key must be supplied to verify signatures.\n' >&2
   exit 1
 fi
+# The public key the staged release carries is derived from the same secret that signed it, so on its
+# own it proves internal consistency and nothing more. The expected primary key fingerprint is
+# therefore required, is public data rather than a secret, and is what turns "these signatures verify"
+# into "these signatures were made by the Foundry-Java release key".
+expected_fingerprint="${FOUNDRY_RELEASE_SIGNING_FINGERPRINT:-}"
+expected_fingerprint="$(printf '%s' "$expected_fingerprint" | tr -d '[:space:]' | tr 'a-f' 'A-F')"
+if [[ ! "$expected_fingerprint" =~ ^[0-9A-F]{40}$ ]]; then
+  printf 'FOUNDRY_RELEASE_SIGNING_FINGERPRINT must be the expected 40-character primary key fingerprint.\n' >&2
+  exit 1
+fi
+
 GNUPGHOME="$gnupg_home" gpg --batch --quiet --import "$public_key"
 fingerprints="$(
   GNUPGHOME="$gnupg_home" gpg --batch --with-colons --fingerprint |
-    awk -F: '$1 == "fpr" { print $10 }'
+    awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }'
 )"
+if [[ "$fingerprints" != "$expected_fingerprint" ]]; then
+  printf 'The staged signing key does not match the expected release key.\n' >&2
+  printf 'Expected %s, found %s.\n' "$expected_fingerprint" "${fingerprints//$'\n'/, }" >&2
+  exit 1
+fi
 
 digest() {
   case "$1" in
@@ -99,8 +115,23 @@ verify_file() {
     report "${relative} is not signed; no detached signature exists."
     return
   fi
-  if ! GNUPGHOME="$gnupg_home" gpg --batch --quiet --verify "${file}.asc" "$file" 2> /dev/null; then
+  local status
+  if ! status="$(
+    GNUPGHOME="$gnupg_home" gpg --batch --quiet --status-fd 1 \
+      --verify "${file}.asc" "$file" 2> /dev/null
+  )"; then
     report "${relative} signature is invalid."
+    return
+  fi
+  # The last VALIDSIG field is the primary key fingerprint, so a signature made by any other key —
+  # including a valid signature from an unintended key — is rejected here rather than trusted.
+  local signing_key
+  signing_key="$(
+    printf '%s\n' "$status" |
+      awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print toupper($NF) }'
+  )"
+  if [[ "$signing_key" != "$expected_fingerprint" ]]; then
+    report "${relative} signature was made by ${signing_key:-an unknown key}, not the expected release key ${expected_fingerprint}."
     return
   fi
   local algorithm
@@ -247,15 +278,7 @@ fi
   printf '  "version": "%s",\n' "$version"
   printf '  "coordinates": %s,\n' "$coordinates"
   printf '  "verified_files": %s,\n' "$verified_files"
-  printf '  "signing_key_fingerprints": [\n'
-  separator=''
-  while IFS= read -r fingerprint; do
-    if [[ -n "$fingerprint" ]]; then
-      printf '%s    "%s"' "$separator" "$fingerprint"
-      separator=$',\n'
-    fi
-  done <<< "$fingerprints"
-  printf '\n  ]\n'
+  printf '  "signing_key_fingerprint": "%s"\n' "$expected_fingerprint"
   printf '}\n'
 } > "${staging}/verification-summary.json"
 

@@ -47,6 +47,22 @@ if [[ "$tagged_commit" != "$head_commit" ]]; then
   fail "the release tag ${tag} does not point at HEAD (${tagged_commit} versus ${head_commit})."
 fi
 
+# A release may only ship a commit that is already on the release branch. Checking that the tag points
+# at the checked-out HEAD is not enough on its own: a tag created on an unmerged branch would satisfy
+# it and publish code that was never reviewed or merged.
+containing_ref="${FOUNDRY_RELEASE_CONTAINING_REF:-refs/remotes/origin/main}"
+if ! git -C "$repo_root" rev-parse -q --verify "$containing_ref" > /dev/null; then
+  if ! git -C "$repo_root" fetch --quiet origin main; then
+    fail "the release branch ref ${containing_ref} does not exist and could not be fetched."
+  fi
+fi
+if ! git -C "$repo_root" rev-parse -q --verify "$containing_ref" > /dev/null; then
+  fail "the release branch ref ${containing_ref} does not exist."
+fi
+if ! git -C "$repo_root" merge-base --is-ancestor "$head_commit" "$containing_ref"; then
+  fail "the release commit ${head_commit} is not contained in ${containing_ref}; only a commit already on the release branch may be released."
+fi
+
 tracked_locks="$(git -C "$repo_root" ls-files -- "${lock_patterns[@]}")"
 if [[ -z "$tracked_locks" ]]; then
   fail "no dependency lock is tracked; a release requires committed dependency locks."
@@ -75,5 +91,5 @@ if [[ -n "$tree_status" ]]; then
   fail "the working tree is not clean."
 fi
 
-printf 'Release preconditions satisfied: tag %s, declared version %s, commit %s.\n' \
-  "$tag" "$declared_version" "$head_commit"
+printf 'Release preconditions satisfied: tag %s, declared version %s, commit %s on %s.\n' \
+  "$tag" "$declared_version" "$head_commit" "$containing_ref"

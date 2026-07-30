@@ -34,6 +34,7 @@ class ReleaseScriptBehaviourTest {
     private static Path signingHome;
     private static Path publicKey;
     private static String signingKeyIdentity;
+    private static String signingKeyFingerprint;
 
     @BeforeAll
     static void generateAnEphemeralSigningKey() throws Exception {
@@ -75,6 +76,25 @@ class ReleaseScriptBehaviourTest {
                         signingKeyIdentity);
         assertEquals(0, exported.exitCode(), exported.output());
         assertTrue(Files.size(publicKey) > 0);
+        Result listed =
+                run(
+                        signingHome,
+                        Map.of("GNUPGHOME", signingHome.toString()),
+                        "gpg",
+                        "--batch",
+                        "--with-colons",
+                        "--fingerprint",
+                        signingKeyIdentity);
+        assertEquals(0, listed.exitCode(), listed.output());
+        signingKeyFingerprint =
+                listed.output()
+                        .lines()
+                        .dropWhile(line -> !line.startsWith("pub:"))
+                        .filter(line -> line.startsWith("fpr:"))
+                        .findFirst()
+                        .orElseThrow()
+                        .split(":")[9];
+        assertEquals(40, signingKeyFingerprint.length(), signingKeyFingerprint);
     }
 
     @Test
@@ -270,6 +290,36 @@ class ReleaseScriptBehaviourTest {
     }
 
     @Test
+    void theStagedRepositoryVerifierRejectsAnUnexpectedSigningKey(@TempDir Path directory)
+            throws Exception {
+        Path staging = newStagedRelease(directory);
+
+        Result result = verifyStaged(staging, "0".repeat(40));
+
+        assertNotEquals(0, result.exitCode(), result.output());
+        assertTrue(
+                result.output().contains("does not match the expected release key"),
+                result.output());
+    }
+
+    @Test
+    void preconditionsRefuseACommitThatIsNotOnTheReleaseBranch(@TempDir Path directory)
+            throws Exception {
+        Path repository = newRepository(directory, "0.4.0");
+        assertEquals(0, git(repository, "checkout", "-q", "-b", "unmerged").exitCode());
+        Files.writeString(repository.resolve("NOTICE.txt"), "never merged\n");
+        assertEquals(0, git(repository, "add", "-A").exitCode());
+        assertEquals(0, git(repository, "commit", "-q", "-m", "unmerged").exitCode());
+        tag(repository, "v0.4.0");
+
+        Result result = preconditions(repository, "v0.4.0");
+
+        assertNotEquals(0, result.exitCode(), result.output());
+        assertTrue(
+                result.output().contains("is not contained in refs/heads/main"), result.output());
+    }
+
+    @Test
     void uploadingRefusesAStagedRepositoryThatWasNeverVerified(@TempDir Path directory)
             throws Exception {
         Path staging = newStagedRelease(directory);
@@ -329,7 +379,9 @@ class ReleaseScriptBehaviourTest {
     private Result preconditions(Path repository, String tag) throws Exception {
         return run(
                 repository,
-                Map.of(),
+                // A synthetic repository has no remote, so containment is checked against its own
+                // main branch. The check itself is exactly the one a release runs.
+                Map.of("FOUNDRY_RELEASE_CONTAINING_REF", "refs/heads/main"),
                 "bash",
                 ROOT.resolve("gradle/verify-release-preconditions.sh").toString(),
                 tag,
@@ -337,9 +389,17 @@ class ReleaseScriptBehaviourTest {
     }
 
     private Result verifyStaged(Path staging) throws Exception {
+        return verifyStaged(staging, signingKeyFingerprint);
+    }
+
+    private Result verifyStaged(Path staging, String expectedFingerprint) throws Exception {
         return run(
                 ROOT,
-                Map.of("FOUNDRY_RELEASE_TOPOLOGY", topologyFile().toString()),
+                Map.of(
+                        "FOUNDRY_RELEASE_TOPOLOGY",
+                        topologyFile().toString(),
+                        "FOUNDRY_RELEASE_SIGNING_FINGERPRINT",
+                        expectedFingerprint),
                 "bash",
                 ROOT.resolve("gradle/verify-staged-release.sh").toString(),
                 staging.toString(),

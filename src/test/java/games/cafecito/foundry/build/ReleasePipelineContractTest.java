@@ -132,6 +132,10 @@ class ReleasePipelineContractTest {
         assertTrue(
                 preconditions.contains("--write-locks resolveAndLockAll"),
                 "the strict path must regenerate the locks and require them unchanged");
+        // Pointing at HEAD is not enough on its own: a tag on an unmerged branch would satisfy it.
+        assertTrue(preconditions.contains("merge-base --is-ancestor"));
+        assertTrue(preconditions.contains("refs/remotes/origin/main"));
+        assertTrue(preconditions.contains("is not contained in"));
 
         // The declared project version is checked in, so a tag can genuinely disagree with it.
         String properties = read("gradle.properties");
@@ -178,7 +182,8 @@ class ReleasePipelineContractTest {
         String upload = read(UPLOAD);
         String workflow = read(WORKFLOW);
 
-        assertTrue(verify.contains("gpg --batch --quiet --verify"));
+        assertTrue(verify.contains("gpg --batch --quiet --status-fd 1"));
+        assertTrue(verify.contains("--verify \"${file}.asc\" \"$file\""));
         assertTrue(verify.contains("is not signed"));
         assertTrue(verify.contains("signature is invalid"));
         for (String algorithm : List.of("md5", "sha1", "sha256", "sha512")) {
@@ -186,6 +191,18 @@ class ReleasePipelineContractTest {
         }
         assertTrue(verify.contains("checksum"));
         assertTrue(verify.contains("verification-summary.json"));
+
+        // Verification is anchored to an expected key rather than to the key the signer supplied,
+        // so
+        // a valid signature from an unintended key is rejected.
+        assertTrue(verify.contains("FOUNDRY_RELEASE_SIGNING_FINGERPRINT"));
+        assertTrue(verify.contains("VALIDSIG"));
+        assertTrue(verify.contains("does not match the expected release key"));
+        assertTrue(verify.contains("not the expected release key"));
+        assertTrue(
+                workflow.contains(
+                        "FOUNDRY_RELEASE_SIGNING_FINGERPRINT:"
+                                + " ${{ vars.FOUNDRY_SIGNING_KEY_FINGERPRINT }}"));
 
         // Ordering is structural, not conventional: the uploader refuses to run against a staged
         // repository that carries no verification summary.

@@ -226,6 +226,11 @@ jobs:
       - name: Verify signatures, checksums, and metadata in the staged repository
         if: github.event_name == 'push'
         shell: bash
+        env:
+          # The expected primary key fingerprint is public data, so it is a repository variable rather
+          # than a secret. It is what makes signature verification an independent check instead of a
+          # consistency check against the key the signer supplied.
+          FOUNDRY_RELEASE_SIGNING_FINGERPRINT: ${{ vars.FOUNDRY_SIGNING_KEY_FINGERPRINT }}
         run: |
           set -euo pipefail
           bash gradle/verify-staged-release.sh \

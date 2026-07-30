@@ -34,6 +34,7 @@ A release refuses to proceed, before any signing happens, when:
 - the tag does not match the `foundryVersion` declared in `gradle.properties`;
 - that declared version is not a release version, including any `SNAPSHOT`;
 - the tag does not exist or does not point at `HEAD`;
+- the tagged commit is not already contained in `origin/main`;
 - a dependency lock is dirty after `./gradlew --write-locks resolveAndLockAll`;
 - the working tree is not clean, including untracked files.
 
@@ -72,8 +73,8 @@ sources, and Javadoc. Nothing outside that set may appear in a staged release.
 3. Create and push the annotated tag:
    `git tag -a vX.Y.Z -m 'Foundry-Java vX.Y.Z' && git push origin vX.Y.Z`.
 4. Approve the `release-signing` and `maven-central` deployment environments when GitHub asks.
-5. Compare the signing key fingerprint in `verification-summary.json` against the published
-   Foundry-Java signing key.
+5. Confirm the signing key fingerprint in `verification-summary.json` is the published Foundry-Java
+   release key.
 6. Release the Central Portal deployment from `USER_MANAGED` to published, and confirm the
    coordinates resolve.
 
@@ -90,6 +91,11 @@ workflow can request either environment.
 | `FOUNDRY_SIGNING_KEY` | `release-signing` | the ASCII-armored OpenPGP signing key |
 | `FOUNDRY_SIGNING_PASSWORD` | `release-signing` | that key's password, which may be empty |
 | `FOUNDRY_CENTRAL_PORTAL_TOKEN` | `maven-central` | the Central Portal upload token |
+
+The expected primary key fingerprint is public data, so it is the repository variable
+`FOUNDRY_SIGNING_KEY_FINGERPRINT` rather than a secret. Verification requires it and rejects any
+signature made by another key, so signature checking is an independent check rather than a
+consistency check against the key the signer supplied.
 
 The signing key reaches Gradle as an `ORG_GRADLE_PROJECT_` environment value and the Portal token
 reaches `curl` on standard input, so neither ever appears on a command line, in a process listing, or
@@ -108,6 +114,11 @@ so the declared version has to be tagged locally first:
 git tag -f "v$(sed -n 's/^foundryVersion=//p' gradle.properties)"
 bash gradle/run-release-staging-dry-run.sh
 ```
+
+A release requires its commit to be contained in `origin/main`. To dry-run from a branch that is not
+merged yet, point the containment check at that branch with
+`FOUNDRY_RELEASE_CONTAINING_REF=refs/heads/<branch>`. A real release never sets it, so the default
+`refs/remotes/origin/main` is what a tag push is checked against.
 
 The same script runs from the workflow's manual `dry_run` dispatch. It needs `gpg`, `jq`, `shasum`,
 the Android SDK, and the pinned NDK and CMake, exactly like the gates.

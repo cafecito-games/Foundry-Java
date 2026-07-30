@@ -48,6 +48,14 @@ FOUNDRY_SIGNING_KEY="$(
 export FOUNDRY_SIGNING_KEY
 export FOUNDRY_SIGNING_PASSWORD=""
 
+# The verifier requires the expected primary key fingerprint, exactly as it does for a real release.
+# Here that expectation is the ephemeral key this run generated.
+FOUNDRY_RELEASE_SIGNING_FINGERPRINT="$(
+  gpg --batch --with-colons --fingerprint "$signing_identity" |
+    awk -F: '$1 == "pub" { primary = 1; next } $1 == "fpr" && primary { print $10; primary = 0 }'
+)"
+export FOUNDRY_RELEASE_SIGNING_FINGERPRINT
+
 bash "${repo_root}/gradle/verify-release-reproducibility.sh" "$tag" "${work}/reproducibility"
 staged="${work}/reproducibility/first"
 
