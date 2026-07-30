@@ -29,6 +29,7 @@ import java.util.zip.ZipOutputStream;
 import org.gradle.testkit.runner.BuildResult;
 import org.gradle.testkit.runner.GradleRunner;
 import org.gradle.testkit.runner.TaskOutcome;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -719,6 +720,11 @@ class FoundryJavaPluginTest {
         assertFalse(mergedManifest.contains("android:process="));
     }
 
+    // The only test in this class that reads the real release AAR and the real runtime jar, and so
+    // the only one whose cache key has to carry four ABIs of compiled C++. The tag routes it to
+    // :foundry-java-gradle-plugin:actualArtifactTest and keeps those inputs off the rest of the
+    // suite; see this module's build.gradle.kts.
+    @Tag("actualArtifacts")
     @Test
     void actualReleaseAarMinifiedApi23ConsumerUsesPinnedDesugaringAndKeepsStartup()
             throws Exception {

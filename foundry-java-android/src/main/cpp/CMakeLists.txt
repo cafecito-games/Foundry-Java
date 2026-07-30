@@ -60,6 +60,11 @@ set_property(
         "${FOUNDRY_JAVA_ABI_TEMPLATE}"
         "${FOUNDRY_JAVA_API_JSON}"
         "${FOUNDRY_JAVA_PROVENANCE}"
+        # RUNTIME_CONTRACT_VERSION is read out of this file above and baked into
+        # foundry_java_contract.h, so a build tree configured before it changed would compile the
+        # previous contract version. It is also a declared input of the native test tasks in
+        # foundry-java-android/build.gradle.kts, which is what keeps their cache entries honest.
+        "${FOUNDRY_JAVA_RUNTIME_SOURCE}"
 )
 include("${FOUNDRY_JAVA_ABI_GENERATOR}")
 

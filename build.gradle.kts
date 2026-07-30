@@ -616,6 +616,20 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+// The suites in src/test are repository contract tests: they assert on the text of the build scripts,
+// the workflows, the gate scripts, the frozen API baselines and whole module source trees, reading
+// each one directly rather than receiving it as a task input. Their true input is therefore the
+// repository, and enumerating it here would be a list that silently falls behind the assertions —
+// which is the same failure this pull request exists to remove, since a cache hit or an up-to-date
+// check would then replay a pass across a change to the very file being guarded.
+//
+// So this task declares that it cannot be replayed. That is not a concession: a hit is only allowed
+// where it is indistinguishable from an execution, and here it demonstrably is not.
+tasks.named<Test>("test") {
+    outputs.upToDateWhen { false }
+    outputs.cacheIf("the repository contract suites read files no input set fully describes") { false }
+}
+
 configure<SpotlessExtension> {
     // Spotless's git-aware default can capture cold-only JGit state as a Gradle configuration
     // cache input. Explicit LF matches the repository policy and avoids that clean-state miss.
