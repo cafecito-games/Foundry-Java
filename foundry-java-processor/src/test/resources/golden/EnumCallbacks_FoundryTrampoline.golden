@@ -61,19 +61,19 @@ public final class EnumCallbacks_FoundryTrampoline {
     public static Object invoke(Object target, String name, Object[] arguments) {
         EnumCallbacks receiver = (EnumCallbacks) target;
         return switch (name) {
-            case "_state" -> {
+            case "state" -> {
                 yield enumOutbound1(receiver.state(enumInbound1(arguments[0])));
             }
-            case "echo_generated" -> {
+            case "echoGenerated" -> {
                 yield enumOutbound0(receiver.echoGenerated(enumInbound0(arguments[0])));
             }
-            case "echo_user" -> {
+            case "echoUser" -> {
                 yield enumOutbound1(receiver.echoUser(enumInbound1(arguments[0])));
             }
-            case "null_generated" -> {
+            case "nullGenerated" -> {
                 yield enumOutbound0(receiver.nullGenerated());
             }
-            case "null_user" -> {
+            case "nullUser" -> {
                 yield enumOutbound1(receiver.nullUser());
             }
             default -> throw new IllegalArgumentException("Unknown method: " + name);

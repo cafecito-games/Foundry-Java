@@ -125,12 +125,174 @@ private:
 	jobject reference = nullptr;
 };
 
+std::string local_java_string_text(JNIEnv *environment, jstring value) {
+	if (value == nullptr) {
+		return {};
+	}
+	const char *utf = environment->GetStringUTFChars(value, nullptr);
+	if (utf == nullptr) {
+		if (environment->ExceptionCheck()) {
+			environment->ExceptionClear();
+		}
+		return {};
+	}
+	std::string text(utf);
+	environment->ReleaseStringUTFChars(value, utf);
+	return text;
+}
+
+std::string call_local_string(JNIEnv *environment, jobject target, jmethodID method) {
+	if (target == nullptr || method == nullptr) {
+		return {};
+	}
+	jstring value = static_cast<jstring>(environment->CallObjectMethod(target, method));
+	if (environment->ExceptionCheck()) {
+		environment->ExceptionClear();
+		if (value != nullptr) {
+			environment->DeleteLocalRef(value);
+		}
+		return {};
+	}
+	std::string text = local_java_string_text(environment, value);
+	if (value != nullptr) {
+		environment->DeleteLocalRef(value);
+	}
+	return text;
+}
+
+// Renders the throwable the bridge is about to swallow as "type: message" followed by the top of
+// its stack and its causes. Containment keeps the engine alive, but without this text the only
+// evidence of a failed callback is the containment notice itself, which names no cause.
+std::string describe_java_throwable(JNIEnv *environment, jthrowable throwable) {
+	constexpr jsize kMaximumFrames = 8;
+	constexpr int kMaximumCauses = 3;
+	if (environment == nullptr || throwable == nullptr) {
+		return {};
+	}
+	jclass throwable_class = environment->FindClass("java/lang/Throwable");
+	jclass class_class = environment->FindClass("java/lang/Class");
+	if (throwable_class == nullptr || class_class == nullptr) {
+		environment->ExceptionClear();
+		if (throwable_class != nullptr) {
+			environment->DeleteLocalRef(throwable_class);
+		}
+		if (class_class != nullptr) {
+			environment->DeleteLocalRef(class_class);
+		}
+		return {};
+	}
+	const jmethodID get_message = environment->GetMethodID(
+			throwable_class, "getMessage", "()Ljava/lang/String;");
+	const jmethodID get_cause = environment->GetMethodID(
+			throwable_class, "getCause", "()Ljava/lang/Throwable;");
+	const jmethodID get_stack_trace = environment->GetMethodID(
+			throwable_class, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
+	const jmethodID get_class_name =
+			environment->GetMethodID(class_class, "getName", "()Ljava/lang/String;");
+	environment->DeleteLocalRef(throwable_class);
+	environment->DeleteLocalRef(class_class);
+	if (environment->ExceptionCheck()) {
+		environment->ExceptionClear();
+	}
+	if (get_message == nullptr || get_cause == nullptr || get_stack_trace == nullptr ||
+			get_class_name == nullptr) {
+		return {};
+	}
+	std::string description;
+	jthrowable current = throwable;
+	bool owns_current = false;
+	for (int depth = 0; current != nullptr && depth <= kMaximumCauses; depth++) {
+		if (depth > 0) {
+			description += " caused by ";
+		}
+		jclass type = environment->GetObjectClass(current);
+		std::string type_name = call_local_string(environment, type, get_class_name);
+		if (type != nullptr) {
+			environment->DeleteLocalRef(type);
+		}
+		description += type_name.empty() ? "unknown Java throwable" : type_name;
+		const std::string message = call_local_string(environment, current, get_message);
+		if (!message.empty()) {
+			description += ": " + message;
+		}
+		if (depth == 0) {
+			jobjectArray frames = static_cast<jobjectArray>(
+					environment->CallObjectMethod(current, get_stack_trace));
+			if (environment->ExceptionCheck()) {
+				environment->ExceptionClear();
+				frames = nullptr;
+			}
+			if (frames != nullptr) {
+				const jsize count = environment->GetArrayLength(frames);
+				const jsize rendered = count < kMaximumFrames ? count : kMaximumFrames;
+				for (jsize index = 0; index < rendered; index++) {
+					jobject frame = environment->GetObjectArrayElement(frames, index);
+					if (environment->ExceptionCheck()) {
+						environment->ExceptionClear();
+						break;
+					}
+					jclass frame_class =
+							frame == nullptr ? nullptr : environment->GetObjectClass(frame);
+					const jmethodID frame_to_string = frame_class == nullptr
+							? nullptr
+							: environment->GetMethodID(
+									  frame_class, "toString", "()Ljava/lang/String;");
+					if (environment->ExceptionCheck()) {
+						environment->ExceptionClear();
+					}
+					const std::string text =
+							call_local_string(environment, frame, frame_to_string);
+					if (!text.empty()) {
+						description += "\n    at " + text;
+					}
+					if (frame_class != nullptr) {
+						environment->DeleteLocalRef(frame_class);
+					}
+					if (frame != nullptr) {
+						environment->DeleteLocalRef(frame);
+					}
+				}
+				if (count > rendered) {
+					description += "\n    ... " + std::to_string(count - rendered) +
+							" more frames";
+				}
+				environment->DeleteLocalRef(frames);
+			}
+		}
+		jthrowable cause =
+				static_cast<jthrowable>(environment->CallObjectMethod(current, get_cause));
+		if (environment->ExceptionCheck()) {
+			environment->ExceptionClear();
+			cause = nullptr;
+		}
+		if (cause == current && cause != nullptr) {
+			environment->DeleteLocalRef(cause);
+			cause = nullptr;
+		}
+		if (owns_current) {
+			environment->DeleteLocalRef(current);
+		}
+		current = cause;
+		owns_current = cause != nullptr;
+	}
+	if (owns_current && current != nullptr) {
+		environment->DeleteLocalRef(current);
+	}
+	return description;
+}
+
 bool clear_java_exception(JNIEnv *environment, const std::shared_ptr<FoundryErrorSink> &errors, const char *operation) {
 	if (environment == nullptr || !environment->ExceptionCheck()) {
 		return false;
 	}
+	const jthrowable throwable = environment->ExceptionOccurred();
 	environment->ExceptionClear();
-	errors->error(std::string("Java exception contained during ") + operation + ".");
+	const std::string description = describe_java_throwable(environment, throwable);
+	if (throwable != nullptr) {
+		environment->DeleteLocalRef(throwable);
+	}
+	errors->error(std::string("Java exception contained during ") + operation +
+			(description.empty() ? "." : ": " + description));
 	return true;
 }
 

@@ -196,7 +196,7 @@ final class SourceEmitter {
         methods.addAll(model.overrides());
         methods.sort(ExtensionModel.MethodModel.ORDER);
         for (ExtensionModel.MethodModel method : methods) {
-            source.append("            case \"").append(method.exportedName()).append("\" -> {\n");
+            source.append("            case \"").append(method.javaName()).append("\" -> {\n");
             String invocation =
                     "receiver."
                             + method.javaName()
@@ -240,7 +240,7 @@ final class SourceEmitter {
         for (ExtensionModel.PropertyModel property : model.properties()) {
             String invocation = "receiver." + property.getter() + "()";
             source.append("            case \"")
-                    .append(property.exportedName())
+                    .append(property.getter())
                     .append("\" -> ")
                     .append(outbound(model, property.type(), invocation, enumBindings))
                     .append(";\n");
@@ -266,7 +266,7 @@ final class SourceEmitter {
                 .forEach(
                         property ->
                                 source.append("            case \"")
-                                        .append(property.exportedName())
+                                        .append(property.setter())
                                         .append("\" -> receiver.")
                                         .append(property.setter())
                                         .append('(')

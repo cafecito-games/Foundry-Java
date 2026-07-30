@@ -13,7 +13,7 @@ public final class SpinningCube_FoundryTrampoline {
     public static Object invoke(Object target, String name, Object[] arguments) {
         SpinningCube receiver = (SpinningCube) target;
         return switch (name) {
-            case "_process" -> {
+            case "onProcess" -> {
                 receiver.onProcess((double) arguments[0]);
                 yield null;
             }

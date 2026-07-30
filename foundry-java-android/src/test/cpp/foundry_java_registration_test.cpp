@@ -806,7 +806,7 @@ foundry_java::RegistrationClassDescriptor valid_descriptor() {
 		{
 				foundry_java::RegistrationMemberKind::METHOD,
 				"move",
-				"move",
+				"moveBy",
 				"void(byte,short,int,long,char,float,double,java.lang.String)",
 				{},
 				{},
@@ -1366,8 +1366,8 @@ void test_stable_callbacks_dispatch_instances_properties_and_virtuals() {
 	services->methods[0].call(services->methods[0].userdata,
 			callbacks->created_instance_userdata, arguments, 1,
 			&result, &error);
-	expect(callbacks->invoked_names == std::vector<std::string>{ "move" },
-			"ordinary method must dispatch by Java name");
+	expect(callbacks->invoked_names == std::vector<std::string>{ "moveBy" },
+			"ordinary method must dispatch by Java name, not by its exported name");
 	expect(error.error == FOUNDRY_EXTENSION_CALL_OK,
 			"successful method callback must clear call error");
 
@@ -1495,7 +1495,7 @@ void test_callback_outputs_replace_initialized_defaults_exactly_once() {
 	const auto method = std::find_if(
 			services->methods.begin(), services->methods.end(),
 			[](const foundry_java::NativeMethodRegistration &candidate) {
-				return candidate.java_name == "move";
+				return candidate.java_name == "moveBy";
 			});
 	expect(method != services->methods.end(),
 			"initialized output fixture must retain its method callback");
