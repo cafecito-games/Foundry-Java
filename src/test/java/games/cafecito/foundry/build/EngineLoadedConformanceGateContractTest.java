@@ -261,15 +261,29 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(gateStep > 0 && matrixStep > 0);
         assertTrue(gateStep > matrixStep, "the engine gate runs after the cheaper device legs");
 
-        String scopeMarker = "- name: Classify whether this change needs the engine-loaded gate\n";
+        int deviceJob = workflow.indexOf("  device-gate:\n");
+        assertTrue(deviceJob > 0);
+        String checkoutMarker = "      - uses: actions/checkout@";
+        int checkoutStart = workflow.indexOf(checkoutMarker, deviceJob);
+        int checkoutEnd = workflow.indexOf("\n      - ", checkoutStart + checkoutMarker.length());
+        assertTrue(checkoutStart > deviceJob && checkoutEnd > checkoutStart);
+        String scopeMarker =
+                "      - name: Classify whether this change needs the engine-loaded gate\n";
         int scopeStart = workflow.indexOf(scopeMarker);
         assertTrue(scopeStart > 0, "the device job must classify the pull request scope");
+        assertEquals(
+                checkoutEnd + 1,
+                scopeStart,
+                "the classifier must be the immediate next device step after checkout");
         int scopeEnd = workflow.indexOf("\n      - ", scopeStart + scopeMarker.length());
         String scopeStep = workflow.substring(scopeStart, scopeEnd);
         assertTrue(scopeStep.contains("\n        id: engine-gate-scope\n"));
         assertTrue(
-                scopeStep.contains("if [[ \"${GITHUB_EVENT_NAME}\" != \"pull_request\" ]]; then"));
-        assertTrue(scopeStep.contains("select_gate true non-pull-request"));
+                scopeStep.contains(
+                        "if [[ \"${GITHUB_EVENT_NAME}\" != \"pull_request\" ]]; then\n"
+                                + "            select_gate true non-pull-request\n"
+                                + "            exit 0\n"
+                                + "          fi"));
 
         int gateStepEnd = workflow.indexOf("\n      - ", gateStep + 1);
         String engineStep = workflow.substring(gateStep, gateStepEnd);

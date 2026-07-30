@@ -114,9 +114,14 @@ class ReusableGateWorkflowContractTest {
         String device = workflowJob(shared, "device-gate");
 
         for (String workflow : new String[] {shared, ci, release}) {
+            String permissions = workflowPermissions(workflow);
             assertEquals(
                     1,
-                    occurrences(workflow, "  pull-requests: read\n"),
+                    occurrences(permissions, "  contents: read\n"),
+                    "each workflow must grant read-only repository contents access");
+            assertEquals(
+                    1,
+                    occurrences(permissions, "  pull-requests: read\n"),
                     "each workflow must grant read-only pull request metadata access");
             assertEquals(
                     0,
@@ -135,14 +140,85 @@ class ReusableGateWorkflowContractTest {
                         "\n          EXPECTED_CHANGED_FILES:"
                                 + " ${{ github.event.pull_request.changed_files }}\n"));
         assertTrue(scope.contains("gh api --paginate --slurp"));
-        assertTrue(scope.contains("pulls/${PR_NUMBER}/files?per_page=100"));
+        assertTrue(
+                scope.contains("repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100"));
         assertTrue(scope.contains("[.[][]] | length"));
-        assertTrue(scope.contains("EXPECTED_CHANGED_FILES"));
+        assertTrue(
+                scope.contains(
+                        "if [[ \"$observed_count\" != \"$EXPECTED_CHANGED_FILES\" ]]; then\n"
+                                + "            select_gate true classification-incomplete\n"
+                                + "            exit 0\n"
+                                + "          fi"));
         assertTrue(scope.contains("(.filename, .previous_filename?)"));
         assertTrue(scope.contains("bash gradle/classify-engine-gate-paths.sh"));
-        assertTrue(scope.contains("run=true"));
-        assertTrue(scope.contains("classification-failed"));
-        assertTrue(scope.contains("classification-incomplete"));
+        for (String failedCommand :
+                new String[] {
+                    "if ! pages=\"$(",
+                    "if ! observed_count=\"$(",
+                    "if ! paths=\"$(",
+                    "if ! decision=\"$("
+                }) {
+            assertTrue(scope.contains(failedCommand), failedCommand + " must fail closed");
+        }
+        assertEquals(
+                4,
+                occurrences(
+                        scope,
+                        ")\"; then\n"
+                                + "            select_gate true classification-failed\n"
+                                + "            exit 0\n"
+                                + "          fi"),
+                "every API, parse, and classifier command failure must fail closed");
+        assertEquals(
+                5,
+                occurrences(scope, "select_gate true classification-failed"),
+                "all five classification failures must run the engine gate");
+        assertEquals(
+                1,
+                occurrences(scope, "select_gate true classification-incomplete"),
+                "only the changed-file count mismatch may be classification-incomplete");
+        assertTrue(
+                scope.contains(
+                        "$'run=false\\nreason=safe-only')\n"
+                                + "              select_gate false safe-only\n"
+                                + "              ;;"));
+        assertTrue(
+                scope.contains(
+                        "$'run=true\\nreason=relevant')\n"
+                                + "              select_gate true relevant\n"
+                                + "              ;;"));
+        assertTrue(
+                scope.contains(
+                        "$'run=true\\nreason=fail-closed')\n"
+                                + "              select_gate true fail-closed\n"
+                                + "              ;;"));
+        assertTrue(
+                scope.contains(
+                        "*)\n"
+                                + "              select_gate true classification-failed\n"
+                                + "              ;;"));
+
+        String checkout = workflowUsesStep(device, "actions/checkout@");
+        assertFalse(checkout.contains("\n        if:"));
+        assertFalse(checkout.contains("engine-gate-scope"));
+        assertEquals(
+                device.indexOf(checkout) + checkout.length() + 1,
+                device.indexOf(scope),
+                "the classifier must be the immediate next step after device checkout");
+
+        for (String action :
+                new String[] {
+                    "actions/setup-java@", "android-actions/setup-android@", "actions/cache@"
+                }) {
+            String actionStep = workflowUsesStep(device, action);
+            assertFalse(
+                    actionStep.contains("\n        if:"), action + " must remain unconditional");
+            assertFalse(actionStep.contains("engine-gate-scope"));
+        }
+        String setupGradle = workflowUsesStep(device, "gradle/actions/setup-gradle@");
+        assertEquals(1, occurrences(setupGradle, "\n        if: ${{ !inputs.release }}\n"));
+        assertEquals(1, occurrences(setupGradle, "\n        if:"));
+        assertFalse(setupGradle.contains("engine-gate-scope"));
 
         String condition = "if: steps.engine-gate-scope.outputs.run == 'true'";
         assertEquals(
@@ -163,9 +239,23 @@ class ReusableGateWorkflowContractTest {
                     "Upload API 36 production startup evidence",
                     "Upload device gate evidence"
                 }) {
+            String namedStep = workflowStep(device, step);
             assertFalse(
-                    workflowStep(device, step).contains("engine-gate-scope"),
+                    namedStep.contains("engine-gate-scope"),
                     step + " must remain independent of the engine-loaded gate classifier");
+            if (step.equals("Upload API 36 production startup evidence")) {
+                assertEquals(
+                        1,
+                        occurrences(
+                                namedStep, "\n        if: ${{ always() && !inputs.release }}\n"));
+                assertEquals(1, occurrences(namedStep, "\n        if:"));
+            } else if (step.equals("Upload device gate evidence")) {
+                assertEquals(
+                        1, occurrences(namedStep, "\n        if: always() && inputs.release\n"));
+                assertEquals(1, occurrences(namedStep, "\n        if:"));
+            } else {
+                assertFalse(namedStep.contains("\n        if:"), step + " must be unconditional");
+            }
         }
     }
 
@@ -202,9 +292,32 @@ class ReusableGateWorkflowContractTest {
         return workflow.substring(start, end);
     }
 
+    private static String workflowPermissions(String workflow) {
+        String marker = "\npermissions:\n";
+        assertEquals(
+                1,
+                occurrences(workflow, marker),
+                "the workflow must declare one top-level permissions block");
+        int start = workflow.indexOf(marker) + 1;
+        int end = workflow.indexOf("\n\n", start + marker.length() - 1);
+        assertTrue(end > start, "the top-level permissions block must terminate");
+        return workflow.substring(start, end + 1);
+    }
+
     private static String workflowStep(String job, String name) {
         String marker = "      - name: " + name + "\n";
         assertEquals(1, occurrences(job, marker), name + " must identify one workflow step");
+        int start = job.indexOf(marker);
+        int end = job.indexOf("\n      - ", start + marker.length());
+        return job.substring(start, end < 0 ? job.length() : end);
+    }
+
+    private static String workflowUsesStep(String job, String usesMarker) {
+        String marker = "      - uses: " + usesMarker;
+        assertEquals(
+                1,
+                occurrences(job, marker),
+                usesMarker + " must identify one workflow action step");
         int start = job.indexOf(marker);
         int end = job.indexOf("\n      - ", start + marker.length());
         return job.substring(start, end < 0 ? job.length() : end);
