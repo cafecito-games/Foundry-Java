@@ -151,10 +151,13 @@ rather than a repair.
   of re-uploading; delete that artifact only after dropping the deployment.
 - **The runner died between the upload and the record being written.** The upload record is written
   before the irreversible Central call as a pre-upload intent marker (`upload-intent.json`), and the
-  completed record (`upload-summary.json`) replaces it once the upload finishes. If a re-run recovers
-  only the intent marker, it refuses: this is ambiguous, not "safe to retry" — the bundle may already
-  have been accepted. Check the Central Portal directly for a deployment matching this version. Once
-  you are certain nothing was accepted, delete `upload-intent.json` from the staged release and re-run.
-  Never resubmit while this is unresolved.
+  completed record (`upload-summary.json`) replaces it once the upload finishes. The `publish` job
+  persists this marker as its own artifact upload before the publish step even starts, tagged with a
+  per-attempt token, so it survives even a hard loss of the runner, not only a failure inside the
+  publish step itself. If a re-run recovers an intent marker with no completed record, it refuses:
+  this is ambiguous, not "safe to retry" — the bundle may already have been accepted. Check the
+  Central Portal directly for a deployment matching this version. Once you are certain nothing was
+  accepted, delete `upload-intent.json` from the staged release and re-run. Never resubmit while this
+  is unresolved.
 - **A published release turns out to be wrong.** Maven Central coordinates are immutable. Publish a
   new patch version; do not attempt to replace one.

@@ -454,10 +454,34 @@ class ReleasePipelineContractTest {
         assertTrue(
                 workflow.contains(
                         "record_name=\"foundry-java-release-upload-record-${GITHUB_REF_NAME}\""));
+        // gh api --jq takes one jq program, not additional jq CLI flags such as --arg, so the query
+        // must not rely on one.
+        assertFalse(workflow.contains("--jq --arg"));
+        // A hard runner loss leaves no later step able to run, so the intent marker is durably
+        // persisted, as its own artifact upload, strictly before the irreversible Central call is
+        // even attempted — not only after the publish step finishes or fails.
+        assertTrue(
+                workflow.contains(
+                        "Persist the pre-upload intent marker before any irreversible call"));
+        assertTrue(workflow.contains("FOUNDRY_RELEASE_UPLOAD_ATTEMPT"));
         int recover = workflow.indexOf("- name: Recover any record of a completed upload");
+        int attempt = workflow.indexOf("- name: Generate this attempt's identifier");
+        int persistIntent =
+                workflow.indexOf(
+                        "- name: Persist the pre-upload intent marker before any irreversible call");
+        int recordIntent =
+                workflow.indexOf(
+                        "- name: Record the pre-upload intent so a runner loss is still"
+                                + " discoverable");
         int publish = workflow.indexOf("- name: Publish the verified staged release");
         int record = workflow.indexOf("- name: Record the completed upload so a re-run cannot");
-        assertTrue(recover > 0 && publish > recover && record > publish);
+        assertTrue(
+                recover > 0
+                        && attempt > recover
+                        && persistIntent > attempt
+                        && recordIntent > persistIntent
+                        && publish > recordIntent
+                        && record > publish);
     }
 
     @Test

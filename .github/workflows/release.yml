@@ -301,6 +301,8 @@ jobs:
       # run must be able to see a still-unpublished deployment left by an earlier, different run, not
       # only by a rerun of this same run. Absence is established by listing artifacts, so a failing
       # artifact service stops the release instead of being read as "no upload has happened yet".
+      # `gh api --jq` takes one jq program, not additional jq CLI flags, so the artifact name is
+      # embedded directly in the program; it is a git ref name, never attacker-controlled input.
       - name: Recover any record of a completed upload
         shell: bash
         env:
@@ -311,12 +313,11 @@ jobs:
           records="$(
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
-              --jq --arg name "$record_name" '
-                .artifacts[]
-                | select(.name == $name)
+              --jq ".artifacts[]
+                | select(.name == \"${record_name}\")
                 | select(.expired == false)
                 | [.created_at, (.workflow_run.id | tostring)]
-                | @tsv'
+                | @tsv"
           )"
           if [[ -z "$records" ]]; then
             printf 'No upload record exists for version %s yet.\n' "${GITHUB_REF_NAME#v}"
@@ -326,19 +327,62 @@ jobs:
           gh run download "$recovered_run_id" \
             --name "$record_name" \
             --dir "${RUNNER_TEMP}/foundry-java-release/first"
+      # A unique token per attempt distinguishes "the intent marker on disk is the one this very
+      # attempt just durably persisted" from "the intent marker on disk is a leftover from a different,
+      # unresolved attempt" — the upload script refuses in the latter case, never assuming a stale
+      # marker is safe to build on.
+      - name: Generate this attempt's identifier
+        id: attempt
+        shell: bash
+        run: printf 'id=%s-%s\n' "$(date +%s%N)" "$RANDOM" >> "$GITHUB_OUTPUT"
+      # A hard runner loss leaves no later step able to run, so the only way for the intent marker to
+      # reliably survive that loss is to persist it durably, as its own artifact upload, strictly
+      # before the irreversible Central call — not merely before the summary is written inside the
+      # same, potentially-killed step.
+      - name: Persist the pre-upload intent marker before any irreversible call
+        shell: bash
+        env:
+          FOUNDRY_RELEASE_UPLOAD_ATTEMPT: ${{ steps.attempt.outputs.id }}
+        run: |
+          set -euo pipefail
+          staging="${RUNNER_TEMP}/foundry-java-release/first"
+          if [[ -f "${staging}/upload-summary.json" || -f "${staging}/upload-intent.json" ]]; then
+            printf 'A prior upload record or intent marker was recovered; leaving it for the publish step to evaluate.\n'
+            exit 0
+          fi
+          {
+            printf '{\n'
+            printf '  "schema_version": 1,\n'
+            printf '  "result": "intent",\n'
+            printf '  "target": "central",\n'
+            printf '  "version": "%s",\n' "${GITHUB_REF_NAME#v}"
+            printf '  "attempt": "%s"\n' "$FOUNDRY_RELEASE_UPLOAD_ATTEMPT"
+            printf '}\n'
+          } > "${staging}/upload-intent.json"
+      - name: Record the pre-upload intent so a runner loss is still discoverable
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: foundry-java-release-upload-record-${{ github.ref_name }}
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 90
+          path: |
+            ${{ runner.temp }}/foundry-java-release/first/upload-intent.json
+            ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
       - name: Publish the verified staged release
         shell: bash
         env:
           FOUNDRY_CENTRAL_PORTAL_TOKEN: ${{ secrets.FOUNDRY_CENTRAL_PORTAL_TOKEN }}
+          FOUNDRY_RELEASE_UPLOAD_ATTEMPT: ${{ steps.attempt.outputs.id }}
         run: |
           set -euo pipefail
           bash gradle/upload-staged-release.sh \
             "${RUNNER_TEMP}/foundry-java-release/first" \
             "${GITHUB_REF_NAME#v}" \
             central
-      # Uploaded even when the publish step above fails or the job is cancelled, so the pre-upload
-      # intent marker written before the irreversible call — not only the completed record — survives
-      # the runner and is discoverable by the recovery step above on the next attempt.
+      # Uploaded again once the publish step above finishes, failed or not, so the completed record —
+      # or an intent marker the publish step itself refreshed — reaches its final state here too.
       - name: Record the completed upload so a re-run cannot republish
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
