@@ -135,48 +135,94 @@ afterEvaluate {
 val nativeTestScript = rootProject.layout.projectDirectory.file("gradle/run-native-tests.sh")
 val nativeAbiLayoutScript = rootProject.layout.projectDirectory.file("gradle/verify-native-abi-layout.sh")
 
+// Exec puts `executable` and `args` into the build cache key but not `workingDir`, so every path
+// these three tasks name is relative to the repository root. That is what makes an entry stored by
+// one checkout replayable by another; gradle/verify-build-cache-portability.sh proves it.
+fun rootRelative(path: File): String = path.relativeTo(rootDir).invariantSeparatorsPath
+
+// These three run host compilers, ctest and cmake, none of which is a declared input, so a result is
+// only transferable to a machine of the same shape. Naming the host platform in the key keeps a
+// macOS developer's entry from standing in for the Linux verification CI is there to perform. The
+// residual exposure is compiler-version drift within one platform; the verification report records
+// the exact toolchain so a surprising hit can be traced.
+val hostPlatform = "${System.getProperty("os.name")}/${System.getProperty("os.arch")}"
+
+val nativeAbiLayoutReport =
+    layout.buildDirectory.file("reports/native-abi-layout/verification.txt")
+
 val nativeAbiLayoutTest =
     tasks.register<Exec>("nativeAbiLayoutTest") {
         group = "verification"
         description = "Verifies deterministic native-only ABI layout generation."
-        inputs.files(
-            fileTree("src/main/cpp/cmake"),
-            file("src/main/cpp/foundry_java_abi_layout.h.in"),
-            rootProject.file("api/current/extension_api.json"),
-            rootProject.file("api/current/provenance.json"),
+        inputs
+            .files(
+                fileTree("src/main/cpp/cmake"),
+                file("src/main/cpp/foundry_java_abi_layout.h.in"),
+                rootProject.file("api/current/extension_api.json"),
+                rootProject.file("api/current/provenance.json"),
+            ).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(nativeAbiLayoutScript).withPathSensitivity(PathSensitivity.NONE)
+        inputs.property("hostPlatform", hostPlatform)
+        outputs.file(nativeAbiLayoutReport).withPropertyName("verificationReport")
+        outputs.cacheIf("ABI layout generation and its rejections are deterministic") { true }
+        workingDir = rootDir
+        executable = "bash"
+        args(
+            rootRelative(nativeAbiLayoutScript.asFile),
+            rootRelative(projectDir),
+            rootRelative(nativeAbiLayoutReport.get().asFile),
         )
-        inputs.file(nativeAbiLayoutScript)
-        commandLine("bash", nativeAbiLayoutScript.asFile.absolutePath, projectDir.absolutePath)
     }
 
+// The CMake build tree stays undeclared, one level under the declared output, for two reasons: it
+// holds absolute source and build paths in CMakeCache.txt that no other checkout could reuse, and
+// leaving it out of the outputs is what lets a developer's C++ edit rebuild incrementally instead of
+// from scratch. The report directory beside it is the small, relocatable evidence the CI job uploads
+// and the build cache stores, so a hit is indistinguishable from an execution.
 val nativeHostTest =
     tasks.register<Exec>("nativeHostTest") {
         group = "verification"
         description = "Builds and runs the JNI-free native lifecycle tests."
-        inputs.files(
-            fileTree("src/main/cpp"),
-            fileTree("src/test/cpp"),
-            fileTree("src/androidTest/cpp"),
-            rootProject.fileTree("api/current"),
-        )
-        inputs.file(nativeTestScript)
-        outputs.dir(layout.buildDirectory.dir("native-host"))
-        commandLine("bash", nativeTestScript.asFile.absolutePath, "host", projectDir.absolutePath)
+        inputs
+            .files(
+                fileTree("src/main/cpp"),
+                fileTree("src/test/cpp"),
+                fileTree("src/androidTest/cpp"),
+                rootProject.fileTree("api/current"),
+            ).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
+        inputs.property("hostPlatform", hostPlatform)
+        outputs
+            .dir(layout.buildDirectory.dir("native-host/report"))
+            .withPropertyName("verificationReport")
+        outputs.cacheIf("the host lifecycle tests are deterministic for a given platform") { true }
+        workingDir = rootDir
+        executable = "bash"
+        args(rootRelative(nativeTestScript.asFile), "host", rootRelative(projectDir))
     }
 
 val nativeSanitizerTest =
     tasks.register<Exec>("nativeSanitizerTest") {
         group = "verification"
         description = "Runs the native lifecycle tests under ASan and UBSan."
-        inputs.files(
-            fileTree("src/main/cpp"),
-            fileTree("src/test/cpp"),
-            fileTree("src/androidTest/cpp"),
-            rootProject.fileTree("api/current"),
-        )
-        inputs.file(nativeTestScript)
-        outputs.dir(layout.buildDirectory.dir("native-host-sanitized"))
-        commandLine("bash", nativeTestScript.asFile.absolutePath, "sanitizer", projectDir.absolutePath)
+        inputs
+            .files(
+                fileTree("src/main/cpp"),
+                fileTree("src/test/cpp"),
+                fileTree("src/androidTest/cpp"),
+                rootProject.fileTree("api/current"),
+            ).withPathSensitivity(PathSensitivity.RELATIVE)
+        inputs.file(nativeTestScript).withPathSensitivity(PathSensitivity.NONE)
+        inputs.property("hostPlatform", hostPlatform)
+        outputs
+            .dir(layout.buildDirectory.dir("native-host-sanitized/report"))
+            .withPropertyName("verificationReport")
+        outputs.cacheIf("the sanitized lifecycle tests are deterministic for a given platform") {
+            true
+        }
+        workingDir = rootDir
+        executable = "bash"
+        args(rootRelative(nativeTestScript.asFile), "sanitizer", rootRelative(projectDir))
     }
 
 tasks.named("check") {

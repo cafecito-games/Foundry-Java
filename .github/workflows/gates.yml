@@ -68,6 +68,16 @@ jobs:
         if: ${{ !inputs.release }}
         shell: bash
         run: bash gradle/verify-configuration-cache-reuse-selftest.sh
+      # The configuration cache proof above cannot see this: an entry whose key embeds the checkout
+      # path stores and reads back perfectly within one checkout, and only ever misses on another
+      # machine. Nothing reports that, so it is asserted directly.
+      - name: Prove verifier task cache entries are replayable at another checkout path
+        shell: bash
+        run: bash gradle/verify-build-cache-portability.sh
+      - name: Prove the build cache portability gate still fails what it exists to catch
+        if: ${{ !inputs.release }}
+        shell: bash
+        run: bash gradle/verify-build-cache-portability-selftest.sh
       - name: Build, test, and inspect the native bridge
         if: ${{ !inputs.release }}
         shell: bash

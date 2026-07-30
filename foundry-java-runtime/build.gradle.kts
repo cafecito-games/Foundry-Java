@@ -27,6 +27,12 @@ val generatorJar = generatorProject.tasks.named("jar")
 val apiModelJar = apiModelProject.tasks.named("jar")
 val annotationsJar = annotationsProject.tasks.named("jar")
 
+// Exec and JavaExec put `args` into the build cache key but not `workingDir`, so every path handed to
+// a cacheable task here is relative to the repository root. Absolute arguments made each stored entry
+// private to the checkout that produced it, which is the same defect as declaring no outputs at all:
+// the entry exists and can never be reused. gradle/verify-build-cache-portability.sh proves the fix.
+fun rootRelative(path: File): String = path.relativeTo(rootDir).invariantSeparatorsPath
+
 val generateFoundryApi =
     tasks.register<JavaExec>("generateFoundryApi") {
         group = "build"
@@ -50,12 +56,13 @@ val generateFoundryApi =
         outputs.file(generatedSurfaceManifest)
         outputs.cacheIf("accepted API generation is deterministic") { true }
 
+        workingDir = rootDir
         args(
-            acceptedApiDirectory.asFile.absolutePath,
-            generatedApiSources.get().asFile.absolutePath,
-            generatedCompatibilityManifest.get().asFile.absolutePath,
-            generatedRealizationMap.get().asFile.absolutePath,
-            generatedSurfaceManifest.get().asFile.absolutePath,
+            rootRelative(acceptedApiDirectory.asFile),
+            rootRelative(generatedApiSources.get().asFile),
+            rootRelative(generatedCompatibilityManifest.get().asFile),
+            rootRelative(generatedRealizationMap.get().asFile),
+            rootRelative(generatedSurfaceManifest.get().asFile),
             bindingVersion,
         )
     }
@@ -83,22 +90,52 @@ val runtimeApiBaseline =
 val runtimeApiVerifier =
     rootProject.layout.projectDirectory.file("gradle/verify-runtime-api.sh")
 val runtimeClasses = layout.buildDirectory.dir("classes/java/main")
+val runtimeApiReport = layout.buildDirectory.file("reports/foundry-runtime-api/actual.api")
+
+// javap decides what this inventory looks like, and the verifier used to resolve it from PATH, so the
+// declared inputs alone did not determine the result. The task now runs the configured Java
+// toolchain's javap and names that toolchain's version in the key, which is the condition for a cache
+// hit being indistinguishable from an execution. The absolute JDK path travels in the environment,
+// which Exec treats as @Internal, so it stays out of the key.
+val javaToolchainLauncher =
+    extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
 
 val verifyRuntimeApi =
     tasks.register<Exec>("verifyRuntimeApi") {
         group = "verification"
         description = "Checks the sorted public javap inventory against the frozen runtime API."
         dependsOn(tasks.named("compileJava"))
-        inputs.file(runtimeApiBaseline)
-        inputs.file(runtimeApiVerifier)
+        inputs.file(runtimeApiBaseline).withPathSensitivity(PathSensitivity.NONE)
+        inputs.file(runtimeApiVerifier).withPathSensitivity(PathSensitivity.NONE)
         inputs
             .dir(runtimeClasses)
             .withPathSensitivity(PathSensitivity.RELATIVE)
-        commandLine(
-            "bash",
-            runtimeApiVerifier.asFile.absolutePath,
-            runtimeClasses.get().asFile.absolutePath,
-            runtimeApiBaseline.asFile.absolutePath,
+        inputs.property(
+            "javaRuntimeVersion",
+            javaToolchainLauncher.map { it.metadata.javaRuntimeVersion },
+        )
+        // The inventory the verifier computed is the whole result of this task. Publishing it as a
+        // declared output is what makes the task cacheable, and it is also the artifact a developer
+        // needs when the frozen baseline and the compiled classes disagree.
+        outputs.file(runtimeApiReport).withPropertyName("actualApiInventory")
+        outputs.cacheIf("the public javap inventory is determined by its declared inputs") { true }
+        environment(
+            "FOUNDRY_JDK_BIN",
+            javaToolchainLauncher
+                .get()
+                .metadata.installationPath
+                .dir("bin")
+                .asFile.absolutePath,
+        )
+        workingDir = rootDir
+        executable = "bash"
+        args(
+            rootRelative(runtimeApiVerifier.asFile),
+            rootRelative(runtimeClasses.get().asFile),
+            rootRelative(runtimeApiBaseline.asFile),
+            rootRelative(runtimeApiReport.get().asFile),
         )
     }
 
@@ -137,15 +174,17 @@ val verifyGeneratedRealization =
             .dir(runtimeClasses)
             .withPathSensitivity(PathSensitivity.RELATIVE)
         inputs.property("bindingVersion", bindingVersion)
-        outputs.dir(realizationReportDirectory)
+        outputs.dir(realizationReportDirectory).withPropertyName("realizationReport")
+        outputs.cacheIf("the parity oracle is determined by the pinned engine API") { true }
 
+        workingDir = rootDir
         args(
-            acceptedApiDirectory.asFile.absolutePath,
-            generatedRealizationMap.get().asFile.absolutePath,
-            runtimeClasses.get().asFile.absolutePath,
-            realizationAccountingBaseline.asFile.absolutePath,
-            realizationReportDirectory.get().asFile.absolutePath,
-            generatedSurfaceManifest.get().asFile.absolutePath,
+            rootRelative(acceptedApiDirectory.asFile),
+            rootRelative(generatedRealizationMap.get().asFile),
+            rootRelative(runtimeClasses.get().asFile),
+            rootRelative(realizationAccountingBaseline.asFile),
+            rootRelative(realizationReportDirectory.get().asFile),
+            rootRelative(generatedSurfaceManifest.get().asFile),
             bindingVersion,
         )
     }

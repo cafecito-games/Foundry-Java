@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "usage: verify-runtime-api.sh <classes-directory> <baseline-or-dash>" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "usage: verify-runtime-api.sh <classes-directory> <baseline-or-dash> [report]" >&2
   exit 2
 fi
 
 classes_directory=$1
 baseline=$2
+# The Gradle task that drives this script declares the report as its only output, which is what makes
+# the task build-cacheable, and it is the artifact to read when the baseline and the compiled classes
+# disagree. Left unset the script behaves exactly as before.
+report=${3:-}
+# The task exports the configured Java toolchain's bin directory so the inventory is decided by a JDK
+# the build declares and names in the task's cache key, rather than by whatever is first on PATH.
+javap="${FOUNDRY_JDK_BIN:+$FOUNDRY_JDK_BIN/}javap"
 actual=$(mktemp "${TMPDIR:-/tmp}/foundry-java-runtime-api.XXXXXX")
 class_names=$(mktemp "${TMPDIR:-/tmp}/foundry-java-runtime-api-classes.XXXXXX")
 inventory=$(mktemp "${TMPDIR:-/tmp}/foundry-java-runtime-api-inventory.XXXXXX")
@@ -34,7 +41,7 @@ done < <(
     LC_ALL=C sort
 ) >"$class_names"
 
-xargs -n 200 javap -public -classpath "$classes_directory" <"$class_names" |
+xargs -n 200 "$javap" -public -classpath "$classes_directory" <"$class_names" |
   awk '
     /^Compiled from / {
       class_name = ""
@@ -100,6 +107,12 @@ awk -F'|' -v directory="$root_inventory" '
   fi
 } >>"$actual"
 LC_ALL=C sort -o "$actual" "$actual"
+
+# Published before the comparison, so a failing run still leaves the inventory that disagreed.
+if [[ -n "$report" ]]; then
+  mkdir -p "$(dirname "$report")"
+  cp "$actual" "$report"
+fi
 
 if [[ "$baseline" == "-" ]]; then
   cat "$actual"

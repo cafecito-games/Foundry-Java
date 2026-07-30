@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-android_project="${1:?usage: verify-native-abi-layout.sh path/to/foundry-java-android}"
+android_project="${1:?usage: verify-native-abi-layout.sh path/to/foundry-java-android report}"
+report="${2:?usage: verify-native-abi-layout.sh path/to/foundry-java-android report}"
 repository_root="$(cd "$android_project/.." && pwd)"
 generator="$android_project/src/main/cpp/cmake/GenerateFoundryJavaAbiLayout.cmake"
 template="$android_project/src/main/cpp/foundry_java_abi_layout.h.in"
@@ -76,6 +77,7 @@ if mode != "sha":
 PY
 }
 
+rejected_fixtures=()
 for mode in sha missing_configuration duplicate order invalid_size nil_nonzero nil_misplaced wrong_sentinel; do
   make_fixture "$mode"
   if generate \
@@ -86,6 +88,7 @@ for mode in sha missing_configuration duplicate order invalid_size nil_nonzero n
     printf 'Malformed native ABI fixture unexpectedly succeeded: %s\n' "$mode" >&2
     exit 1
   fi
+  rejected_fixtures+=("$mode")
 done
 
 if cmake \
@@ -99,5 +102,22 @@ if cmake \
   printf 'Non-float bridge precision unexpectedly succeeded.\n' >&2
   exit 1
 fi
+
+# The Gradle task that drives this script declares the report below as its only output, which is what
+# lets the task be build-cached at all: with nothing declared it could never be up to date and never
+# be replayed. Every line is derived from the pinned engine API and from which fixtures the generator
+# refused, so the report is identical on any machine that reaches this point — nothing here records a
+# path, a timestamp or a duration.
+mkdir -p "$(dirname "$report")"
+{
+  printf 'accepted-layout-sha256 %s\n' \
+    "$(shasum -a 256 "$temporary_directory/first.h" | awk '{print $1}')"
+  printf 'builtin-class-size-rows %s\n' \
+    "$(grep -c '^        { "' "$temporary_directory/first.h")"
+  for mode in "${rejected_fixtures[@]}"; do
+    printf 'rejected-fixture %s\n' "$mode"
+  done
+  printf 'rejected-bridge-precision double\n'
+} >"$report"
 
 printf 'Verified deterministic native ABI layouts and malformed fixtures.\n'
