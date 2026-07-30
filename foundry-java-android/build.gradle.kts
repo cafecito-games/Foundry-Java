@@ -1,4 +1,7 @@
+import org.gradle.api.tasks.javadoc.Javadoc
 import org.gradle.api.tasks.testing.Test
+import org.gradle.external.javadoc.StandardJavadocDocletOptions
+import org.gradle.jvm.tasks.Jar
 
 plugins {
     alias(libs.plugins.android.library)
@@ -63,7 +66,13 @@ android {
     }
 
     publishing {
-        singleVariant("release")
+        // Sources are part of the published contract for every module, and the Android library
+        // plugin can only declare them here. Javadoc is built below instead of with
+        // withJavadocJar(); see releaseJavadoc. Both archives are required by
+        // gradle/release-topology.txt.
+        singleVariant("release") {
+            withSourcesJar()
+        }
     }
 }
 
@@ -80,11 +89,44 @@ tasks.withType<Test>().configureEach {
     useJUnitPlatform()
 }
 
+// The Android library plugin builds its Javadoc with a bundled Dokka that cannot read Java records
+// in a dependency and fails with "Record requires ASM8"; foundry-java-runtime publishes records. The
+// published Javadoc archive is therefore produced with the JDK javadoc tool over this module's own
+// Java sources, so the release still ships Javadoc for every module.
+val releaseJavadoc =
+    tasks.register<Javadoc>("releaseJavadoc") {
+        group = "documentation"
+        description = "Builds the published Javadoc for the release variant."
+        source = fileTree("src/main/java") { include("**/*.java") }
+        classpath = files(configurations.named("releaseCompileClasspath"), android.bootClasspath)
+        setDestinationDir(
+            layout.buildDirectory
+                .dir("docs/releaseJavadoc")
+                .get()
+                .asFile,
+        )
+        (options as StandardJavadocDocletOptions).apply {
+            // Javadoc stamps its generation date into every page, which would make the archive
+            // differ between two builds of the same commit.
+            addBooleanOption("notimestamp", true)
+            addStringOption("Xdoclint:none", "-quiet")
+        }
+    }
+
+val releaseJavadocJar =
+    tasks.register<Jar>("releaseJavadocJar") {
+        group = "documentation"
+        description = "Packages the published Javadoc for the release variant."
+        archiveClassifier.set("javadoc")
+        from(releaseJavadoc)
+    }
+
 afterEvaluate {
     publishing {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
+                artifact(releaseJavadocJar)
             }
         }
     }

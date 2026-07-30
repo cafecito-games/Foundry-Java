@@ -129,11 +129,17 @@ class ProcessorArtifactContractTest {
 
     private static Path onlyJar(Path directory) throws IOException {
         try (var files = Files.list(directory)) {
-            List<Path> jars =
-                    files.filter(path -> path.getFileName().toString().endsWith(".jar")).toList();
+            // Every module also builds the sources and Javadoc archives the release publishes. The
+            // production artifact is the unclassified one, and there is still exactly one of it.
+            List<Path> jars = files.filter(ProcessorArtifactContractTest::isProductionJar).toList();
             assertEquals(1, jars.size(), directory.toString());
             return jars.get(0);
         }
+    }
+
+    private static boolean isProductionJar(Path path) {
+        String name = path.getFileName().toString();
+        return name.endsWith(".jar") && !name.contains("-sources.") && !name.contains("-javadoc.");
     }
 
     private static void assertForbidden(List<String> values, String... forbidden) {

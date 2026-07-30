@@ -26,9 +26,12 @@ import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.api.tasks.bundling.AbstractArchiveTask
 import org.gradle.api.tasks.compile.JavaCompile
+import org.gradle.api.tasks.javadoc.Javadoc
 import org.gradle.api.tasks.testing.Test
+import org.gradle.external.javadoc.StandardJavadocDocletOptions
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.plugin.devel.GradlePluginDevelopmentExtension
+import org.gradle.plugins.signing.SigningExtension
 import org.w3c.dom.Element
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
@@ -367,13 +370,22 @@ abstract class VerifyPublications : DefaultTask() {
         val moduleDependencies = expectedModuleDependencies.get()
         val moduleArtifactNames = expectedModuleArtifactNames.get()
         val artifacts = expectedArtifacts.get()
-        val jarCount = artifacts.count { it.split('|')[2] == "jar" }
-        val aarCount = artifacts.count { it.split('|')[2] == "aar" }
+        // The main-artifact topology and the classified archives are counted over separate
+        // collections so each stays an exact check: eight main JARs and one AAR, plus sources and
+        // Javadoc for every one of the nine published modules.
+        val mainArtifacts = artifacts.filter { it.split('|')[3].isEmpty() }
+        val jarCount = mainArtifacts.count { it.split('|')[2] == "jar" }
+        val aarCount = mainArtifacts.count { it.split('|')[2] == "aar" }
+        val sourcesJarCount = artifacts.count { it.split('|')[3] == "sources" }
+        val javadocJarCount = artifacts.count { it.split('|')[3] == "javadoc" }
 
         check(poms.size == 10) { "Bootstrap topology must contain exactly 10 POM publications." }
         check(modules.size == 9) { "Bootstrap topology must contain exactly 9 Gradle module publications." }
         check(jarCount == 8 && aarCount == 1) {
             "Bootstrap topology must contain exactly 8 JARs and 1 AAR."
+        }
+        check(sourcesJarCount == 9 && javadocJarCount == 9) {
+            "Every published module must publish a sources and a Javadoc archive."
         }
         check(pomDependencies.keys == poms.keys) {
             "Every expected POM must declare an exact dependency contract."
@@ -563,6 +575,13 @@ plugins {
 
 group = "games.cafecito.foundry"
 version = providers.gradleProperty("foundryVersion").orElse("0.1.0-SNAPSHOT").get()
+
+// Release signing material reaches Gradle as ORG_GRADLE_PROJECT_signingKey and
+// ORG_GRADLE_PROJECT_signingPassword environment values, never as a command-line -P argument and
+// never as a checked-in property, so no key or password can appear in a process listing or a log.
+val releaseSigningKey = providers.gradleProperty("signingKey")
+val releaseSigningPassword = providers.gradleProperty("signingPassword").orElse("")
+val releaseStagingRepository = providers.gradleProperty("foundryStagingRepository")
 
 java {
     toolchain {
@@ -918,20 +937,42 @@ val requiredModuleDependencies =
         testPublicationDirectory to
             "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
     )
+
+// Every published module carries its main archive plus the sources and Javadoc archives Maven
+// Central requires, and Gradle module metadata names all three.
+fun moduleArtifactNames(
+    artifactId: String,
+    mainExtension: String,
+) = listOf(
+    "$artifactId-$requiredPublicationVersion.$mainExtension",
+    "$artifactId-$requiredPublicationVersion-sources.jar",
+    "$artifactId-$requiredPublicationVersion-javadoc.jar",
+).joinToString(";")
+
+// The Android release Javadoc is published as a Maven artifact rather than a Gradle variant, because
+// the Android library plugin's own Javadoc generation cannot read Java records in a dependency. It is
+// therefore absent from Gradle module metadata and present in the Maven layout; see
+// foundry-java-android/build.gradle.kts.
+val androidModuleArtifactNames =
+    listOf(
+        "foundry-java-android-$requiredPublicationVersion.aar",
+        "foundry-java-android-$requiredPublicationVersion-sources.jar",
+    ).joinToString(";")
+
 val requiredModuleArtifactNames =
     mapOf(
-        androidPublicationDirectory to "foundry-java-android-$requiredPublicationVersion.aar",
-        annotationsPublicationDirectory to "foundry-java-annotations-$requiredPublicationVersion.jar",
-        apiModelPublicationDirectory to "foundry-java-api-model-$requiredPublicationVersion.jar",
-        generatorPublicationDirectory to "foundry-java-generator-$requiredPublicationVersion.jar",
+        androidPublicationDirectory to androidModuleArtifactNames,
+        annotationsPublicationDirectory to moduleArtifactNames("foundry-java-annotations", "jar"),
+        apiModelPublicationDirectory to moduleArtifactNames("foundry-java-api-model", "jar"),
+        generatorPublicationDirectory to moduleArtifactNames("foundry-java-generator", "jar"),
         gradlePluginPublicationDirectory to
-            "foundry-java-gradle-plugin-$requiredPublicationVersion.jar",
-        kotlinPublicationDirectory to "foundry-java-kotlin-$requiredPublicationVersion.jar",
-        processorPublicationDirectory to "foundry-java-processor-$requiredPublicationVersion.jar",
-        runtimePublicationDirectory to "foundry-java-runtime-$requiredPublicationVersion.jar",
-        testPublicationDirectory to "foundry-java-test-$requiredPublicationVersion.jar",
+            moduleArtifactNames("foundry-java-gradle-plugin", "jar"),
+        kotlinPublicationDirectory to moduleArtifactNames("foundry-java-kotlin", "jar"),
+        processorPublicationDirectory to moduleArtifactNames("foundry-java-processor", "jar"),
+        runtimePublicationDirectory to moduleArtifactNames("foundry-java-runtime", "jar"),
+        testPublicationDirectory to moduleArtifactNames("foundry-java-test", "jar"),
     )
-val requiredPublicationArtifacts =
+val requiredMainPublicationArtifacts =
     listOf(
         "$androidPublicationDirectory|foundry-java-android|aar||" +
             "foundry-java-android-$requiredPublicationVersion.aar",
@@ -952,6 +993,47 @@ val requiredPublicationArtifacts =
         "$testPublicationDirectory|foundry-java-test|jar||" +
             "foundry-java-test-$requiredPublicationVersion.jar",
     )
+val requiredClassifiedPublicationArtifacts =
+    listOf(
+        "$androidPublicationDirectory|foundry-java-android|jar|sources|" +
+            "foundry-java-android-$requiredPublicationVersion-sources.jar",
+        "$androidPublicationDirectory|foundry-java-android|jar|javadoc|" +
+            "foundry-java-android-$requiredPublicationVersion-javadoc.jar",
+        "$annotationsPublicationDirectory|foundry-java-annotations|jar|sources|" +
+            "foundry-java-annotations-$requiredPublicationVersion-sources.jar",
+        "$annotationsPublicationDirectory|foundry-java-annotations|jar|javadoc|" +
+            "foundry-java-annotations-$requiredPublicationVersion-javadoc.jar",
+        "$apiModelPublicationDirectory|foundry-java-api-model|jar|sources|" +
+            "foundry-java-api-model-$requiredPublicationVersion-sources.jar",
+        "$apiModelPublicationDirectory|foundry-java-api-model|jar|javadoc|" +
+            "foundry-java-api-model-$requiredPublicationVersion-javadoc.jar",
+        "$generatorPublicationDirectory|foundry-java-generator|jar|sources|" +
+            "foundry-java-generator-$requiredPublicationVersion-sources.jar",
+        "$generatorPublicationDirectory|foundry-java-generator|jar|javadoc|" +
+            "foundry-java-generator-$requiredPublicationVersion-javadoc.jar",
+        "$gradlePluginPublicationDirectory|foundry-java-gradle-plugin|jar|sources|" +
+            "foundry-java-gradle-plugin-$requiredPublicationVersion-sources.jar",
+        "$gradlePluginPublicationDirectory|foundry-java-gradle-plugin|jar|javadoc|" +
+            "foundry-java-gradle-plugin-$requiredPublicationVersion-javadoc.jar",
+        "$kotlinPublicationDirectory|foundry-java-kotlin|jar|sources|" +
+            "foundry-java-kotlin-$requiredPublicationVersion-sources.jar",
+        "$kotlinPublicationDirectory|foundry-java-kotlin|jar|javadoc|" +
+            "foundry-java-kotlin-$requiredPublicationVersion-javadoc.jar",
+        "$processorPublicationDirectory|foundry-java-processor|jar|sources|" +
+            "foundry-java-processor-$requiredPublicationVersion-sources.jar",
+        "$processorPublicationDirectory|foundry-java-processor|jar|javadoc|" +
+            "foundry-java-processor-$requiredPublicationVersion-javadoc.jar",
+        "$runtimePublicationDirectory|foundry-java-runtime|jar|sources|" +
+            "foundry-java-runtime-$requiredPublicationVersion-sources.jar",
+        "$runtimePublicationDirectory|foundry-java-runtime|jar|javadoc|" +
+            "foundry-java-runtime-$requiredPublicationVersion-javadoc.jar",
+        "$testPublicationDirectory|foundry-java-test|jar|sources|" +
+            "foundry-java-test-$requiredPublicationVersion-sources.jar",
+        "$testPublicationDirectory|foundry-java-test|jar|javadoc|" +
+            "foundry-java-test-$requiredPublicationVersion-javadoc.jar",
+    )
+val requiredPublicationArtifacts =
+    requiredMainPublicationArtifacts + requiredClassifiedPublicationArtifacts
 val allowedBootstrapAndroidClasses =
     setOf(
         "games/cafecito/foundry/java/FoundryJavaInitializer\$DiagnosticCallbacks.class",
@@ -1114,6 +1196,13 @@ subprojects {
             toolchain.languageVersion.set(JavaLanguageVersion.of(17))
             sourceCompatibility = JavaVersion.VERSION_17
             targetCompatibility = JavaVersion.VERSION_17
+            withSourcesJar()
+            withJavadocJar()
+        }
+        tasks.withType<Javadoc>().configureEach {
+            // Javadoc stamps its generation date into every page, which would make the Javadoc
+            // archive differ between two builds of the same commit.
+            (options as StandardJavadocDocletOptions).addBooleanOption("notimestamp", true)
         }
         dependencies.add("testImplementation", dependencies.platform("org.junit:junit-bom:$junitVersion"))
         dependencies.add("testImplementation", "org.junit.jupiter:junit-jupiter")
@@ -1136,6 +1225,22 @@ subprojects {
                             .asFile
                             .toURI()
                 }
+                maven {
+                    // The release pipeline stages into a directory it owns, verifies it completely,
+                    // and only then uploads. Nothing in this build ever talks to a remote
+                    // repository: see gradle/stage-release.sh and gradle/upload-staged-release.sh.
+                    name = "staging"
+                    url =
+                        file(
+                            releaseStagingRepository.getOrElse(
+                                rootProject.layout.buildDirectory
+                                    .dir("release-staging/repository")
+                                    .get()
+                                    .asFile
+                                    .absolutePath,
+                            ),
+                        ).toURI()
+                }
             }
             publications.withType<MavenPublication>().configureEach {
                 pom {
@@ -1146,6 +1251,12 @@ subprojects {
                         license {
                             name.set("Apache License, Version 2.0")
                             url.set("https://www.apache.org/licenses/LICENSE-2.0.txt")
+                        }
+                    }
+                    developers {
+                        developer {
+                            name.set("Cafecito Games")
+                            url.set("https://github.com/cafecito-games")
                         }
                     }
                     scm {
@@ -1161,6 +1272,18 @@ subprojects {
                 publications.create<MavenPublication>("mavenJava") {
                     from(components.getByName("java"))
                 }
+            }
+        }
+
+        // Signing is applied only when release key material is supplied, so an ordinary `check` run
+        // configures no signing tasks at all and the configuration cache it stores stays free of
+        // credential-shaped inputs. gradle/verify-staged-release.sh is what proves a release is
+        // signed; it verifies every staged file against the release public key before any upload.
+        if (releaseSigningKey.isPresent) {
+            pluginManager.apply("signing")
+            extensions.configure<SigningExtension> {
+                useInMemoryPgpKeys(releaseSigningKey.get(), releaseSigningPassword.get())
+                sign(extensions.getByType<PublishingExtension>().publications)
             }
         }
     }

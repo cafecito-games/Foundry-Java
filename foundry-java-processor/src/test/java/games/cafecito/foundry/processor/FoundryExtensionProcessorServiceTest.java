@@ -16,8 +16,17 @@ class FoundryExtensionProcessorServiceTest {
     void builtJarRegistersTheProcessorForStandardJavacDiscovery() throws IOException {
         Path processorJar;
         try (var files = Files.list(Path.of("build", "libs"))) {
+            // The sources and Javadoc archives the release publishes are also built here; the
+            // processor artifact is the unclassified JAR.
             List<Path> jars =
-                    files.filter(path -> path.getFileName().toString().endsWith(".jar")).toList();
+                    files.filter(path -> path.getFileName().toString().endsWith(".jar"))
+                            .filter(
+                                    path ->
+                                            !path.getFileName().toString().contains("-sources.")
+                                                    && !path.getFileName()
+                                                            .toString()
+                                                            .contains("-javadoc."))
+                            .toList();
             assertEquals(1, jars.size(), "expected exactly one built processor JAR");
             processorJar = jars.get(0);
         }
