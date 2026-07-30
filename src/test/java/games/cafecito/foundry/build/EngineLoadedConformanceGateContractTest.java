@@ -309,6 +309,7 @@ class EngineLoadedConformanceGateContractTest {
         String normalizedDocumentation = documentation.replaceAll("\\s+", " ");
         String compatibility = read("docs/api-compatibility.md");
         String releasing = read("docs/releasing.md");
+        String normalizedReleasing = releasing.replaceAll("\\s+", " ");
 
         assertTrue(documentation.contains(RELEASE_TAG));
         assertTrue(documentation.contains(PRODUCER_COMMIT));
@@ -343,7 +344,53 @@ class EngineLoadedConformanceGateContractTest {
                         && normalizedDocumentation.contains("production startup")
                         && normalizedDocumentation.contains("Java/Kotlin consumer matrix"),
                 "the always-on API 36 checks must remain explicit");
+        assertTrue(
+                normalizedDocumentation.contains(
+                        "Only the engine-loaded step is skipped, and only when all changed files"
+                                + " belong to the explicit safe-to-skip set"),
+                "the engine-loaded step may skip only when every path is safe");
+        for (String safeCategory :
+                List.of(
+                        "documentation or Markdown",
+                        "branding assets",
+                        "issue or pull-request templates",
+                        "`src/test`",
+                        "`src/testFixtures`",
+                        "`gradle/testFixtures`")) {
+            assertTrue(
+                    normalizedDocumentation.contains(safeCategory),
+                    safeCategory + " must remain in the documented safe-to-skip set");
+        }
+        assertTrue(
+                normalizedDocumentation.contains("A mixed change or unknown path runs the gate"),
+                "mixed changes must run the engine-loaded gate");
+        assertTrue(
+                normalizedDocumentation.contains(
+                        "Collection or classification errors, an incomplete API response,"
+                                + " malformed metadata, and an unknown GitHub file status fail"
+                                + " closed by running it"),
+                "collection and classification errors must fail closed by running the gate");
+        assertTrue(
+                normalizedDocumentation.contains("the exact changed-file count"),
+                "the extractor's exact count validation must be documented");
+        for (String status :
+                List.of(
+                        "added",
+                        "removed",
+                        "modified",
+                        "renamed",
+                        "copied",
+                        "changed",
+                        "unchanged")) {
+            assertTrue(
+                    normalizedDocumentation.contains("`" + status + "`"),
+                    status + " must remain in the documented GitHub status allowlist");
+        }
         assertTrue(releasing.contains("always selects the engine-loaded gate"));
+        assertTrue(
+                normalizedReleasing.contains(
+                        "pull-request-only optimization cannot skip release verification"),
+                "the PR optimization must be documented as unable to skip release verification");
         assertTrue(compatibility.contains("engine-pin.md"));
     }
 
