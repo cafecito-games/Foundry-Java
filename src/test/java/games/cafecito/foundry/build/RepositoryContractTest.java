@@ -698,7 +698,8 @@ class RepositoryContractTest {
         assertEquals(4, occurrences(workflow, UPLOAD_ARTIFACT_COMMIT));
         assertTrue(workflow.contains("name: foundry-java-check-evidence"));
         assertTrue(workflow.contains("name: foundry-java-api36-production-startup-evidence"));
-        assertEquals(4, occurrences(workflow, "always() &&"));
+        assertEquals(2, occurrences(workflow, "if: ${{ always() && !inputs.release }}"));
+        assertEquals(2, occurrences(workflow, "if: always() && inputs.release"));
         int buildStepStart = workflow.indexOf("- name: Build, test, and inspect the native bridge");
         assertTrue(buildStepStart >= 0);
         int buildStepEnd = workflow.indexOf("\n      - ", buildStepStart + 1);
