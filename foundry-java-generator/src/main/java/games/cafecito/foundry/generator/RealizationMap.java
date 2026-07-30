@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -28,9 +29,11 @@ public final class RealizationMap {
     public static final String FORMAT = "foundry-java-realization-map/1";
 
     private final Map<String, Entry> entries;
+    private final String sha256;
 
     private RealizationMap(Map<String, Entry> entries) {
         this.entries = Collections.unmodifiableMap(new LinkedHashMap<>(new TreeMap<>(entries)));
+        this.sha256 = digest(this.entries.values());
     }
 
     /** Returns a map over the given entries, rejecting duplicate source identities. */
@@ -71,14 +74,25 @@ public final class RealizationMap {
 
     /** Returns the SHA-256 of {@link #render()}. */
     public String sha256() {
+        return sha256;
+    }
+
+    /**
+     * Digests exactly the bytes {@link #render()} produces without materializing them, so covering
+     * the whole engine API costs one pass rather than one multi-megabyte string per call.
+     */
+    private static String digest(Collection<Entry> entries) {
+        MessageDigest digest;
         try {
-            return HexFormat.of()
-                    .formatHex(
-                            MessageDigest.getInstance("SHA-256")
-                                    .digest(render().getBytes(StandardCharsets.UTF_8)));
+            digest = MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException exception) {
             throw new AssertionError("Every Java runtime provides SHA-256.", exception);
         }
+        digest.update((FORMAT + "\n").getBytes(StandardCharsets.UTF_8));
+        for (Entry entry : entries) {
+            digest.update((entry.render() + "\n").getBytes(StandardCharsets.UTF_8));
+        }
+        return HexFormat.of().formatHex(digest.digest());
     }
 
     /** Parses the rendering produced by {@link #render()}. */
