@@ -29,7 +29,10 @@ class EngineLoadedConformanceGateContractTest {
     private static final String TEMPLATE_DIGEST =
             "6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f";
     private static final String RUNTIME_MARKER = "FOUNDRY_JAVA_ENGINE_LOADED_ACCEPTANCE_READY";
+    private static final String FAILURE_MARKER = "FOUNDRY_JAVA_ENGINE_LOADED_ACCEPTANCE_FAILED";
     private static final String LOAD_FAILED_TOKEN = "FOUNDRY_JAVA_PLATFORM_EXTENSION_LOAD_FAILED";
+    private static final String READY_DISPATCH_COUNT = "ready_dispatch_count";
+    private static final String PROBE_SCALE = "probe_scale";
     private static final List<String> ABIS = List.of("arm64-v8a", "armeabi-v7a", "x86", "x86_64");
     private static final List<String> SCENARIOS =
             List.of("default-debug", "custom-debug", "default-release", "custom-release");
@@ -209,6 +212,19 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(acceptanceBuild.contains("-Afoundry.module=acceptance"));
         assertTrue(registered.contains("name = \"FoundryJavaEngineProbe\""));
         assertTrue(unregistered.contains("name = \"FoundryJavaEngineProbeDisabled\""));
+        // Acceptance criterion 3 of the release epic rests on a real engine reaching every authored
+        // member kind, so the probe has to declare more than one exported method.
+        assertTrue(
+                registered.contains("@FoundryOverride"),
+                "the probe must declare a virtual override for the engine to dispatch");
+        assertTrue(
+                registered.contains("public void onReady()"),
+                "the override must implement the generated _ready callback");
+        assertTrue(
+                registered.contains("@FoundryProperty"),
+                "the probe must declare a property for the engine to round-trip");
+        assertTrue(registered.contains("name = \"" + PROBE_SCALE + "\""));
+        assertTrue(registered.contains("name = \"" + READY_DISPATCH_COUNT + "\""));
         assertEquals(
                 registered.replace("FoundryJavaEngineProbeDisabled", "FoundryJavaEngineProbe"),
                 unregistered.replace("FoundryJavaEngineProbeDisabled", "FoundryJavaEngineProbe"),
@@ -226,9 +242,31 @@ class EngineLoadedConformanceGateContractTest {
         assertTrue(script.contains("ClassDB.class_exists(\"FoundryJavaEngineProbe\")"));
         assertTrue(script.contains("ClassDB.instantiate(\"FoundryJavaEngineProbe\")"));
         assertTrue(script.contains("engine_probe"), "a Java-defined method must be dispatched");
+        // A method call alone leaves the virtual dispatch key and the property system unproven, so
+        // the script drives every authored member kind a real engine can reach. The override is
+        // reached by putting the probe in the tree, which is the engine's own call into Java.
+        assertTrue(
+                script.contains("add_child(probe)"),
+                "the probe must enter the tree so the engine dispatches its virtual override");
+        assertTrue(
+                script.contains(READY_DISPATCH_COUNT),
+                "the virtual override's dispatch count must be read back");
+        assertTrue(
+                script.contains("probe.set(\"" + PROBE_SCALE + "\"")
+                        && script.contains("probe.get(\"" + PROBE_SCALE + "\")"),
+                "the property must be round-tripped through the engine");
+        for (String reason : List.of("virtual_not_dispatched", "property_roundtrip")) {
+            assertTrue(
+                    script.contains(FAILURE_MARKER + " " + reason),
+                    reason + " must be a distinct failure reason");
+        }
         assertTrue(
                 script.indexOf(RUNTIME_MARKER) > script.indexOf("ClassDB.instantiate"),
                 "the marker may only be printed after the Java class answered");
+        assertTrue(
+                script.indexOf(RUNTIME_MARKER) > script.indexOf(READY_DISPATCH_COUNT)
+                        && script.indexOf(RUNTIME_MARKER) > script.indexOf(PROBE_SCALE),
+                "the marker may only be printed after every member kind answered");
         assertEquals(1, occurrences(script, "print(\"" + RUNTIME_MARKER + "\")"));
         assertTrue(script.contains("FOUNDRY_JAVA_ENGINE_LOADED_ACCEPTANCE_FAILED"));
         assertTrue(scene.contains("res://main.fs"));
