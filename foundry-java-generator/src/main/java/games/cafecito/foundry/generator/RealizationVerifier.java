@@ -36,8 +36,8 @@ public final class RealizationVerifier {
 
     /**
      * Reports every manifest provenance field that disagrees with the accepted inputs. The
-     * manifest-versus-map comparison re-derives from the manifest's own provenance, so provenance
-     * itself is anchored here instead.
+     * manifest-versus-map comparison covers the realization map and the entries derived from it,
+     * not the provenance the manifest declares, so provenance is anchored here instead.
      */
     public static List<String> provenanceDrift(
             SurfaceManifest manifest, SurfaceManifest.Provenance expected) {
