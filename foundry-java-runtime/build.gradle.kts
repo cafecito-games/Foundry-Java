@@ -110,9 +110,12 @@ val verifyGeneratedRealization =
         dependsOn(generateFoundryApi, tasks.named("compileJava"))
         classpath = files(generatorJar, apiModelJar, annotationsJar, runtimeClasses)
         mainClass.set("games.cafecito.foundry.generator.RealizationVerifier")
-        // Parsing the whole engine-API surface manifest alongside the realization map needs more
-        // than the forked default heap on a stock continuous-integration runner.
-        maxHeapSize = "3g"
+        // A measured budget, not a ceiling picked for safety: verification exhausts 256m inside
+        // surface-manifest parsing and passes at 288m against the pinned engine API. Holding it
+        // explicit keeps the requirement identical on every machine, because the JVM default is a
+        // quarter of physical RAM. Raising it requires a fresh measurement — see
+        // docs/binding-neutral-surface-manifest.md.
+        maxHeapSize = "512m"
 
         inputs
             .files(
