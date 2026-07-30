@@ -270,7 +270,11 @@ while IFS= read -r staged_file; do
   if [[ -z "$staged_file" ]]; then
     continue
   fi
-  if ! printf '%s' "$expected_files" | grep -qxF "$staged_file"; then
+  # A piped `printf | grep -qxF` here would let grep's early exit on a match send SIGPIPE to
+  # printf before it finishes writing the full (multi-kilobyte) expected-files list; with
+  # pipefail that turns a genuine match into a nonzero pipeline status, misreporting a declared
+  # file as undeclared. The here-string avoids the live pipe, and with it the race, entirely.
+  if ! grep -qxF "$staged_file" <<< "$expected_files"; then
     report "the staged repository contains the undeclared file ${staged_file}."
   fi
 done <<< "$(cd "$repository" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
