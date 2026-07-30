@@ -321,13 +321,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Bash disables errexit for a command whose status is being tested — including a function
+          # call used as an if/elif condition, for its entire execution, not just its own top level.
+          # A failed `gh api` call must never be read as "the artifact does not exist", so every such
+          # call here checks its own exit status explicitly and calls `exit` (which always terminates
+          # the shell, unlike `return`, regardless of errexit being suppressed) rather than trusting
+          # errexit to catch it.
           run_is_trusted() {
             local run_id="$1"
             local info path event head_branch
-            info="$(
+            if ! info="$(
               gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" \
                 --jq '[.path, .event, .head_branch] | @tsv'
-            )"
+            )"; then
+              printf 'Failed to look up the run that produced an artifact (run %s).\n' "$run_id" >&2
+              exit 1
+            fi
             IFS=$'\t' read -r path event head_branch <<< "$info"
             [[ "$path" == '.github/workflows/release.yml' ]] &&
               [[ "$event" == 'push' ]] &&
@@ -336,7 +345,7 @@ jobs:
           find_latest_trusted_run_with_artifact() {
             local name="$1"
             local matches
-            matches="$(
+            if ! matches="$(
               gh api --paginate \
                 "repos/${GITHUB_REPOSITORY}/actions/artifacts" \
                 --jq ".artifacts[]
@@ -344,12 +353,15 @@ jobs:
                   | select(.expired == false)
                   | [.created_at, (.workflow_run.id | tostring)]
                   | @tsv"
-            )"
+            )"; then
+              printf 'Failed to list artifacts while searching for %s.\n' "$name" >&2
+              exit 1
+            fi
             if [[ -z "$matches" ]]; then
               return 1
             fi
-            local created_at run_id
-            while IFS=$'\t' read -r created_at run_id; do
+            local _created_at run_id
+            while IFS=$'\t' read -r _created_at run_id; do
               if [[ -z "$run_id" ]]; then
                 continue
               fi
