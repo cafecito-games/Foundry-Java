@@ -11,8 +11,8 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 tag="$1"
-repo_root="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-repo_root="$(cd "$repo_root" && pwd)"
+repo_root="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
+repo_root="$(cd "$repo_root" && pwd -P)"
 lock_patterns=(gradle.lockfile ':(glob)**/gradle.lockfile' settings-gradle.lockfile)
 
 fail() {

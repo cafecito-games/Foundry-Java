@@ -16,10 +16,10 @@ fi
 
 tag="$1"
 work="$2"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 mkdir -p "$work"
-work="$(cd "$work" && pwd)"
+work="$(cd "$work" && pwd -P)"
 first="${work}/first"
 second="${work}/second"
 

@@ -73,6 +73,9 @@ class ReleasePipelineContractTest {
                     text.startsWith("#!/usr/bin/env bash\n"), script + " must be a bash program");
             assertTrue(text.contains("set -euo pipefail"), script + " must fail fast");
             assertFalse(text.contains("|| true"), script + " must not swallow failures");
+            // A logical path leaves symlinked parents unresolved, so a path that must be compared
+            // against the checkout, or deleted, is always resolved physically.
+            assertFalse(text.contains("&& pwd)"), script + " must resolve paths with pwd -P");
         }
     }
 

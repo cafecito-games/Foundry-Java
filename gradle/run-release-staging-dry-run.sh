@@ -14,7 +14,7 @@ if [[ $# -gt 1 ]]; then
   exit 2
 fi
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 declared_version="$(sed -n 's/^foundryVersion=\([^[:space:]]*\)[[:space:]]*$/\1/p' \
   "${repo_root}/gradle.properties" | head -n 1)"
 tag="${1:-v${declared_version}}"
@@ -26,12 +26,13 @@ if [[ "$requested_target" != "staging" ]]; then
   exit 1
 fi
 
-# The work directory is deleted and rebuilt, and it is overridable, so it is canonicalized and
-# checked before anything is removed. A path that is, contains, or lives inside the checkout would
-# destroy the sources under test.
+# The work directory is deleted and rebuilt, and it is overridable, so it is resolved physically with
+# `pwd -P` and checked before anything is removed. A path that is, contains, or lives inside the
+# checkout — including one that reaches it through a symlinked parent — would destroy the sources
+# under test.
 work="${FOUNDRY_RELEASE_DRY_RUN_DIR:-${RUNNER_TEMP:-/tmp}/foundry-java-release-dry-run}"
 mkdir -p "$work"
-work="$(cd "$work" && pwd)"
+work="$(cd "$work" && pwd -P)"
 if [[ "$work" == "/" || "$work" == "$repo_root" ]]; then
   printf 'The dry run refuses %s as a work directory.\n' "$work" >&2
   exit 1

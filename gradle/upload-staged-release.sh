@@ -14,10 +14,10 @@ if [[ $# -ne 3 ]]; then
   exit 2
 fi
 
-staging="$(cd "$1" && pwd)"
+staging="$(cd "$1" && pwd -P)"
 version="$2"
 target="$3"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 topology="${FOUNDRY_RELEASE_TOPOLOGY:-${repo_root}/gradle/release-topology.txt}"
 repository="${staging}/repository"
 central_release_repository="https://repo1.maven.org/maven2"
@@ -43,7 +43,7 @@ case "$target" in
       exit 1
     fi
     mkdir -p "$staging_target"
-    staging_target="$(cd "$staging_target" && pwd)"
+    staging_target="$(cd "$staging_target" && pwd -P)"
     ;;
   central)
     if [[ -z "${FOUNDRY_CENTRAL_PORTAL_TOKEN:-}" ]]; then
