@@ -164,3 +164,10 @@ available transitively in both Gradle and Maven publication metadata.
 
 This pipeline consumes only the public `FoundryExtension` API description and C interface header.
 It neither reads private Android host JNI nor packages or links `libfoundry_android.so`.
+
+## Engine-loaded conformance
+
+The same release these inputs are vendored from is also the release a real engine is required to load
+this binding from. [`docs/engine-pin.md`](engine-pin.md) records the pinned engine, the published
+asset digests, how to bump the pin, and how to reproduce the engine-loaded API 36 conformance gate
+locally.

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "release_tag": "v0.1.0-alpha.14",
+  "release_url": "https://github.com/cafecito-games/Foundry/releases/tag/v0.1.0-alpha.14",
+  "download_url_prefix": "https://github.com/cafecito-games/Foundry/releases/download/v0.1.0-alpha.14",
+  "raw_url_prefix": "https://raw.githubusercontent.com/cafecito-games/Foundry/b9a5e66c21f8f7b707a9e526ca20557485c53227",
+  "producer_commit": "b9a5e66c21f8f7b707a9e526ca20557485c53227",
+  "api_version": "0.1.0-alpha.14",
+  "assets": {
+    "editor": {
+      "name": "Foundry_v0.1.0-alpha.14_linux.x86_64.zip",
+      "size": 75400574,
+      "sha256": "af8dd877477189214505fd2b2640456dc361310e62aab79b297537c08e3ef91d"
+    },
+    "export_templates": {
+      "name": "Foundry_v0.1.0-alpha.14_export_templates.tpz",
+      "size": 1147349658,
+      "sha256": "6a5cc2bb5b8b4cc7f48bcdf51575645fca408ac62e25dad0691d71f3a117a03f"
+    },
+    "api": {
+      "name": "Foundry_v0.1.0-alpha.14_api.zip",
+      "size": 1216523,
+      "sha256": "b6f44138e71e2b7c0a863457a26734fb2af812f080845fbc1d8a2fca3d2c1c44"
+    }
+  },
+  "device_acceptance": {
+    "path": "platform/android/android_device_acceptance.py",
+    "sha256": "7a0da109d91a6bd02d6018207a225528b92b6c72a823303d2fbaeac756c7ba7c"
+  }
+}
