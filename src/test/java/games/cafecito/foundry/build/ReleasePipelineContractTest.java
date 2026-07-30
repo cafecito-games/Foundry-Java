@@ -480,6 +480,17 @@ class ReleasePipelineContractTest {
         assertTrue(workflow.contains("\"$path\" == '.github/workflows/release.yml'"));
         assertTrue(workflow.contains("\"$event\" == 'push'"));
         assertTrue(workflow.contains("\"$head_branch\" == \"$GITHUB_REF_NAME\""));
+        // Testing a command substitution directly with if/elif collapses every nonzero exit code to
+        // plain "false", so a real API failure becomes indistinguishable from a clean "not found"
+        // and
+        // the release would proceed as though nothing had happened. The lookup's status is instead
+        // captured explicitly and dispatched on the specific exit code.
+        assertFalse(
+                workflow.contains("if run_id=\"$(find_latest_trusted_run_with_artifact"),
+                "the lookup's exit status must not be tested directly by if/elif");
+        assertTrue(workflow.contains("set +e"));
+        assertTrue(workflow.contains("status=$?"));
+        assertTrue(workflow.contains("case \"$status\" in"));
         // A hard runner loss leaves no later step able to run, so the intent marker is durably
         // persisted, as its own artifact upload, strictly before the irreversible Central call is
         // even attempted — not only after the publish step finishes or fails.

@@ -321,12 +321,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Bash disables errexit for a command whose status is being tested — including a function
-          # call used as an if/elif condition, for its entire execution, not just its own top level.
-          # A failed `gh api` call must never be read as "the artifact does not exist", so every such
-          # call here checks its own exit status explicitly and calls `exit` (which always terminates
-          # the shell, unlike `return`, regardless of errexit being suppressed) rather than trusting
-          # errexit to catch it.
+          # A failed `gh api` call must never be read as "the artifact does not exist". That
+          # distinction cannot be made by testing a command substitution directly as an if/elif
+          # condition: bash collapses every nonzero status from that test to plain "false", so an
+          # exit code chosen to signal a hard failure is indistinguishable there from one chosen to
+          # signal a clean "found nothing". Instead, exit codes carry a specific contract — 0 found,
+          # 3 searched successfully and found nothing, anything else the search itself failed — and
+          # every call site captures the status explicitly with `set +e` / `set -e` around a plain
+          # assignment, then branches on the numeric value with `case`, never with `if` on the
+          # substitution itself.
           run_is_trusted() {
             local run_id="$1"
             local info path event head_branch
@@ -355,10 +358,10 @@ jobs:
                   | @tsv"
             )"; then
               printf 'Failed to list artifacts while searching for %s.\n' "$name" >&2
-              exit 1
+              exit 2
             fi
             if [[ -z "$matches" ]]; then
-              return 1
+              exit 3
             fi
             local _created_at run_id
             while IFS=$'\t' read -r _created_at run_id; do
@@ -367,22 +370,41 @@ jobs:
               fi
               if run_is_trusted "$run_id"; then
                 printf '%s\n' "$run_id"
-                return 0
+                exit 0
               fi
               printf 'Ignoring artifact %s from untrusted run %s: not this workflow on a tag push for this tag.\n' \
                 "$name" "$run_id" >&2
             done <<< "$(printf '%s\n' "$matches" | sort -r)"
-            return 1
+            exit 3
           }
           record_name="foundry-java-release-upload-record-${GITHUB_REF_NAME}"
           intent_name="foundry-java-release-upload-intent-${GITHUB_REF_NAME}"
-          if run_id="$(find_latest_trusted_run_with_artifact "$record_name")"; then
+          run_id=""
+          artifact_name=""
+          for candidate in "$record_name" "$intent_name"; do
+            set +e
+            output="$(find_latest_trusted_run_with_artifact "$candidate")"
+            status=$?
+            set -e
+            case "$status" in
+              0)
+                run_id="$output"
+                artifact_name="$candidate"
+                break
+                ;;
+              3)
+                continue
+                ;;
+              *)
+                printf 'Failed to search for %s; refusing to treat an API failure as "nothing exists".\n' \
+                  "$candidate" >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [[ -n "$run_id" ]]; then
             gh run download "$run_id" \
-              --name "$record_name" \
-              --dir "${RUNNER_TEMP}/foundry-java-release/first"
-          elif run_id="$(find_latest_trusted_run_with_artifact "$intent_name")"; then
-            gh run download "$run_id" \
-              --name "$intent_name" \
+              --name "$artifact_name" \
               --dir "${RUNNER_TEMP}/foundry-java-release/first"
           else
             printf 'No upload record or intent marker exists for version %s yet.\n' "${GITHUB_REF_NAME#v}"
