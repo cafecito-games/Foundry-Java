@@ -49,6 +49,40 @@ if [[ -f "$uploaded" ]] && grep -q "\"target\": \"${target}\"" "$uploaded" &&
   exit 1
 fi
 
+# The intent marker is written to disk before the irreversible upload call, precisely so that if the
+# process dies between the target accepting the bundle and upload-summary.json being written, the next
+# run finds evidence that an attempt was made. Central uploads are not reversible, so a surviving
+# intent marker without a completed record is treated as ambiguous rather than as "safe to retry": it
+# may already have been accepted. Resolving it requires a human to check the target directly and, once
+# satisfied nothing was accepted, remove the marker before releasing again.
+#
+# A caller may durably persist this exact marker itself, strictly before invoking this script, as a
+# guard against losing the runner entirely before this script gets to run at all. FOUNDRY_RELEASE_UPLOAD_ATTEMPT
+# names that caller's attempt, so its own marker is recognized as the current attempt continuing,
+# never as a stale, unrelated one: a match requires both a non-empty token here and the same token
+# recorded in the marker, so the absence of an attempt token on either side is never treated as a match.
+attempt_token="${FOUNDRY_RELEASE_UPLOAD_ATTEMPT:-}"
+intent="${staging}/upload-intent.json"
+if [[ -f "$intent" ]] && grep -q "\"target\": \"${target}\"" "$intent" &&
+  grep -q "\"version\": \"${version}\"" "$intent"; then
+  continuing_this_attempt=0
+  if [[ -n "$attempt_token" ]] && grep -q "\"attempt\": \"${attempt_token}\"" "$intent"; then
+    continuing_this_attempt=1
+  fi
+  if [[ "$continuing_this_attempt" -ne 1 ]]; then
+    printf 'Upload refused: a previous attempt to upload release %s to the %s target started but never\n' \
+      "$version" "$target" >&2
+    printf 'recorded a completed upload (%s exists, %s does not).\n' "$intent" "$uploaded" >&2
+    printf 'This is ambiguous: the bundle may already have been accepted. Verify against the %s target\n' \
+      "$target" >&2
+    printf 'directly (the Central Portal, for the central target) before doing anything else. Never\n' >&2
+    printf 'resubmit while this is unresolved. Once confirmed nothing was accepted, remove %s and\n' \
+      "$intent" >&2
+    printf 'retry.\n' >&2
+    exit 1
+  fi
+fi
+
 case "$target" in
   staging)
     staging_target="${FOUNDRY_RELEASE_STAGING_TARGET:-}"
@@ -162,6 +196,20 @@ upload_bundle() {
   esac
 }
 
+# Persisted before upload_bundle is called, so it survives on disk even if the process dies during or
+# immediately after the irreversible transfer, before the completed-upload record below can be written.
+# If a caller already durably persisted this same marker before invoking this script, this simply
+# rewrites it with identical content.
+{
+  printf '{\n'
+  printf '  "schema_version": 1,\n'
+  printf '  "result": "intent",\n'
+  printf '  "target": "%s",\n' "$target"
+  printf '  "version": "%s",\n' "$version"
+  printf '  "attempt": "%s"\n' "$attempt_token"
+  printf '}\n'
+} > "$intent"
+
 upload_bundle
 
 uploaded_files="$(cd "$repository" && find . -type f | sed 's|^\./||' | LC_ALL=C sort)"
@@ -184,5 +232,6 @@ uploaded_files="$(cd "$repository" && find . -type f | sed 's|^\./||' | LC_ALL=C
   printf '\n  ]\n'
   printf '}\n'
 } > "${staging}/upload-summary.json"
+rm -f "$intent"
 
 printf 'Uploaded release %s to the %s target.\n' "$version" "$target"

@@ -423,18 +423,99 @@ class ReleasePipelineContractTest {
         // bundle.
         assertTrue(upload.contains("deployment_id"));
         assertTrue(upload.contains("USER_MANAGED"));
+        // The intent marker is written before the irreversible call, so it survives a crash between
+        // the upload and the completed record being written, and recovery treats it as ambiguous
+        // rather than as permission to retry.
+        assertTrue(upload.contains("upload-intent.json"));
+        int intentWrite = upload.indexOf("\"result\": \"intent\"");
+        int uploadBundleCall = upload.lastIndexOf("upload_bundle");
+        assertTrue(intentWrite > 0 && uploadBundleCall > intentWrite);
+        assertTrue(upload.contains("ambiguous"));
 
         // The record has to survive the runner, or a re-run of the publish job would download the
         // original staged release, see no record, and submit the bundle a second time.
         String workflow = read(WORKFLOW);
-        assertTrue(workflow.contains("name: foundry-java-release-upload-record"));
+        assertTrue(
+                workflow.contains(
+                        "name: foundry-java-release-upload-record-${{ github.ref_name }}"));
+        assertTrue(
+                workflow.contains(
+                        "name: foundry-java-release-upload-intent-${{ github.ref_name }}"),
+                "the intent marker must be its own artifact, distinct from the completed record");
+        // The intent artifact must never be overwritten: an overwrite is a delete followed by an
+        // upload, and if the runner is lost between the two, the artifact is gone entirely, leaving
+        // no
+        // durable evidence at all that an attempt happened.
+        int intentArtifactUpload =
+                workflow.indexOf("name: foundry-java-release-upload-intent-${{ github.ref_name }}");
+        int recordArtifactUpload =
+                workflow.indexOf("name: foundry-java-release-upload-record-${{ github.ref_name }}");
+        String intentArtifactStep =
+                workflow.substring(intentArtifactUpload, intentArtifactUpload + 200);
+        assertFalse(intentArtifactStep.contains("overwrite"));
+        String recordArtifactStep =
+                workflow.substring(recordArtifactUpload, recordArtifactUpload + 200);
+        assertTrue(recordArtifactStep.contains("overwrite: true"));
         // Recovery must fail closed: only an empty artifact listing may be read as "not uploaded".
         assertFalse(workflow.contains("continue-on-error"));
-        assertTrue(workflow.contains("actions/runs/${GITHUB_RUN_ID}/artifacts"));
+        // Dedup is scoped by the release version's artifact name across the whole repository, not
+        // by
+        // GITHUB_RUN_ID, so a fresh tag-push run can see a still-unpublished deployment left by a
+        // different, earlier run.
+        assertFalse(workflow.contains("actions/runs/${GITHUB_RUN_ID}/artifacts"));
+        assertTrue(workflow.contains("repos/${GITHUB_REPOSITORY}/actions/artifacts"));
+        assertTrue(
+                workflow.contains(
+                        "record_name=\"foundry-java-release-upload-record-${GITHUB_REF_NAME}\""));
+        assertTrue(
+                workflow.contains(
+                        "intent_name=\"foundry-java-release-upload-intent-${GITHUB_REF_NAME}\""));
+        // gh api --jq takes one jq program, not additional jq CLI flags such as --arg, so the query
+        // must not rely on one.
+        assertFalse(workflow.contains("--jq --arg"));
+        // The artifact name alone is not proof of origin: any workflow in the repository could
+        // upload an artifact under the same name. A recovered artifact is trusted only if the run
+        // that produced it is this workflow file, triggered by a tag push for this exact tag.
+        assertTrue(workflow.contains("run_is_trusted"));
+        assertTrue(workflow.contains("\"$path\" == '.github/workflows/release.yml'"));
+        assertTrue(workflow.contains("\"$event\" == 'push'"));
+        assertTrue(workflow.contains("\"$head_branch\" == \"$GITHUB_REF_NAME\""));
+        // Testing a command substitution directly with if/elif collapses every nonzero exit code to
+        // plain "false", so a real API failure becomes indistinguishable from a clean "not found"
+        // and
+        // the release would proceed as though nothing had happened. The lookup's status is instead
+        // captured explicitly and dispatched on the specific exit code.
+        assertFalse(
+                workflow.contains("if run_id=\"$(find_latest_trusted_run_with_artifact"),
+                "the lookup's exit status must not be tested directly by if/elif");
+        assertTrue(workflow.contains("set +e"));
+        assertTrue(workflow.contains("status=$?"));
+        assertTrue(workflow.contains("case \"$status\" in"));
+        // A hard runner loss leaves no later step able to run, so the intent marker is durably
+        // persisted, as its own artifact upload, strictly before the irreversible Central call is
+        // even attempted — not only after the publish step finishes or fails.
+        assertTrue(
+                workflow.contains(
+                        "Persist the pre-upload intent marker before any irreversible call"));
+        assertTrue(workflow.contains("FOUNDRY_RELEASE_UPLOAD_ATTEMPT"));
         int recover = workflow.indexOf("- name: Recover any record of a completed upload");
+        int attempt = workflow.indexOf("- name: Generate this attempt's identifier");
+        int persistIntent =
+                workflow.indexOf(
+                        "- name: Persist the pre-upload intent marker before any irreversible call");
+        int recordIntent =
+                workflow.indexOf(
+                        "- name: Record the pre-upload intent so a runner loss is still"
+                                + " discoverable");
         int publish = workflow.indexOf("- name: Publish the verified staged release");
         int record = workflow.indexOf("- name: Record the completed upload so a re-run cannot");
-        assertTrue(recover > 0 && publish > recover && record > publish);
+        assertTrue(
+                recover > 0
+                        && attempt > recover
+                        && persistIntent > attempt
+                        && recordIntent > persistIntent
+                        && publish > recordIntent
+                        && record > publish);
     }
 
     @Test

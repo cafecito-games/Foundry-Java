@@ -145,8 +145,28 @@ rather than a repair.
   `USER_MANAGED` until a human releases it. Drop the incomplete deployment in the Portal, then re-run
   the `publish` job for the same tag; the staged release is attached to the `stage` job as an artifact
   and is byte-identical to what was verified. If the upload had already been accepted, the
-  `foundry-java-release-upload-record` artifact carries its deployment identifier and the re-run
-  refuses rather than submitting a second bundle; delete that artifact only after dropping the
-  deployment.
+  `foundry-java-release-upload-record-<tag>` artifact carries its deployment identifier and the re-run
+  refuses rather than submitting a second bundle. That artifact is version-scoped and searched for
+  across the whole repository, not just the current run, so a fresh tag-push run also refuses instead
+  of re-uploading; delete that artifact only after dropping the deployment. An artifact name alone is
+  not trusted: only one produced by this workflow file, triggered by a tag push for the exact tag being
+  released, is ever recovered, so an unrelated workflow run cannot forge a record or a marker.
+- **The runner died between the upload and the record being written.** The upload record is written
+  before the irreversible Central call as a pre-upload intent marker (`upload-intent.json`), and the
+  completed record (`upload-summary.json`) is written once the upload finishes. The `publish` job
+  persists the intent marker as its own `foundry-java-release-upload-intent-<tag>` artifact, tagged with
+  a per-attempt token, in a dedicated step before the publish step even starts, so it survives even a
+  hard loss of the runner, not only a failure inside the publish step itself. That artifact is never
+  overwritten, so it is never at risk of the delete-then-upload gap that an overwrite would open; the
+  completed record is a second, separate `foundry-java-release-upload-record-<tag>` artifact. If a
+  re-run recovers an intent marker with no completed record, it refuses: this is ambiguous, not "safe
+  to retry" — the bundle may already have been accepted. Check the Central Portal directly for a
+  deployment matching this version. Once you are certain nothing was accepted, delete the
+  `foundry-java-release-upload-intent-<tag>` artifact itself (`gh api -X DELETE
+  repos/<owner>/<repo>/actions/artifacts/<id>`, found by listing artifacts with that name), not just
+  the local `upload-intent.json` file: every re-run downloads that artifact back into the staging
+  directory, so leaving it in place makes any re-run refuse again regardless of the local file. Only
+  after the artifact itself is gone can a re-run generate a fresh attempt and proceed. Never resubmit
+  while this is unresolved.
 - **A published release turns out to be wrong.** Maven Central coordinates are immutable. Publish a
   new patch version; do not attempt to replace one.
