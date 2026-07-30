@@ -381,6 +381,12 @@ class ReleasePipelineContractTest {
 
         assertTrue(workflow.contains("bash gradle/run-release-staging-dry-run.sh"));
         assertTrue(workflow.contains("dry_run"));
+        // A dispatch that opts out of the dry run cannot release anything, so it is refused rather
+        // than reported as a successful run that did nothing.
+        assertTrue(
+                workflow.contains(
+                        "if: github.event_name == 'workflow_dispatch' && !inputs.dry_run"));
+        assertTrue(workflow.contains("A real release is a tag push."));
     }
 
     @Test

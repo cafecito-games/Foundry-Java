@@ -28,6 +28,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # A manual dispatch can only ever prove the pipeline against a staging target, so a dispatch
+      # that opts out of the dry run would run every gate and then do nothing. Refuse it up front
+      # rather than reporting success for a run that released nothing.
+      - name: Refuse a manual dispatch that is not a dry run
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry_run
+        shell: bash
+        run: |
+          printf 'A manual dispatch only proves the pipeline against a staging target.\n' >&2
+          printf 'A real release is a tag push. Re-run the dispatch with dry_run enabled.\n' >&2
+          exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0

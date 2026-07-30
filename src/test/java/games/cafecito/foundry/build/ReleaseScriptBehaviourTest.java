@@ -320,6 +320,28 @@ class ReleaseScriptBehaviourTest {
     }
 
     @Test
+    void stagingRefusesAStagingDirectoryThatWouldDestroyTheCheckout() throws Exception {
+        // The staging directory is deleted and rebuilt, so a path that is or contains the checkout
+        // must be refused before any work starts.
+        for (String candidate : List.of(ROOT.toString(), ROOT.getParent().toString(), "/")) {
+            Result result =
+                    run(
+                            ROOT,
+                            Map.of(),
+                            "bash",
+                            ROOT.resolve("gradle/stage-release.sh").toString(),
+                            "v0.0.0",
+                            candidate);
+
+            assertNotEquals(0, result.exitCode(), candidate + ": " + result.output());
+            assertTrue(
+                    result.output().contains("staging directory")
+                            || result.output().contains("not a disposable staging directory"),
+                    candidate + ": " + result.output());
+        }
+    }
+
+    @Test
     void uploadingRefusesAStagedRepositoryThatWasNeverVerified(@TempDir Path directory)
             throws Exception {
         Path staging = newStagedRelease(directory);

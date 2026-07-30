@@ -19,6 +19,30 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 surface_manifest_path="foundry-java-runtime/build/generated/foundryApi/foundry-java-surface-manifest.json"
 accepted_provenance="${repo_root}/api/current/provenance.json"
 
+# The staging directory is deleted and rebuilt, so it is validated as a disposable location before
+# anything else runs. A path that is, contains, or lives inside the checkout would destroy the sources
+# this release is built from.
+mkdir -p "$staging"
+staging="$(cd "$staging" && pwd)"
+if [[ "$staging" == "/" || "$staging" == "$repo_root" ]]; then
+  printf 'Release refused: %s is not a disposable staging directory.\n' "$staging" >&2
+  exit 1
+fi
+case "${repo_root}/" in
+  "${staging}"/*)
+    printf 'Release refused: the staging directory %s contains the repository checkout.\n' \
+      "$staging" >&2
+    exit 1
+    ;;
+esac
+case "${staging}/" in
+  "${repo_root}"/*)
+    printf 'Release refused: the staging directory %s is inside the repository checkout.\n' \
+      "$staging" >&2
+    exit 1
+    ;;
+esac
+
 bash "${repo_root}/gradle/verify-release-preconditions.sh" "$tag"
 
 if [[ -z "${FOUNDRY_SIGNING_KEY:-}" ]]; then
@@ -33,7 +57,6 @@ fi
 version="${tag#v}"
 rm -rf "$staging"
 mkdir -p "${staging}/repository"
-staging="$(cd "$staging" && pwd)"
 
 # A release is built from nothing, so the two stagings a reproducibility proof compares can never
 # differ because one of them reused an output the other rebuilt.
