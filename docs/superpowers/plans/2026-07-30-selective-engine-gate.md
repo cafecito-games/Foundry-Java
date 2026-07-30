@@ -137,7 +137,7 @@ class EngineGateChangeClassifierTest {
 Run:
 
 ```bash
-./gradlew test --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest
+./gradlew :test --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest
 ```
 
 Expected: FAIL because `gradle/classify-engine-gate-paths.sh` does not exist.
@@ -191,7 +191,7 @@ decision to run the expensive proof, not a reason to fail CI.
 Run:
 
 ```bash
-./gradlew test --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest
+./gradlew :test --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest
 bash -n gradle/classify-engine-gate-paths.sh
 ```
 
@@ -300,7 +300,7 @@ assertTrue(
 Run:
 
 ```bash
-./gradlew test \
+./gradlew :test \
   --tests games.cafecito.foundry.build.ReusableGateWorkflowContractTest \
   --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
 ```
@@ -402,7 +402,7 @@ matrix, engine cache restoration, or either evidence-upload step.
 Run:
 
 ```bash
-./gradlew test \
+./gradlew :test \
   --tests games.cafecito.foundry.build.EngineGateChangeClassifierTest \
   --tests games.cafecito.foundry.build.ReusableGateWorkflowContractTest \
   --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
@@ -448,7 +448,7 @@ assertTrue(read("docs/releasing.md").contains("always selects the engine-loaded 
 Run:
 
 ```bash
-./gradlew test \
+./gradlew :test \
   --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
 ```
 
@@ -485,7 +485,7 @@ optimization cannot skip release verification.
 Run:
 
 ```bash
-./gradlew test \
+./gradlew :test \
   --tests games.cafecito.foundry.build.EngineLoadedConformanceGateContractTest
 git diff --check
 ```
