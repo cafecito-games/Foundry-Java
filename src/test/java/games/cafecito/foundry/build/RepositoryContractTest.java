@@ -426,7 +426,7 @@ class RepositoryContractTest {
         assertTrue(
                 workflow.contains(
                         "uses: gradle/actions/wrapper-validation@"
-                                + "0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d"));
+                                + "ed408507eac070d1f99cc633dbcf757c94c7933a"));
         assertEquals(2, workflow.split("validate-wrappers: false", -1).length - 1);
     }
 
