@@ -12,8 +12,9 @@ proves that release reproducible and completely verified, and only then uploads 
 publish jobs. Nothing is signed until both called gate jobs pass, and nothing is uploaded until the
 staged release is verified.
 
-1. **`gates / Host gate`** — configuration-cache reuse from clean outputs, which runs the full
-   Gradle `check` twice, plus `:foundry-java-runtime:verifyRuntimeApi`, the parity oracle
+1. **`gates / Host gate`** — configuration-cache reuse from clean outputs: it executes the full
+   Gradle `clean check` once, then dry-runs the identical graph in a fresh process to prove reuse.
+   The gate also runs `:foundry-java-runtime:verifyRuntimeApi`, the parity oracle
    `:foundry-java-runtime:verifyGeneratedRealization`, the native host and sanitizer tests, the
    native ABI layout test, the AAR native-bridge inspection, regenerated dependency locks, and
    [`gradle/verify-release-preconditions.sh`](../gradle/verify-release-preconditions.sh).
