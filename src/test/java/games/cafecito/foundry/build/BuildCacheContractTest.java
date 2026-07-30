@@ -310,6 +310,25 @@ class BuildCacheContractTest {
         assertTrue(undeclaredFixture.contains("outputs.cacheIf("));
     }
 
+    @Test
+    void theseContractSuitesAreThemselvesExcludedFromReplay() throws IOException {
+        String rootBuild = read("build.gradle.kts");
+
+        // These suites read build scripts, workflows, gate scripts and whole module source trees
+        // directly rather than receiving them as task inputs, so their true input is the
+        // repository.
+        // Enumerating that here would be a list that silently falls behind the assertions, and an
+        // up-to-date check or a cache hit would then replay a pass across a change to the very file
+        // being guarded — the exact failure the rest of this class exists to prevent.
+        assertTrue(rootBuild.contains("tasks.named<Test>(\"test\") {"));
+        assertTrue(rootBuild.contains("outputs.upToDateWhen { false }"));
+        assertTrue(
+                rootBuild.contains(
+                        "outputs.cacheIf("
+                                + "\"the repository contract suites read files no input set fully"
+                                + " describes\") { false }"));
+    }
+
     private static String registrationOf(String build, String task, String module) {
         // Registered either as tasks.register<T>("name") or as val name by tasks.registering(T).
         int start = build.indexOf('"' + task + '"');
