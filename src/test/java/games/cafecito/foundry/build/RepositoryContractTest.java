@@ -48,6 +48,12 @@ class RepositoryContractTest {
                     "foundry-java-processor",
                     "foundry-java-runtime",
                     "foundry-java-test");
+    private static final List<String> SAMPLE_MODULES =
+            List.of(
+                    "conformance-java",
+                    "conformance-java-app",
+                    "conformance-kotlin",
+                    "conformance-kotlin-app");
     private static final List<String> LOCK_FILES =
             List.of(
                     "gradle.lockfile",
@@ -532,6 +538,55 @@ class RepositoryContractTest {
         assertTrue(script.contains("$lifecycle.live_handles_after_teardown == 0"));
         assertTrue(script.contains("$lifecycle.entry_active_after_teardown == false"));
         assertTrue(script.contains("$lifecycle.events == $native_events"));
+    }
+
+    @Test
+    void theConsumerConformanceMatrixIsAStandaloneSampleBuildRunOnTheDevice() throws IOException {
+        String workflow = read(".github/workflows/ci.yml");
+        String script = read("gradle/run-samples-conformance-matrix.sh");
+        String settings = read("samples/settings.gradle.kts");
+        String javaAppBuild = read("samples/conformance-java-app/build.gradle.kts");
+        String kotlinAppBuild = read("samples/conformance-kotlin-app/build.gradle.kts");
+        String rootSettings = read("settings.gradle.kts");
+
+        // The samples must stay a consumer build: never a Foundry-Java subproject, and never
+        // resolved from project outputs.
+        assertFalse(rootSettings.contains("samples"));
+        for (String module : SAMPLE_MODULES) {
+            assertTrue(
+                    settings.contains("\":%s\"".formatted(module)), module + " must be included");
+            assertTrue(
+                    Files.isDirectory(ROOT.resolve("samples/" + module)), module + " must exist");
+        }
+        assertTrue(settings.contains("build/repository"), "samples resolve published artifacts");
+        assertTrue(settings.contains("games.cafecito.foundry.java"));
+        assertFalse(settings.contains("includeBuild"));
+        for (String moduleBuild : List.of(javaAppBuild, kotlinAppBuild)) {
+            assertTrue(moduleBuild.contains("id(\"com.android.application\")"));
+            assertTrue(moduleBuild.contains("id(\"games.cafecito.foundry.java\")"));
+            assertTrue(moduleBuild.contains("games.cafecito.foundry:foundry-java-android:"));
+            assertTrue(moduleBuild.contains("androidx.test:runner"));
+        }
+
+        assertTrue(script.contains("set -euo pipefail"));
+        assertTrue(script.contains("${1:-emulator-5554}"));
+        assertTrue(script.contains("publishAllPublicationsToBootstrapRepository"));
+        assertTrue(script.contains(":conformance-java:test :conformance-kotlin:test"));
+        assertTrue(script.contains(":conformance-java-app:connectedDebugAndroidTest"));
+        assertTrue(script.contains(":conformance-kotlin-app:connectedDebugAndroidTest"));
+        assertTrue(script.contains("must not package libfoundry_android.so"));
+        assertTrue(
+                script.contains("for apk in \"$application_apk\" \"$instrumentation_apk\""),
+                "both installed consumer APKs must be inspected for the forbidden library");
+        assertTrue(script.contains("lib/x86_64/libfoundry_java.so"));
+        assertTrue(script.contains("packaged an ABI it did not request"));
+        assertTrue(script.contains("summary.json"));
+        assertTrue(script.contains("total == 0 or failures or errors or skipped"));
+
+        assertTrue(workflow.contains("bash gradle/run-samples-conformance-matrix.sh"));
+        assertTrue(workflow.contains("${{ runner.temp }}/foundry-java-conformance-matrix/**"));
+        assertTrue(workflow.contains("samples/*/build/outputs/androidTest-results/**"));
+        assertTrue(workflow.contains("samples/*/build/reports/**"));
     }
 
     @Test

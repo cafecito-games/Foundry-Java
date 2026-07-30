@@ -4,6 +4,8 @@
 .kotlin/
 /build/
 /*/build/
+samples/build/
+samples/*/build/
 /foundry-java-android/.cxx/
 local.properties
 .idea/
