@@ -186,8 +186,8 @@ class RepositoryContractTest {
         assertTrue(compileSdkMatcher.find());
         assertTrue(buildToolsMatcher.find());
         assertEquals("36", compileSdkMatcher.group(1));
-        assertEquals("35.0.0", buildToolsMatcher.group(1));
-        assertTrue(catalog.contains("android-gradle-plugin = \"8.10.0\""));
+        assertEquals("36.0.0", buildToolsMatcher.group(1));
+        assertTrue(catalog.contains("android-gradle-plugin = \"9.3.1\""));
         assertTrue(catalog.contains("desugar-jdk-libs = \"2.1.5\""));
         assertTrue(
                 catalog.contains(

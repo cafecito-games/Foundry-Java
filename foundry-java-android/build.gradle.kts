@@ -94,12 +94,16 @@ tasks.withType<Test>().configureEach {
 // in a dependency and fails with "Record requires ASM8"; foundry-java-runtime publishes records. The
 // published Javadoc archive is therefore produced with the JDK javadoc tool over this module's own
 // Java sources, so the release still ships Javadoc for every module.
+// AGP 9 removed bootClasspath from the library DSL; the variant API carries it as a lazy provider,
+// which is what the Javadoc classpath needs anyway.
+val androidBootClasspath = androidComponents.sdkComponents.bootClasspath
+
 val releaseJavadoc =
     tasks.register<Javadoc>("releaseJavadoc") {
         group = "documentation"
         description = "Builds the published Javadoc for the release variant."
         source = fileTree("src/main/java") { include("**/*.java") }
-        classpath = files(configurations.named("releaseCompileClasspath"), android.bootClasspath)
+        classpath = files(configurations.named("releaseCompileClasspath"), androidBootClasspath)
         setDestinationDir(
             layout.buildDirectory
                 .dir("docs/releaseJavadoc")

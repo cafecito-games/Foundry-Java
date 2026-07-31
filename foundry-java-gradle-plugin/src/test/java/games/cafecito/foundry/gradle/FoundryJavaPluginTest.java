@@ -904,8 +904,13 @@ class FoundryJavaPluginTest {
 
         assertEquals(TaskOutcome.SUCCESS, result.task(":assembleDebug").getOutcome());
         assertFalse(mergedManifest(project, "debug").contains("FoundryGeneratedStartupProvider"));
-        assertFalse(
-                Files.exists(project.resolve("build/generated/foundryJava/verification/debug")));
+        // AGP 9 creates a declared output directory whether or not the task writes into it, so its
+        // existence no longer distinguishes a verified variant from a skipped one. What the
+        // contract actually requires is that a zero-module variant contributes nothing to assets,
+        // which the directory being empty is what states.
+        assertTrue(
+                isEmptyDirectory(
+                        project.resolve("build/generated/foundryJava/verification/debug")));
     }
 
     @Test
@@ -1036,6 +1041,10 @@ class FoundryJavaPluginTest {
                     </application>
                 </manifest>
                 """);
+        // Nothing orders the startup manifest verification against Java compilation, so the two
+        // race. Without the stubs the generated bootstrap does not compile, and a run where javac
+        // wins fails for that reason instead of the authority collision this test asserts.
+        writeBootstrapStubs(project);
 
         BuildResult failure = runAndFail(project, "assembleDebug");
 
@@ -1507,6 +1516,15 @@ class FoundryJavaPluginTest {
             search = search.getParent();
         }
         return project;
+    }
+
+    private static boolean isEmptyDirectory(Path directory) throws IOException {
+        if (!Files.isDirectory(directory)) {
+            return !Files.exists(directory);
+        }
+        try (var entries = Files.list(directory)) {
+            return entries.findAny().isEmpty();
+        }
     }
 
     private void writeBootstrapStubs(Path project) throws IOException {

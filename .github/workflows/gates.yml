@@ -37,14 +37,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: ${{ inputs.release && '0' || '1' }}
+      # AGP 9's lint calls java.util.List.removeLast(), a Java 21 API, so the Gradle JVM must be 21
+      # or newer. Every toolchain, source and target level and published class file stays at 17;
+      # gradle/gradle-daemon-jvm.properties states the same requirement for a local ./gradlew.
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
         with:
           packages: >-
-            tools platform-tools platforms;android-36 build-tools;35.0.0
+            tools platform-tools platforms;android-36 build-tools;36.0.0
             ndk;29.0.14206865 cmake;3.22.1
       - uses: gradle/actions/wrapper-validation@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       # gradle.properties has set org.gradle.caching=true all along, but nothing persisted
@@ -309,14 +312,17 @@ jobs:
               select_gate true classification-failed
               ;;
           esac
+      # AGP 9's lint calls java.util.List.removeLast(), a Java 21 API, so the Gradle JVM must be 21
+      # or newer. Every toolchain, source and target level and published class file stays at 17;
+      # gradle/gradle-daemon-jvm.properties states the same requirement for a local ./gradlew.
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
         with:
           packages: >-
-            tools platform-tools emulator platforms;android-36 build-tools;35.0.0
+            tools platform-tools emulator platforms;android-36 build-tools;36.0.0
             ndk;29.0.14206865 cmake;3.22.1
             system-images;android-36;default;x86_64
       # This job builds the same modules the check job does and had no Gradle cache either. It reads
