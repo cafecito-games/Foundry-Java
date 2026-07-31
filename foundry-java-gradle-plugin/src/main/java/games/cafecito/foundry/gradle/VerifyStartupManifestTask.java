@@ -19,10 +19,15 @@ import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.PathSensitive;
 import org.gradle.api.tasks.PathSensitivity;
 import org.gradle.api.tasks.TaskAction;
+import org.gradle.work.DisableCachingByDefault;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 /** Observes and verifies the final merged startup provider before packaging. */
+@DisableCachingByDefault(
+        because =
+                "The task only verifies; its output directory is an empty marker, so an entry would"
+                        + " transport no result.")
 public abstract class VerifyStartupManifestTask extends DefaultTask {
     private static final String ANDROID_NAMESPACE = "http://schemas.android.com/apk/res/android";
     private static final String REGISTRY_INDEX = "foundry_java/registry-index-v2.txt";

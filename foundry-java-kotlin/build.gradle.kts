@@ -25,31 +25,34 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
 }
 
-val javaOnlyConsumerClasspath by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
+val javaOnlyConsumerClasspath =
+    configurations.create("javaOnlyConsumerClasspath") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+    }
 
 dependencies {
     add(javaOnlyConsumerClasspath.name, project(":foundry-java-runtime"))
 }
 
-val compileJavaOnlyConsumerJava by
-    tasks.registering(org.gradle.api.tasks.compile.JavaCompile::class) {
+val compileJavaOnlyConsumerJava =
+    tasks.register<org.gradle.api.tasks.compile.JavaCompile>("compileJavaOnlyConsumerJava") {
         source = fileTree("src/test/fixtures/java-only") { include("**/*.java") }
         classpath = javaOnlyConsumerClasspath
         destinationDirectory = layout.buildDirectory.dir("classes/javaOnlyConsumer")
         options.release = 17
     }
 
-val verifyJavaOnlyConsumerClasspath by tasks.registering(VerifyJavaOnlyConsumerClasspath::class) {
-    consumerClasspath.from(javaOnlyConsumerClasspath)
-}
+val verifyJavaOnlyConsumerClasspath =
+    tasks.register<VerifyJavaOnlyConsumerClasspath>("verifyJavaOnlyConsumerClasspath") {
+        consumerClasspath.from(javaOnlyConsumerClasspath)
+    }
 
-val kotlinOverJavaConsumer by sourceSets.creating
-val mixedConsumer by sourceSets.creating {
-    java.srcDir("src/test/fixtures/mixed")
-}
+val kotlinOverJavaConsumer = sourceSets.create("kotlinOverJavaConsumer")
+val mixedConsumer =
+    sourceSets.create("mixedConsumer") {
+        java.srcDir("src/test/fixtures/mixed")
+    }
 
 kotlin {
     sourceSets.named(kotlinOverJavaConsumer.name) {
@@ -92,49 +95,50 @@ val javaToolchainLauncher =
         languageVersion.set(JavaLanguageVersion.of(17))
     }
 
-val verifyKotlinApi by tasks.registering(org.gradle.api.tasks.Exec::class) {
-    dependsOn(tasks.named("jar"))
-    inputs
-        .file("verify-kotlin-api.sh")
-        .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.NONE)
-    inputs
-        .file("api/foundry-java-kotlin.api")
-        .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.NONE)
-    inputs.file(kotlinApiJar).withPathSensitivity(org.gradle.api.tasks.PathSensitivity.NONE)
-    inputs.property(
-        "javaRuntimeVersion",
-        javaToolchainLauncher.map { it.metadata.javaRuntimeVersion },
-    )
-    outputs.file(kotlinApiReport).withPropertyName("actualApiDump")
-    outputs.cacheIf("the public Kotlin declaration dump is determined by its declared inputs") {
-        true
+val verifyKotlinApi =
+    tasks.register<org.gradle.api.tasks.Exec>("verifyKotlinApi") {
+        dependsOn(tasks.named("jar"))
+        inputs
+            .file("verify-kotlin-api.sh")
+            .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.NONE)
+        inputs
+            .file("api/foundry-java-kotlin.api")
+            .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.NONE)
+        inputs.file(kotlinApiJar).withPathSensitivity(org.gradle.api.tasks.PathSensitivity.NONE)
+        inputs.property(
+            "javaRuntimeVersion",
+            javaToolchainLauncher.map { it.metadata.javaRuntimeVersion },
+        )
+        outputs.file(kotlinApiReport).withPropertyName("actualApiDump")
+        outputs.cacheIf("the public Kotlin declaration dump is determined by its declared inputs") {
+            true
+        }
+        environment(
+            "FOUNDRY_JDK_BIN",
+            javaToolchainLauncher
+                .get()
+                .metadata.installationPath
+                .dir("bin")
+                .asFile.absolutePath,
+        )
+        workingDir = rootDir
+        executable = "bash"
+        args(
+            file("verify-kotlin-api.sh").relativeTo(rootDir).invariantSeparatorsPath,
+            kotlinApiJar
+                .get()
+                .asFile
+                .relativeTo(rootDir)
+                .invariantSeparatorsPath,
+            file("api/foundry-java-kotlin.api").relativeTo(rootDir).invariantSeparatorsPath,
+            "--report",
+            kotlinApiReport
+                .get()
+                .asFile
+                .relativeTo(rootDir)
+                .invariantSeparatorsPath,
+        )
     }
-    environment(
-        "FOUNDRY_JDK_BIN",
-        javaToolchainLauncher
-            .get()
-            .metadata.installationPath
-            .dir("bin")
-            .asFile.absolutePath,
-    )
-    workingDir = rootDir
-    executable = "bash"
-    args(
-        file("verify-kotlin-api.sh").relativeTo(rootDir).invariantSeparatorsPath,
-        kotlinApiJar
-            .get()
-            .asFile
-            .relativeTo(rootDir)
-            .invariantSeparatorsPath,
-        file("api/foundry-java-kotlin.api").relativeTo(rootDir).invariantSeparatorsPath,
-        "--report",
-        kotlinApiReport
-            .get()
-            .asFile
-            .relativeTo(rootDir)
-            .invariantSeparatorsPath,
-    )
-}
 
 tasks.named("check") {
     dependsOn(

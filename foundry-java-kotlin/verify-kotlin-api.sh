@@ -53,8 +53,12 @@ LC_ALL=C "${jdk_bin}jar" tf "$jar_file" |
             raw_declaration="$temporary_directory/raw-declaration"
             declaration="$temporary_directory/declaration"
             "${jdk_bin}javap" -classpath "$jar_file" -public -s "$class_name" >"$raw_declaration"
+            # Kotlin publishes internal members as public with a name mangled by the module name,
+            # and the compiler decides that name: Kotlin 2.4 derives it from the Maven coordinate
+            # where 2.0 used the project name. The suffix is therefore not matched, only the marker
+            # that the member is mangled at all.
             awk '
-            /^  public .* (access\$|snapshot\$foundry_java_kotlin)/ {
+            /^  public .* (access\$|snapshot\$)/ {
                 skip_descriptor = 1
                 next
             }

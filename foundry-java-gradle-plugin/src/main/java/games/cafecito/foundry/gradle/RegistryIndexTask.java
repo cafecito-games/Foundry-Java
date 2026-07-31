@@ -25,8 +25,13 @@ import org.gradle.api.tasks.Input;
 import org.gradle.api.tasks.OutputDirectory;
 import org.gradle.api.tasks.OutputFile;
 import org.gradle.api.tasks.TaskAction;
+import org.gradle.work.DisableCachingByDefault;
 
 /** Generates the deterministic registry index and direct Java provider bootstrap. */
+@DisableCachingByDefault(
+        because =
+                "Generation reads module artifacts the consumer's build has already resolved, and"
+                        + " no gate proves an entry for it replays at another checkout.")
 public abstract class RegistryIndexTask extends DefaultTask {
     static final String DESCRIPTOR_PREFIX = "META-INF/foundry-java/modules/";
     static final String DESCRIPTOR_SUFFIX = ".descriptor";

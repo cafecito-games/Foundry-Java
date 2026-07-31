@@ -57,7 +57,7 @@ fun stableBoundaryFileSignature(dependency: FileCollectionDependency): String {
             .sorted()
 
     // These display names and the plugin metadata task are stable declaration metadata in the
-    // repository's pinned Gradle 8.11.1 wrapper. Do not enumerate the files: doing so makes task
+    // repository's pinned Gradle 9.6.1 wrapper. Do not enumerate the files: doing so makes task
     // output existence and contents configuration-cache inputs.
     return when {
         displayName == "Gradle API files" && buildTaskPaths.isEmpty() -> "gradle-api-files"
@@ -207,9 +207,9 @@ abstract class VerifyRepositoryModel : DefaultTask() {
                 .get()
                 .asFile
                 .readText()
-                .contains("gradle-8.11.1-bin.zip"),
+                .contains("gradle-9.6.1-bin.zip"),
         ) {
-            "The repository must use the Gradle 8.11.1 binary distribution."
+            "The repository must use the Gradle 9.6.1 binary distribution."
         }
     }
 }
@@ -596,21 +596,23 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
-val generatorOnlyConsumer by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
+val generatorOnlyConsumer =
+    configurations.create("generatorOnlyConsumer") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+    }
 
 dependencies {
     add(generatorOnlyConsumer.name, project(":foundry-java-generator"))
 }
 
-val compileGeneratorOnlyConsumer by tasks.registering(JavaCompile::class) {
-    source = fileTree("src/generatorOnlyConsumer/java") { include("**/*.java") }
-    classpath = generatorOnlyConsumer
-    destinationDirectory = layout.buildDirectory.dir("classes/generatorOnlyConsumer")
-    options.release = 17
-}
+val compileGeneratorOnlyConsumer =
+    tasks.register<JavaCompile>("compileGeneratorOnlyConsumer") {
+        source = fileTree("src/generatorOnlyConsumer/java") { include("**/*.java") }
+        classpath = generatorOnlyConsumer
+        destinationDirectory = layout.buildDirectory.dir("classes/generatorOnlyConsumer")
+        options.release = 17
+    }
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
@@ -714,6 +716,7 @@ val javaLockConfigurations =
     )
 val kotlinLockConfigurations =
     setOf(
+        "kotlinAbiValidationCompatClasspath",
         "kotlinBuildToolsApiClasspath",
         "kotlinCompilerClasspath",
         "kotlinCompilerPluginClasspathMain",
@@ -761,8 +764,12 @@ val requiredBoundaryDependencies =
             ),
         ":foundry-java-gradle-plugin" to
             listOf(
-                "api=$requiredGradleApiFileSignature",
+                // Gradle 9's java-gradle-plugin wires gradleApi() into compileOnlyApi rather than
+                // api, so it no longer leaks onto a consumer's runtime classpath, and adds it to
+                // testImplementation so plugin tests still compile against it.
                 "compileOnly=com.android.tools.build:gradle-api",
+                "compileOnlyApi=$requiredGradleApiFileSignature",
+                "testImplementation=$requiredGradleApiFileSignature",
                 "testImplementation=$requiredGradleTestKitFileSignature",
                 "testImplementation=org.junit:junit-bom",
                 "testImplementation=org.junit.jupiter:junit-jupiter",
@@ -776,6 +783,9 @@ val requiredBoundaryDependencies =
                 "api=project(:foundry-java-runtime)",
                 "implementation=org.jetbrains.kotlinx:kotlinx-coroutines-core",
                 "javaOnlyConsumerClasspath=project(:foundry-java-runtime)",
+                "kotlinAbiValidationCompatClasspath=org.jetbrains.kotlin:kotlin-build-tools-compat",
+                "kotlinAbiValidationCompatClasspath=org.jetbrains.kotlin:kotlin-build-tools-impl",
+                "kotlinBuildToolsApiClasspath=org.jetbrains.kotlin:kotlin-build-tools-compat",
                 "kotlinBuildToolsApiClasspath=org.jetbrains.kotlin:kotlin-build-tools-impl",
                 "kotlinCompilerPluginClasspathKotlinOverJavaConsumer=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
                 "kotlinCompilerPluginClasspathMain=org.jetbrains.kotlin:kotlin-scripting-compiler-embeddable",
@@ -902,7 +912,7 @@ val requiredPomDependencies =
         kotlinPublicationDirectory to
             listOf(
                 "compile|$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
-                "compile|org.jetbrains.kotlin|kotlin-stdlib|2.0.21",
+                "compile|org.jetbrains.kotlin|kotlin-stdlib|2.4.10",
                 "runtime|org.jetbrains.kotlinx|kotlinx-coroutines-core-jvm|1.9.0",
             ).sorted()
                 .joinToString(";"),
@@ -936,7 +946,7 @@ val requiredModuleDependencies =
         kotlinPublicationDirectory to
             listOf(
                 "$requiredGroupCoordinate|foundry-java-runtime|$requiredPublicationVersion",
-                "org.jetbrains.kotlin|kotlin-stdlib|2.0.21",
+                "org.jetbrains.kotlin|kotlin-stdlib|2.4.10",
                 "org.jetbrains.kotlinx|kotlinx-coroutines-core|1.9.0",
             ).sorted()
                 .joinToString(";"),
