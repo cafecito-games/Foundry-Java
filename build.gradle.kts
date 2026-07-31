@@ -596,21 +596,23 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
 }
 
-val generatorOnlyConsumer by configurations.creating {
-    isCanBeConsumed = false
-    isCanBeResolved = true
-}
+val generatorOnlyConsumer =
+    configurations.create("generatorOnlyConsumer") {
+        isCanBeConsumed = false
+        isCanBeResolved = true
+    }
 
 dependencies {
     add(generatorOnlyConsumer.name, project(":foundry-java-generator"))
 }
 
-val compileGeneratorOnlyConsumer by tasks.registering(JavaCompile::class) {
-    source = fileTree("src/generatorOnlyConsumer/java") { include("**/*.java") }
-    classpath = generatorOnlyConsumer
-    destinationDirectory = layout.buildDirectory.dir("classes/generatorOnlyConsumer")
-    options.release = 17
-}
+val compileGeneratorOnlyConsumer =
+    tasks.register<JavaCompile>("compileGeneratorOnlyConsumer") {
+        source = fileTree("src/generatorOnlyConsumer/java") { include("**/*.java") }
+        classpath = generatorOnlyConsumer
+        destinationDirectory = layout.buildDirectory.dir("classes/generatorOnlyConsumer")
+        options.release = 17
+    }
 
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
