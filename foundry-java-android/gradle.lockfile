@@ -1,6 +1,7 @@
 # This is a Gradle generated file for dependency locking.
 # Manual edits can break the build and are not advised.
 # This file is expected to be part of source control.
+# To regenerate this file, run: ./gradlew :foundry-java-android:dependencies --write-locks
 com.android.tools.ddms:ddmlib:31.10.0=_internal-unified-test-platform-android-device-provider-ddmlib
 com.android.tools.emulator:proto:31.10.0=_internal-unified-test-platform-android-test-plugin-host-emulator-control
 com.android.tools.utp:android-device-provider-ddmlib-proto:31.10.0=_internal-unified-test-platform-android-device-provider-ddmlib

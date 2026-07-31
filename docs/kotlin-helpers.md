@@ -10,7 +10,7 @@ library.
 
 ## Dependency
 
-The module targets Java 17 and Kotlin 2.0.21:
+The module targets Java 17 and Kotlin 2.4.10:
 
 ```kotlin
 dependencies {

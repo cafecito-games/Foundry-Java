@@ -230,7 +230,7 @@ class RepositoryContractTest {
         assertTrue(
                 wrapper.contains(
                         "distributionSha256Sum="
-                                + "f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6"));
+                                + "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14"));
         workflow.lines()
                 .map(String::trim)
                 .filter(line -> line.startsWith("- uses: "))
@@ -294,7 +294,7 @@ class RepositoryContractTest {
         assertTrue(rootBuild.contains("games.cafecito.foundry.java.gradle.plugin"));
         assertTrue(rootBuild.contains("foundry-java-gradle-plugin"));
         assertTrue(rootBuild.contains("foundry-java-runtime"));
-        assertTrue(rootBuild.contains("org.jetbrains.kotlin|kotlin-stdlib|2.0.21"));
+        assertTrue(rootBuild.contains("org.jetbrains.kotlin|kotlin-stdlib|2.4.10"));
         assertTrue(
                 rootBuild.contains(
                         "runtime|org.jetbrains.kotlinx|kotlinx-coroutines-core-jvm|1.9.0"));
