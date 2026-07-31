@@ -27,7 +27,7 @@ android {
     sourceSets {
         // The same conformance matrix the library module runs on the JVM, executed on device.
         named("androidTest") {
-            java.srcDir("../conformance-java/src/conformance/java")
+            java.directories.add("../conformance-java/src/conformance/java")
         }
     }
 

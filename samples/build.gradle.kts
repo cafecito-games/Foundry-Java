@@ -2,7 +2,6 @@ plugins {
     id("com.android.application") apply false
     id("games.cafecito.foundry.java") apply false
     id("org.jetbrains.kotlin.jvm") apply false
-    id("org.jetbrains.kotlin.android") apply false
 }
 
 // Standalone consumer build. It resolves Foundry-Java exactly like a third-party project does:
