@@ -8,7 +8,6 @@ pluginManagement {
     }
     plugins {
         id("com.android.application") version "9.3.1"
-        id("org.jetbrains.kotlin.android") version "2.4.10"
         id("org.jetbrains.kotlin.jvm") version "2.4.10"
         id("games.cafecito.foundry.java") version publishedFoundryVersion
     }

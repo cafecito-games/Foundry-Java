@@ -667,6 +667,14 @@ class RepositoryContractTest {
             assertTrue(moduleBuild.contains("games.cafecito.foundry:foundry-java-android:"));
             assertTrue(moduleBuild.contains("androidx.test:runner"));
         }
+        // AGP 9 compiles Kotlin itself and rejects org.jetbrains.kotlin.android, and it does not
+        // compile .kt files reached through the java source set. Adding them there produces an
+        // instrumentation APK that declares no test at all rather than an error, so the device
+        // matrix would run nothing and report why only as a zero test count.
+        assertFalse(kotlinAppBuild.contains("id(\"org.jetbrains.kotlin.android\")"));
+        assertTrue(
+                kotlinAppBuild.contains(
+                        "kotlin.directories.add(\"../conformance-kotlin/src/conformance/kotlin\")"));
 
         assertTrue(script.contains("set -euo pipefail"));
         assertTrue(script.contains("${1:-emulator-5554}"));

@@ -1,6 +1,7 @@
+// AGP 9 compiles Kotlin itself and rejects org.jetbrains.kotlin.android, so a consumer application
+// no longer applies a Kotlin plugin at all. This sample is the consumer-facing proof of that.
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("games.cafecito.foundry.java")
 }
 
@@ -27,8 +28,11 @@ android {
 
     sourceSets {
         // The same Kotlin conformance matrix the library module runs on the JVM, executed on device.
+        // These are Kotlin sources and must be added to the Kotlin source set: under AGP 9's
+        // built-in Kotlin, java.srcDir no longer picks up .kt files and contributes nothing, which
+        // builds an instrumentation APK that declares no tests rather than failing.
         named("androidTest") {
-            java.srcDir("../conformance-kotlin/src/conformance/kotlin")
+            kotlin.directories.add("../conformance-kotlin/src/conformance/kotlin")
         }
     }
 
