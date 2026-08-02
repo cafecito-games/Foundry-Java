@@ -60,7 +60,7 @@ jobs:
       # ~/.gradle/caches/build-cache-1 and the configuration cache lives in the project's
       # .gradle/configuration-cache, which is not cached here and which the proof deletes anyway.
       # Restoring task outputs is not what either of the proof's runs is asserting.
-      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         if: ${{ !inputs.release }}
         with:
           validate-wrappers: false
@@ -327,7 +327,7 @@ jobs:
             system-images;android-36;default;x86_64
       # This job builds the same modules the check job does and had no Gradle cache either. It reads
       # the cache rather than writing it, so the two jobs cannot race to publish an entry.
-      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         if: ${{ !inputs.release }}
         with:
           validate-wrappers: false
