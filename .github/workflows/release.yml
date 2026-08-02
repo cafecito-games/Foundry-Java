@@ -80,7 +80,7 @@ jobs:
             "${GITHUB_REF_NAME#v}"
       - name: Upload the verified staged release for the publish job
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-staged-release
           if-no-files-found: error
@@ -91,7 +91,7 @@ jobs:
           path: ${{ runner.temp }}/foundry-java-release/first/**
       - name: Upload staging and dry-run evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-release-staging-evidence
           if-no-files-found: warn
@@ -282,7 +282,7 @@ jobs:
         # Skipped when a prior record or marker was recovered instead, so this artifact is created at
         # most once per version and is never overwritten afterward.
         if: always() && steps.persist_intent.outputs.wrote == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-release-upload-intent-${{ github.ref_name }}
           if-no-files-found: error
@@ -307,7 +307,7 @@ jobs:
       # runner leaves zero durable evidence that an attempt happened.
       - name: Record the completed upload so a re-run cannot republish
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-release-upload-record-${{ github.ref_name }}
           if-no-files-found: ignore
@@ -316,7 +316,7 @@ jobs:
           path: ${{ runner.temp }}/foundry-java-release/first/upload-summary.json
       - name: Upload publication evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-release-publication-evidence
           if-no-files-found: warn

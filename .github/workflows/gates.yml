@@ -157,7 +157,7 @@ jobs:
           fi
       - name: Upload build and native verification evidence
         if: ${{ always() && !inputs.release }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-check-evidence
           if-no-files-found: warn
@@ -173,7 +173,7 @@ jobs:
             ${{ runner.temp }}/foundry-java-configuration-cache-*.log
       - name: Upload host gate evidence
         if: always() && inputs.release
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-release-host-gate-evidence
           if-no-files-found: warn
@@ -392,7 +392,7 @@ jobs:
         run: bash gradle/run-engine-loaded-conformance-gate.sh emulator-5554
       - name: Upload API 36 production startup evidence
         if: ${{ always() && !inputs.release }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-api36-production-startup-evidence
           if-no-files-found: warn
@@ -412,7 +412,7 @@ jobs:
             acceptance/*/build/reports/**
       - name: Upload device gate evidence
         if: always() && inputs.release
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: foundry-java-release-device-gate-evidence
           if-no-files-found: warn
